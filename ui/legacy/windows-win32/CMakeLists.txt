@@ -35,6 +35,14 @@ else()
   message(WARNING "No resource compiler found: loomora_win32 is built without loomora.rc")
 endif()
 
+# 32-bit MinGW-w64 (the Windows 2000 executable): libgcc's gthr-win32.o, pulled in by the exception
+# machinery of libstdc++, would import KERNEL32!GetThreadId (Vista and later). The shim satisfies
+# that reference inside the executable; see getthreadid_shim.cpp and docs/implementation/adr/0002. The 64-bit
+# floor (XP x64) has GetThreadId, so that build is left as it is.
+if(NOT LOOMORA_WIN32_MSVC_ABI AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+  list(APPEND LOOMORA_WIN32_SOURCES getthreadid_shim.cpp)
+endif()
+
 add_executable(loomora_win32 WIN32 ${LOOMORA_WIN32_SOURCES})
 set_target_properties(loomora_win32 PROPERTIES
   OUTPUT_NAME loomora CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
