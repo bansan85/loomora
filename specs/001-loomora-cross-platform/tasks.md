@@ -47,13 +47,13 @@ description: "Task list for Loomora across 15 years of platforms (C++11 backend,
 
 ### Backend tests first
 
-- [ ] T010 Write `core/tests/vectors.json` with the reference inputs and exact expected outputs: empty string, ASCII, accented, CJK, right-to-left, emoji, combining characters, 1,000 characters, exactly 4,096 bytes (accepted), 4,097 bytes (error -1), invalid UTF-8 (error -3), cap too small (error -2); `loomora_is_eol` cases per family (negative values → 0; Web never end of life); the shape of one probe record (SC-011, FR-028)
-- [ ] T011 [P] Write `tools/gen_vectors.py` generating `core/tests/vectors.inc` (C++11 initializer lists) from `core/tests/vectors.json`
-- [ ] T012 [P] Write Catch2 tests `core/tests/test_greet.cpp` (every greet vector, exact bytes `"Bonjour "` + input; limit 4,096 bytes; error codes -1/-2/-3) — must fail until T018
-- [ ] T013 [P] Write Catch2 tests `core/tests/test_eol.cpp` (every end-of-life vector; `loomora_eol_warning()` never NULL) — must fail until T019
-- [ ] T014 [P] Write Catch2 tests `core/tests/test_probe.cpp` (`loomora_probe_record` output validates against the shape in vectors.json; `greeting_matches` true/false; truncation returns the needed length; JSON escaping of quotes, backslashes and control characters) — must fail until T021
+- [X] T010 Write `core/tests/vectors.json` with the reference inputs and exact expected outputs: empty string, ASCII, accented, CJK, right-to-left, emoji, combining characters, 1,000 characters, exactly 4,096 bytes (accepted), 4,097 bytes (error -1), invalid UTF-8 (error -3), cap too small (error -2); `loomora_is_eol` cases per family (negative values → 0; Web never end of life); the shape of one probe record (SC-011, FR-028) (EOL thresholds not specified in the spec: assumptions recorded in the `eol.comment` of vectors.json, to be confirmed)
+- [X] T011 [P] Write `tools/gen_vectors.py` generating `core/tests/vectors.inc` (C++11 initializer lists) from `core/tests/vectors.json` (the generated `vectors.inc` is not committed: CMake writes it into the build directory, the default output `core/tests/vectors.inc` is git-ignored)
+- [X] T012 [P] Write Catch2 tests `core/tests/test_greet.cpp` (every greet vector, exact bytes `"Bonjour "` + input; limit 4,096 bytes; error codes -1/-2/-3) — must fail until T018 (passes today: greet is implemented)
+- [X] T013 [P] Write Catch2 tests `core/tests/test_eol.cpp` (every end-of-life vector; `loomora_eol_warning()` never NULL) — must fail until T019 (written; does not link until `loomora_is_eol` and `loomora_eol_warning` exist, T020)
+- [X] T014 [P] Write Catch2 tests `core/tests/test_probe.cpp` (`loomora_probe_record` output validates against the shape in vectors.json; `greeting_matches` true/false; truncation returns the needed length; JSON escaping of quotes, backslashes and control characters) — must fail until T021 (written; does not link until `loomora_probe_record` exists, T022)
 - [X] T015 (reduced scope: greet + abi_version + build_compiler only) Write `core/tests/selftest.cpp`: a plain C++11 `main` (STL allowed) using `vectors.inc`, no Catch2, returning non-zero on any failed vector, to be cross-compiled and run on every target (research R9)
-- [ ] T016 Write `core/tests/CMakeLists.txt` (Catch2 test executable `loomora_tests`, executable `loomora_selftest`, custom command running `tools/gen_vectors.py`, `add_test`)
+- [X] T016 Write `core/tests/CMakeLists.txt` (Catch2 test executable `loomora_tests`, executable `loomora_selftest`, custom command running `tools/gen_vectors.py`, `add_test`) (`loomora_tests` is EXCLUDE_FROM_ALL until step 2b; option `LOOMORA_BUILD_CATCH2_TESTS`)
 
 ### Backend implementation
 

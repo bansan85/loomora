@@ -1,0 +1,169 @@
+{
+  "version": 1,
+  "comment": "Golden vectors of the Loomora C API (contracts/c-api.md). Consumed by tools/gen_vectors.py, which generates vectors.inc for the Catch2 tests and for loomora_selftest. A text value (an 'enc' below) is a JSON string (use \\u escapes for non-ASCII), or {\"repeat\": enc, \"count\": n}, or {\"hex\": \"c0 80\"} for raw bytes (invalid UTF-8), or a list of enc concatenated.",
+
+  "greet": {
+    "prefix": "Bonjour ",
+    "max_input_bytes": 4096,
+    "default_capacity": 5000,
+    "comment": "A case with 'output' must succeed and return len(output); a case with 'error' must return that code. 'input': null is a NULL pointer, passed with 'input_len'. 'capacity' defaults to default_capacity.",
+    "cases": [
+      { "id": "empty", "input": "", "output": "Bonjour " },
+      { "id": "ascii", "input": "Coucou", "output": "Bonjour Coucou" },
+      { "id": "ascii_punctuation", "input": "a \"b\" \\ c/d", "output": "Bonjour a \"b\" \\ c/d" },
+      { "id": "accented", "input": "Hélène Ça", "output": "Bonjour Hélène Ça" },
+      { "id": "cjk", "input": "日本語中文한국어", "output": "Bonjour 日本語中文한국어" },
+      { "id": "right_to_left_arabic", "input": "مرحبا", "output": "Bonjour مرحبا" },
+      { "id": "right_to_left_hebrew", "input": "שלום", "output": "Bonjour שלום" },
+      { "id": "emoji", "input": "😀", "output": "Bonjour 😀" },
+      { "id": "emoji_zwj_sequence", "input": "👨‍👩‍👧", "output": "Bonjour 👨‍👩‍👧" },
+      { "id": "combining_characters", "input": "é Ạ̊", "output": "Bonjour é Ạ̊" },
+      { "id": "control_characters", "input": "a\tb\nc\u0001", "output": "Bonjour a\tb\nc\u0001" },
+      { "id": "one_thousand_ascii", "input": { "repeat": "a", "count": 1000 }, "output": ["Bonjour ", { "repeat": "a", "count": 1000 }] },
+      { "id": "one_thousand_two_byte_chars", "input": { "repeat": "é", "count": 1000 }, "output": ["Bonjour ", { "repeat": "é", "count": 1000 }] },
+      { "id": "limit_4096_ascii", "input": { "repeat": "a", "count": 4096 }, "output": ["Bonjour ", { "repeat": "a", "count": 4096 }] },
+      { "id": "limit_4096_two_byte_chars", "input": { "repeat": "é", "count": 2048 }, "output": ["Bonjour ", { "repeat": "é", "count": 2048 }] },
+
+      { "id": "too_long_4097_ascii", "input": { "repeat": "a", "count": 4097 }, "error": -1 },
+      { "id": "too_long_4098_two_byte_chars", "input": { "repeat": "é", "count": 2049 }, "error": -1 },
+
+      { "id": "invalid_overlong_two_byte", "input": { "hex": "c0 80" }, "error": -3 },
+      { "id": "invalid_overlong_three_byte", "input": { "hex": "e0 80 80" }, "error": -3 },
+      { "id": "invalid_surrogate", "input": { "hex": "ed a0 80" }, "error": -3 },
+      { "id": "invalid_above_10ffff", "input": { "hex": "f4 90 80 80" }, "error": -3 },
+      { "id": "invalid_byte_ff", "input": { "hex": "ff" }, "error": -3 },
+      { "id": "invalid_lone_continuation", "input": { "hex": "80" }, "error": -3 },
+      { "id": "invalid_truncated_sequence", "input": ["abc", { "hex": "c3" }], "error": -3 },
+      { "id": "invalid_after_valid_text", "input": ["Coucou ", { "hex": "ff" }, " Marie"], "error": -3 },
+      { "id": "null_pointer", "input": null, "input_len": 3, "error": -3 },
+
+      { "id": "capacity_too_small", "input": "abc", "capacity": 5, "error": -2 },
+      { "id": "capacity_one_byte_short", "input": "abc", "capacity": 10, "error": -2 },
+      { "id": "capacity_zero", "input": "", "capacity": 0, "error": -2 },
+      { "id": "capacity_exact", "input": "abc", "capacity": 11, "output": "Bonjour abc" },
+      { "id": "capacity_exact_empty_input", "input": "", "capacity": 8, "output": "Bonjour " }
+    ]
+  },
+
+  "eol": {
+    "reference_date": "2026-11-12",
+    "comment": "loomora_is_eol(family, major, minor): 1 = vendor no longer patches this system, 0 otherwise. Families: 1 Windows, 2 macOS, 3 Linux, 4 Android, 5 iOS, 6 Web. Windows uses the NT version, except that Windows 11 is passed as 11.0 (the UI maps NT 10.0 build >= 22000 to 11.0). Linux uses the kernel version, Android the marketing version (not the API level). Any negative argument, and any unknown family, gives 0; Web is never end of life. Thresholds as of the reference date (ASSUMPTIONS, to be confirmed): Windows <= 10 (Windows 10 support ended 2025-10-14); macOS <= 14 (Apple patches the three latest releases); iOS <= 17; Android <= 13; Linux kernel < 5.10 (5.4 LTS ended 2025-12).",
+    "cases": [
+      { "id": "windows_2000", "family": 1, "major": 5, "minor": 0, "eol": 1 },
+      { "id": "windows_xp", "family": 1, "major": 5, "minor": 1, "eol": 1 },
+      { "id": "windows_xp_x64", "family": 1, "major": 5, "minor": 2, "eol": 1 },
+      { "id": "windows_vista", "family": 1, "major": 6, "minor": 0, "eol": 1 },
+      { "id": "windows_7", "family": 1, "major": 6, "minor": 1, "eol": 1 },
+      { "id": "windows_8_1", "family": 1, "major": 6, "minor": 3, "eol": 1 },
+      { "id": "windows_10", "family": 1, "major": 10, "minor": 0, "eol": 1 },
+      { "id": "windows_11", "family": 1, "major": 11, "minor": 0, "eol": 0 },
+      { "id": "windows_future", "family": 1, "major": 12, "minor": 0, "eol": 0 },
+
+      { "id": "macos_10_6", "family": 2, "major": 10, "minor": 6, "eol": 1 },
+      { "id": "macos_10_15", "family": 2, "major": 10, "minor": 15, "eol": 1 },
+      { "id": "macos_11", "family": 2, "major": 11, "minor": 0, "eol": 1 },
+      { "id": "macos_14_6", "family": 2, "major": 14, "minor": 6, "eol": 1 },
+      { "id": "macos_15", "family": 2, "major": 15, "minor": 0, "eol": 0 },
+      { "id": "macos_26", "family": 2, "major": 26, "minor": 0, "eol": 0 },
+
+      { "id": "linux_2_6_32", "family": 3, "major": 2, "minor": 6, "eol": 1 },
+      { "id": "linux_3_10", "family": 3, "major": 3, "minor": 10, "eol": 1 },
+      { "id": "linux_4_19", "family": 3, "major": 4, "minor": 19, "eol": 1 },
+      { "id": "linux_5_4", "family": 3, "major": 5, "minor": 4, "eol": 1 },
+      { "id": "linux_5_9", "family": 3, "major": 5, "minor": 9, "eol": 1 },
+      { "id": "linux_5_10", "family": 3, "major": 5, "minor": 10, "eol": 0 },
+      { "id": "linux_5_15", "family": 3, "major": 5, "minor": 15, "eol": 0 },
+      { "id": "linux_6_1", "family": 3, "major": 6, "minor": 1, "eol": 0 },
+      { "id": "linux_6_12", "family": 3, "major": 6, "minor": 12, "eol": 0 },
+
+      { "id": "android_2_3", "family": 4, "major": 2, "minor": 3, "eol": 1 },
+      { "id": "android_4_4", "family": 4, "major": 4, "minor": 4, "eol": 1 },
+      { "id": "android_7_0", "family": 4, "major": 7, "minor": 0, "eol": 1 },
+      { "id": "android_13", "family": 4, "major": 13, "minor": 0, "eol": 1 },
+      { "id": "android_14", "family": 4, "major": 14, "minor": 0, "eol": 0 },
+      { "id": "android_16", "family": 4, "major": 16, "minor": 0, "eol": 0 },
+
+      { "id": "ios_5", "family": 5, "major": 5, "minor": 0, "eol": 1 },
+      { "id": "ios_12_5", "family": 5, "major": 12, "minor": 5, "eol": 1 },
+      { "id": "ios_15", "family": 5, "major": 15, "minor": 0, "eol": 1 },
+      { "id": "ios_17_7", "family": 5, "major": 17, "minor": 7, "eol": 1 },
+      { "id": "ios_18", "family": 5, "major": 18, "minor": 0, "eol": 0 },
+      { "id": "ios_26", "family": 5, "major": 26, "minor": 0, "eol": 0 },
+
+      { "id": "web_zero", "family": 6, "major": 0, "minor": 0, "eol": 0 },
+      { "id": "web_old_browser", "family": 6, "major": 9, "minor": 0, "eol": 0 },
+      { "id": "web_current_browser", "family": 6, "major": 130, "minor": 0, "eol": 0 },
+
+      { "id": "negative_family", "family": -1, "major": 5, "minor": 1, "eol": 0 },
+      { "id": "negative_major_windows", "family": 1, "major": -1, "minor": 0, "eol": 0 },
+      { "id": "negative_minor_windows", "family": 1, "major": 5, "minor": -1, "eol": 0 },
+      { "id": "negative_major_linux", "family": 3, "major": -2, "minor": 6, "eol": 0 },
+      { "id": "negative_minor_linux", "family": 3, "major": 2, "minor": -6, "eol": 0 },
+      { "id": "negative_everything", "family": -4, "major": -5, "minor": -1, "eol": 0 },
+      { "id": "unknown_family_zero", "family": 0, "major": 1, "minor": 0, "eol": 0 },
+      { "id": "unknown_family_seven", "family": 7, "major": 1, "minor": 0, "eol": 0 }
+    ]
+  },
+
+  "probe": {
+    "comment": "loomora_probe_record produces ONE ASCII JSON line (no raw control character, non-ASCII characters as \\uXXXX escapes, optional single trailing newline) whose fields and types are 'shape' (probe-result.schema.json). 'args' are the call arguments (ui_variant 1 legacy / 2 modern, core_kind 1 native / 2 wasm / 3 js, booleans as 0/1, rss_kb < 0 = not measured); 'expect' is the exact decoded content of every field, except 'compiler', which must equal loomora_build_compiler(). 'schema' is always 1.",
+    "shape": [
+      { "name": "schema", "type": "int" },
+      { "name": "platform_id", "type": "string" },
+      { "name": "ui_variant", "type": "string" },
+      { "name": "input", "type": "string" },
+      { "name": "message", "type": "string" },
+      { "name": "greeting_matches", "type": "bool" },
+      { "name": "core", "type": "string" },
+      { "name": "compiler", "type": "string" },
+      { "name": "displayed", "type": "bool" },
+      { "name": "display_ms", "type": "int" },
+      { "name": "peak_rss_kb", "type": "int_or_null" },
+      { "name": "eol_warning_shown", "type": "bool" },
+      { "name": "disabled_features", "type": "string_array" },
+      { "name": "timestamp_utc", "type": "string" }
+    ],
+    "cases": [
+      {
+        "id": "native_legacy_match",
+        "args": { "platform_id": "windows-xp-sp3-x86", "ui_variant": 1, "core_kind": 1, "input": "Coucou", "displayed_text": "Bonjour Coucou", "displayed": 1, "display_ms": 120, "rss_kb": 20480, "eol_warning_shown": 1, "disabled_features": "", "timestamp_utc": "2026-11-12T10:00:00Z" },
+        "expect": { "ui_variant": "legacy", "input": "Coucou", "message": "Bonjour Coucou", "greeting_matches": true, "core": "cpp", "displayed": true, "display_ms": 120, "peak_rss_kb": 20480, "eol_warning_shown": true, "disabled_features": [], "platform_id": "windows-xp-sp3-x86", "timestamp_utc": "2026-11-12T10:00:00Z" }
+      },
+      {
+        "id": "mismatch_is_reported",
+        "args": { "platform_id": "linux-ubuntu-22.04-x86_64", "ui_variant": 2, "core_kind": 1, "input": "Coucou", "displayed_text": "Bonjour Marie", "displayed": 1, "display_ms": 35, "rss_kb": 15000, "eol_warning_shown": 0, "disabled_features": "", "timestamp_utc": "2026-11-12T10:00:01Z" },
+        "expect": { "ui_variant": "modern", "input": "Coucou", "message": "Bonjour Marie", "greeting_matches": false, "core": "cpp", "displayed": true, "display_ms": 35, "peak_rss_kb": 15000, "eol_warning_shown": false, "disabled_features": [], "platform_id": "linux-ubuntu-22.04-x86_64", "timestamp_utc": "2026-11-12T10:00:01Z" }
+      },
+      {
+        "id": "empty_input",
+        "args": { "platform_id": "web-chrome-current", "ui_variant": 2, "core_kind": 2, "input": "", "displayed_text": "Bonjour ", "displayed": 1, "display_ms": 0, "rss_kb": -1, "eol_warning_shown": 0, "disabled_features": "", "timestamp_utc": "2026-11-12T23:59:59Z" },
+        "expect": { "ui_variant": "modern", "input": "", "message": "Bonjour ", "greeting_matches": true, "core": "cpp-wasm", "displayed": true, "display_ms": 0, "peak_rss_kb": null, "eol_warning_shown": false, "disabled_features": [], "platform_id": "web-chrome-current", "timestamp_utc": "2026-11-12T23:59:59Z" }
+      },
+      {
+        "id": "js_core_features_and_not_displayed",
+        "args": { "platform_id": "web-ie9", "ui_variant": 1, "core_kind": 3, "input": "Coucou", "displayed_text": "Bonjour Coucou", "displayed": 0, "display_ms": 4294967295, "rss_kb": 3000000000, "eol_warning_shown": 0, "disabled_features": "dark_mode,dpi_awareness,peak_memory", "timestamp_utc": "2026-01-02T03:04:05Z" },
+        "expect": { "ui_variant": "legacy", "input": "Coucou", "message": "Bonjour Coucou", "greeting_matches": true, "core": "cpp-js", "displayed": false, "display_ms": 4294967295, "peak_rss_kb": 3000000000, "eol_warning_shown": false, "disabled_features": ["dark_mode", "dpi_awareness", "peak_memory"], "platform_id": "web-ie9", "timestamp_utc": "2026-01-02T03:04:05Z" }
+      },
+      {
+        "id": "single_disabled_feature",
+        "args": { "platform_id": "android-2.3-armeabi", "ui_variant": 1, "core_kind": 1, "input": "Marie", "displayed_text": "Bonjour Marie", "displayed": 1, "display_ms": 900, "rss_kb": 0, "eol_warning_shown": 1, "disabled_features": "dark_mode", "timestamp_utc": "2026-11-12T10:00:00Z" },
+        "expect": { "ui_variant": "legacy", "input": "Marie", "message": "Bonjour Marie", "greeting_matches": true, "core": "cpp", "displayed": true, "display_ms": 900, "peak_rss_kb": 0, "eol_warning_shown": true, "disabled_features": ["dark_mode"], "platform_id": "android-2.3-armeabi", "timestamp_utc": "2026-11-12T10:00:00Z" }
+      },
+      {
+        "id": "json_escaping_of_quotes_backslashes_and_controls",
+        "args": { "platform_id": "macos-10.6-x86_64", "ui_variant": 1, "core_kind": 1, "input": "say \"hi\" \\ back/slash\n\t\r\u0001\u001f\u007f", "displayed_text": "Bonjour say \"hi\" \\ back/slash\n\t\r\u0001\u001f\u007f", "displayed": 1, "display_ms": 10, "rss_kb": 1, "eol_warning_shown": 1, "disabled_features": "", "timestamp_utc": "2026-11-12T10:00:00Z" },
+        "expect": { "ui_variant": "legacy", "input": "say \"hi\" \\ back/slash\n\t\r\u0001\u001f\u007f", "message": "Bonjour say \"hi\" \\ back/slash\n\t\r\u0001\u001f\u007f", "greeting_matches": true, "core": "cpp", "displayed": true, "display_ms": 10, "peak_rss_kb": 1, "eol_warning_shown": true, "disabled_features": [], "platform_id": "macos-10.6-x86_64", "timestamp_utc": "2026-11-12T10:00:00Z" }
+      },
+      {
+        "id": "non_ascii_is_escaped_to_ascii",
+        "args": { "platform_id": "ios-15-arm64", "ui_variant": 2, "core_kind": 1, "input": "Hélène 日本 😀 مرحبا", "displayed_text": "Bonjour Hélène 日本 😀 مرحبا", "displayed": 1, "display_ms": 50, "rss_kb": 30000, "eol_warning_shown": 1, "disabled_features": "", "timestamp_utc": "2026-11-12T10:00:00Z" },
+        "expect": { "ui_variant": "modern", "input": "Hélène 日本 😀 مرحبا", "message": "Bonjour Hélène 日本 😀 مرحبا", "greeting_matches": true, "core": "cpp", "displayed": true, "display_ms": 50, "peak_rss_kb": 30000, "eol_warning_shown": true, "disabled_features": [], "platform_id": "ios-15-arm64", "timestamp_utc": "2026-11-12T10:00:00Z" }
+      },
+      {
+        "id": "input_too_long_never_matches",
+        "args": { "platform_id": "linux-debian-6-i686", "ui_variant": 1, "core_kind": 1, "input": { "repeat": "a", "count": 4097 }, "displayed_text": ["Bonjour ", { "repeat": "a", "count": 4097 }], "displayed": 1, "display_ms": 70, "rss_kb": 4000, "eol_warning_shown": 1, "disabled_features": "", "timestamp_utc": "2026-11-12T10:00:00Z" },
+        "expect": { "ui_variant": "legacy", "input": { "repeat": "a", "count": 4097 }, "message": ["Bonjour ", { "repeat": "a", "count": 4097 }], "greeting_matches": false, "core": "cpp", "displayed": true, "display_ms": 70, "peak_rss_kb": 4000, "eol_warning_shown": true, "disabled_features": [], "platform_id": "linux-debian-6-i686", "timestamp_utc": "2026-11-12T10:00:00Z" }
+      }
+    ]
+  }
+}
