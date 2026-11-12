@@ -9,7 +9,8 @@
 # The target is called loomora_win32 because the backend library already owns the name
 # "loomora"; the executable file is still loomora.exe (OUTPUT_NAME).
 
-set(LOOMORA_WIN32_SOURCES main.cpp resource.h)
+set(LOOMORA_WIN32_SOURCES main.cpp sysinfo.cpp sysinfo.h dynfeatures.cpp dynfeatures.h dynload.h
+    probe.cpp probe.h resource.h)
 if(MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
   set(LOOMORA_WIN32_MSVC_ABI ON)
 else()
