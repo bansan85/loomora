@@ -14,11 +14,29 @@ typedef __int64 int64_t;
 
 #define LOOMORA_ABI_VERSION 1
 
+/* Export macro for the shared-library build. Define LOOMORA_BUILD_SHARED_LIB when building
+   the DLL / shared object itself and LOOMORA_USE_DLL when linking against the Windows DLL;
+   a static build defines neither and LOOMORA_API is then empty on Windows. With GCC/Clang
+   the library is built with -fvisibility=hidden and only these functions stay visible. */
+#if defined(_WIN32) || defined(__CYGWIN__)
+#if defined(LOOMORA_BUILD_SHARED_LIB)
+#define LOOMORA_API __declspec(dllexport)
+#elif defined(LOOMORA_USE_DLL)
+#define LOOMORA_API __declspec(dllimport)
+#else
+#define LOOMORA_API
+#endif
+#elif defined(__GNUC__) && __GNUC__ >= 4
+#define LOOMORA_API __attribute__((visibility("default")))
+#else
+#define LOOMORA_API
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-uint32_t loomora_abi_version(void);
+LOOMORA_API uint32_t loomora_abi_version(void);
 
 /* Negative codes returned by loomora_greet. */
 #define LOOMORA_ERR_TOO_LONG -1 /* input longer than 4096 bytes */
@@ -29,7 +47,7 @@ uint32_t loomora_abi_version(void);
 /* Writes "Bonjour " + input (UTF-8) into out[0..cap). Returns the byte length
    written or one of the LOOMORA_ERR_* codes. The caller owns both buffers; no
    NUL is written and no exception ever crosses this function. */
-int32_t loomora_greet(const char *input, size_t input_len, uint8_t *out, size_t cap);
+LOOMORA_API int32_t loomora_greet(const char *input, size_t input_len, uint8_t *out, size_t cap);
 
 /* Families */
 #define LOOMORA_FAMILY_WINDOWS 1
@@ -41,10 +59,10 @@ int32_t loomora_greet(const char *input, size_t input_len, uint8_t *out, size_t 
 
 /* 1 = the vendor no longer maintains this system version, 0 otherwise (negative
    arguments, unknown family and the Web family always give 0). */
-int32_t loomora_is_eol(int32_t family, int32_t major, int32_t minor);
+LOOMORA_API int32_t loomora_is_eol(int32_t family, int32_t major, int32_t minor);
 
 /* End-of-life warning text, UTF-8, static, never NULL. */
-const char *loomora_eol_warning(void);
+LOOMORA_API const char *loomora_eol_warning(void);
 
 /* UI variants */
 #define LOOMORA_UI_LEGACY 1
@@ -56,7 +74,7 @@ const char *loomora_eol_warning(void);
 #define LOOMORA_CORE_JS 3     /* "cpp-js" */
 
 /* Compiler identification string, static, never NULL. */
-const char *loomora_build_compiler(void);
+LOOMORA_API const char *loomora_build_compiler(void);
 
 /* Builds the ProbeResult JSON line (see probe-result.schema.json). Writes at most
    `cap` bytes into `buf` (no NUL) and returns the total length needed. `rss_kb` < 0
@@ -65,11 +83,12 @@ const char *loomora_build_compiler(void);
    comes from loomora_build_compiler(); `greeting_matches` compares `displayed_text`
    with the greeting of `input` (false when the greeting fails). Returns 0, writing
    nothing, for an unknown `ui_variant` or `core_kind` or on internal failure. */
-size_t loomora_probe_record(const char *platform_id, int32_t ui_variant, int32_t core_kind,
-                            const char *input, const char *displayed_text, int32_t displayed,
-                            uint32_t display_ms, int64_t rss_kb, int32_t eol_warning_shown,
-                            const char *disabled_features, const char *timestamp_utc, uint8_t *buf,
-                            size_t cap);
+LOOMORA_API size_t loomora_probe_record(const char *platform_id, int32_t ui_variant,
+                                        int32_t core_kind, const char *input,
+                                        const char *displayed_text, int32_t displayed,
+                                        uint32_t display_ms, int64_t rss_kb,
+                                        int32_t eol_warning_shown, const char *disabled_features,
+                                        const char *timestamp_utc, uint8_t *buf, size_t cap);
 
 #ifdef __cplusplus
 }

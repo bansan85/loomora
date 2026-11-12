@@ -1,0 +1,10 @@
+/* GNU ld / lld version script for the shared library (ELF: Linux, Android).
+   -fvisibility=hidden is not enough: libstdc++ marks namespace std as visibility("default"),
+   so the std templates instantiated in the library would still be exported. Only the
+   loomora_* C functions may be visible. Checked by tools/check_std.py. */
+{
+  global:
+    loomora_*;
+  local:
+    *;
+};
