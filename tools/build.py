@@ -20,9 +20,21 @@ Implemented targets:
                  Ubuntu-24.04): the tool re-runs itself there. Needs meson, ninja, a C and a C++
                  compiler and the gtk+-3.0 development files.
 
+  windows legacy CMake + Ninja + MinGW-w64 GCC on ui/legacy/windows-win32 (T075), twice: i686
+                 (one executable for Windows 2000 -> 11, toolchain
+                 cmake/toolchains/mingw-w64-win2000-i686.cmake) and x86_64 (XP x64 -> 11,
+                 mingw-w64-win-x86_64.cmake). Needs both MinGW-w64 compilers on PATH (msvcrt
+                 runtime, not UCRT) and stops with install instructions when one is missing. The
+                 tool prefixes can be overridden with $LOOMORA_MINGW_PREFIX_X86 and
+                 $LOOMORA_MINGW_PREFIX_X64. Records windows-x86-legacy.json and
+                 windows-x64-legacy.json in docs/implementation/validation/deliverables/.
+
 Platform id of a Linux deliverable: "linux-<os-release ID>-<VERSION_ID>-<machine>" such as
 "linux-ubuntu-24.04-x86_64", the same rule as ui/modern/linux-gtk3/probe.c uses for the probe
 record's platform_id (keep both in step).
+Platform id of a Windows Legacy deliverable: "windows-x86" or "windows-x64". One executable runs on
+every Windows of its range, so the id names the family and the architecture, not an operating
+system version (the per-system ids of the trials come from T088).
 """
 import argparse
 import json
@@ -47,7 +59,6 @@ PENDING = {
     ("macos", "modern"): "T049",
     ("ios", "modern"): "T052",
     ("android", "modern"): "T055",
-    ("windows", "legacy"): "T075",
     ("macos", "legacy"): "T077",
     ("ios", "legacy"): "T079",
     ("android", "legacy"): "T082",
@@ -173,6 +184,136 @@ def run_linux_modern(args):
     write_deliverable(record, artifact)
 
 
+# ---- windows legacy (T075) -----------------------------------------------------------------
+
+# (platform id, toolchain file, default tool prefix, environment variable overriding the prefix,
+#  range of Windows versions the executable is meant for)
+WINDOWS_LEGACY_ARCHS = (
+    ("windows-x86", "mingw-w64-win2000-i686.cmake", "i686-w64-mingw32-",
+     "LOOMORA_MINGW_PREFIX_X86", "Windows 2000 SP4 -> 11"),
+    ("windows-x64", "mingw-w64-win-x86_64.cmake", "x86_64-w64-mingw32-",
+     "LOOMORA_MINGW_PREFIX_X64", "Windows XP x64 -> 11"),
+)
+
+# DLLs the executable may import: all of them exist on Windows 2000. Anything else (a UCRT
+# api-ms-win-crt-* import, libstdc++-6.dll, libgcc_s_*.dll, libwinpthread-1.dll, ...) means the
+# toolchain or the flags are wrong. Only DLL names are checked here, not individual functions:
+# that check and the run on a real Windows 2000 are spike S1 (T066).
+WINDOWS_LEGACY_ALLOWED_DLLS = ("kernel32.dll", "user32.dll", "gdi32.dll", "advapi32.dll",
+                               "shell32.dll", "msvcrt.dll")
+
+MINGW_INSTALL_HELP = """\
+windows legacy needs the MinGW-w64 GCC cross compilers, both of them, on PATH:
+  i686 (Windows 2000 -> 11): i686-w64-mingw32-gcc, -g++, -windres, -objdump
+  x86_64 (XP x64 -> 11):     x86_64-w64-mingw32-gcc, -g++, -windres, -objdump
+plus cmake and ninja. The compilers MUST use the msvcrt.dll runtime (not UCRT, which Windows
+2000 does not have); the win32 thread model is preferred.
+  Windows host: unpack the two WinLibs "GCC + MinGW-w64" builds (https://winlibs.com, runtime
+    "MSVCRT"; the Win32 package is i686, the Win64 package is x86_64) and put both bin\\
+    directories on PATH.
+  WSL / Linux (Ubuntu): sudo apt install g++-mingw-w64-i686 g++-mingw-w64-x86-64 cmake ninja-build
+    then, for the win32 thread model, select the -win32 variant of each compiler with
+    sudo update-alternatives --config i686-w64-mingw32-g++ (and gcc, and the x86_64 ones), and run
+    wsl -d Ubuntu-24.04 -- python3 tools/build.py windows legacy
+Other tool prefixes: set LOOMORA_MINGW_PREFIX_X86 / LOOMORA_MINGW_PREFIX_X64 (for example to a
+full path ending in "i686-w64-mingw32-")."""
+
+
+def mingw_tools(prefix):
+    return [prefix + name for name in ("gcc", "g++", "windres", "objdump")]
+
+
+def gcc_info(cxx):
+    """(full version, thread model) of a GCC executable."""
+    res = subprocess.run([cxx, "-v"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         universal_newlines=True)
+    thread = re.search(r"^Thread model: (\S+)", res.stdout, re.MULTILINE)
+    try:
+        version = capture([cxx, "-dumpfullversion"])
+    except SystemExit:
+        version = capture([cxx, "-dumpversion"])
+    return version, thread.group(1) if thread else "unknown"
+
+
+def imported_dlls(objdump, exe):
+    out = capture([objdump, "-p", exe])
+    return sorted(set(m.lower() for m in re.findall(r"DLL Name:\s*(\S+)", out)))
+
+
+def build_windows_legacy_arch(platform_id, toolchain, prefix, span, build_root):
+    """Cross-builds loomora.exe for one architecture; returns (record, artifact)."""
+    arch = platform_id.split("-", 1)[1]
+    build_dir = build_root / ("windows-legacy-" + arch)
+    toolchain_file = common.ROOT / "cmake" / "toolchains" / toolchain
+    common.run(["cmake", "-S", common.ROOT, "-B", build_dir, "-G", "Ninja",
+                "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_TOOLCHAIN_FILE=" + str(toolchain_file),
+                "-DLOOMORA_MINGW_PREFIX=" + prefix, "-DLOOMORA_BUILD_TESTS=OFF"])
+    common.run(["cmake", "--build", build_dir, "--target", "loomora_win32"])
+
+    exe = build_dir / "ui" / "legacy" / "windows-win32" / "loomora.exe"
+    if not exe.is_file():
+        sys.exit("build finished but %s is missing" % exe)
+
+    dlls = imported_dlls(prefix + "objdump", exe)
+    unexpected = [d for d in dlls if d not in WINDOWS_LEGACY_ALLOWED_DLLS]
+    if unexpected:
+        sys.exit("%s imports DLLs that Windows 2000 does not provide or that must be linked "
+                 "statically: %s (all imports: %s). Check the toolchain runtime (msvcrt, not "
+                 "UCRT) and the -static flags." % (exe, ", ".join(unexpected), ", ".join(dlls)))
+
+    out_dir = common.ROOT / "out" / "windows-legacy" / arch
+    out_dir.mkdir(parents=True, exist_ok=True)
+    artifact = out_dir / "loomora.exe"
+    shutil.copyfile(str(exe), str(artifact))
+
+    cxx = prefix + "g++"
+    version, thread_model = gcc_info(cxx)
+    record = {
+        "platform_id": platform_id,
+        "ui_variant": "legacy",
+        "cpp_std": "c++11",
+        "compiler": "gcc-%s-mingw-w64" % version,
+        "target": capture([cxx, "-dumpmachine"]),
+        "output": "native",
+        "ui_language": "c++",
+        "ui_toolkit": "Win32 API (user32, gdi32), EDIT + STATIC controls, _WIN32_WINNT=0x0500, "
+                      "no MFC, no common controls",
+        "ui_compiler": "mingw-w64-gcc-%s" % version,
+        "artifact": {"name": artifact.name, "size": artifact.stat().st_size},
+        "disabled_features": [],
+        "fallbacks": [],
+        "notes": "cmake + ninja (ui/legacy/windows-win32/CMakeLists.txt) with "
+                 "cmake/toolchains/%s; static libloomora.a built from core/src with -std=c++11; "
+                 "-static, libstdc++ and libgcc linked statically; GCC thread model %s; imported "
+                 "DLLs: %s (names only: the function-level check and the run on Windows 2000 are "
+                 "spike S1 / T066); meant for %s, not verified on any of them by this build; "
+                 "artifact copied to out/windows-legacy/%s/."
+                 % (toolchain, thread_model, ", ".join(dlls), span, arch),
+    }
+    return record, artifact
+
+
+def run_windows_legacy(args):
+    archs = []
+    missing = []
+    for platform_id, toolchain, default_prefix, env_var, span in WINDOWS_LEGACY_ARCHS:
+        prefix = os.environ.get(env_var) or default_prefix
+        missing += [t for t in mingw_tools(prefix) if shutil.which(t) is None]
+        archs.append((platform_id, toolchain, prefix, span))
+    missing += [t for t in ("cmake", "ninja") if shutil.which(t) is None]
+    if missing:
+        sys.exit("windows legacy: missing tool(s) on this machine: %s\n\n%s"
+                 % (", ".join(missing), MINGW_INSTALL_HELP))
+    if sys.platform == "win32":
+        build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (common.ROOT / "build"))
+    else:  # WSL / Linux: always under $HOME, never /tmp or the Windows tree
+        build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (Path.home() / "loomora-build"))
+    for platform_id, toolchain, prefix, span in archs:
+        record, artifact = build_windows_legacy_arch(platform_id, toolchain, prefix, span,
+                                                     build_root)
+        write_deliverable(record, artifact)
+
+
 def write_deliverable(record, artifact):
     name = "%s-%s.json" % (record["platform_id"], record["ui_variant"])
     path = common.VALIDATION / "deliverables" / name
@@ -186,7 +327,10 @@ def write_deliverable(record, artifact):
     print("deliverable record: %s" % path.relative_to(common.ROOT).as_posix())
 
 
-TARGETS = {("linux", "modern"): run_linux_modern}
+TARGETS = {
+    ("linux", "modern"): run_linux_modern,
+    ("windows", "legacy"): run_windows_legacy,
+}
 
 
 def main(argv=None):
