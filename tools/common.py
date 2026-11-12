@@ -14,6 +14,17 @@ CONTRACTS = ROOT / "specs" / "001-loomora-cross-platform" / "contracts"
 VECTORS = CORE / "tests" / "vectors.json"
 
 
+def setup_utf8_output():
+    """Print UTF-8 on every console (the Windows cp1252 console would raise or garble)."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)  # Python 3.7+
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
 def docs_present():
     """True when the docs submodule is checked out (docs/implementation/validation exists)."""
     return VALIDATION.is_dir()
