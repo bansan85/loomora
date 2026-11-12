@@ -2,8 +2,16 @@
 // no test framework, so it can be cross-compiled and run on every target.
 // The greet vectors come from vectors.inc, generated from core/tests/vectors.json.
 // (loomora_is_eol and loomora_probe_record are covered here once they are implemented.)
+//
+// Output goes through std::fputs of <cstdio>, not <iostream>: the iostream initialisation of
+// libstdc++ pulls the thread-support code of libgcc (gthr-win32-cond.o) into a MinGW-w64 build,
+// which imports Vista-only KERNEL32 functions and keeps the program from loading on Windows 2000
+// (spike S1, docs/implementation/adr/0002). Keep this file free of <iostream>, <thread>, <mutex>,
+// <condition_variable>, <locale> and std::call_once. std::printf is avoided too: with MinGW-w64
+// it becomes __mingw_vfprintf, which locks the stream through msvcrt's _lock / _unlock, two
+// internal exports that tools/win2000_imports.json does not list.
 #include <cstdint>
-#include <iostream>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -19,7 +27,7 @@ class Checker {
     void check(bool condition, const std::string &what) {
         if (condition)
             return;
-        std::cout << "FAIL: " << what << '\n';
+        std::fputs(("FAIL: " + what + "\n").c_str(), stdout);
         ++failures_;
     }
 
@@ -61,9 +69,9 @@ int main() {
         t.greet(vectors::kGreetVectors[i]);
 
     if (t.failures() != 0) {
-        std::cout << t.failures() << " failure(s)\n";
+        std::fputs((std::to_string(t.failures()) + " failure(s)\n").c_str(), stdout);
         return 1;
     }
-    std::cout << "all passed\n";
+    std::fputs("all passed\n", stdout);
     return 0;
 }

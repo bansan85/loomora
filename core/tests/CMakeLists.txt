@@ -27,6 +27,15 @@ target_include_directories(loomora_selftest PRIVATE "${CMAKE_CURRENT_BINARY_DIR}
 target_link_libraries(loomora_selftest PRIVATE loomora)
 set_target_properties(loomora_selftest PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON
                                                   CXX_EXTENSIONS OFF)
+# 32-bit MinGW-w64 (the Windows 2000 build): libgcc's gthr-win32.o, pulled in by the exception
+# machinery of libstdc++, would import KERNEL32!GetThreadId (Vista and later). The shim of the
+# Legacy UI, compiled here from the same source file, satisfies the reference inside the
+# executable (docs/implementation/adr/0002). Same condition as ui/legacy/windows-win32/CMakeLists.txt.
+if(WIN32 AND NOT MSVC AND NOT CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC"
+   AND CMAKE_SIZEOF_VOID_P EQUAL 4)
+  target_sources(loomora_selftest PRIVATE
+    "${PROJECT_SOURCE_DIR}/ui/legacy/windows-win32/getthreadid_shim.cpp")
+endif()
 add_test(NAME selftest COMMAND loomora_selftest)
 
 # --- loomora_tests: Catch2 --------------------------------------------------------------
