@@ -1,0 +1,15 @@
+build/
+out/
+*.o
+*.obj
+*.a
+*.lib
+*.exe
+*.dll
+*.log
+.vscode/
+.idea/
+Thumbs.db
+.venv*/
+__pycache__/
+*.pyc

@@ -1,0 +1,28 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 13, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "host-gcc",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/host-gcc",
+      "cacheVariables": { "CMAKE_C_COMPILER": "gcc", "CMAKE_CXX_COMPILER": "g++" }
+    },
+    {
+      "name": "host-clang",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/host-clang",
+      "cacheVariables": { "CMAKE_C_COMPILER": "clang", "CMAKE_CXX_COMPILER": "clang++" }
+    },
+    {
+      "name": "host-msvc",
+      "generator": "Visual Studio 17 2022",
+      "binaryDir": "${sourceDir}/build/host-msvc"
+    }
+  ],
+  "buildPresets": [
+    { "name": "host-gcc", "configurePreset": "host-gcc" },
+    { "name": "host-clang", "configurePreset": "host-clang" },
+    { "name": "host-msvc", "configurePreset": "host-msvc", "configuration": "Release" }
+  ]
+}
