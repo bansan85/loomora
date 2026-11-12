@@ -1,0 +1,11 @@
+add_library(loomora STATIC
+  src/c_api.cpp src/eol.cpp src/greet.cpp src/probe.cpp src/utf8.cpp src/version.cpp)
+target_include_directories(loomora PUBLIC include)
+set_target_properties(loomora PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+if(NOT MSVC OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+  target_compile_options(loomora PRIVATE -Wall -Wextra -pedantic)
+endif()
+
+if(LOOMORA_BUILD_TESTS)
+  add_subdirectory(tests)
+endif()
