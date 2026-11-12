@@ -26,7 +26,9 @@ Implemented targets:
                  mingw-w64-win-x86_64.cmake). Needs both MinGW-w64 compilers on PATH (msvcrt
                  runtime, not UCRT) and stops with install instructions when one is missing. The
                  tool prefixes can be overridden with $LOOMORA_MINGW_PREFIX_X86 and
-                 $LOOMORA_MINGW_PREFIX_X64. Records windows-x86-legacy.json and
+                 $LOOMORA_MINGW_PREFIX_X64. Checks every imported function of each executable
+                 against tools/win2000_imports.json (tools/check_imports.py) and fails on one
+                 that is not listed. Records windows-x86-legacy.json and
                  windows-x64-legacy.json in docs/implementation/validation/deliverables/.
 
 Platform id of a Linux deliverable: "linux-<os-release ID>-<VERSION_ID>-<machine>" such as
@@ -46,6 +48,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import check_imports
 import common
 
 PLATFORMS = ("windows", "macos", "ios", "android", "linux", "web")
@@ -195,12 +198,12 @@ WINDOWS_LEGACY_ARCHS = (
      "LOOMORA_MINGW_PREFIX_X64", "Windows XP x64 -> 11"),
 )
 
-# DLLs the executable may import: all of them exist on Windows 2000. Anything else (a UCRT
-# api-ms-win-crt-* import, libstdc++-6.dll, libgcc_s_*.dll, libwinpthread-1.dll, ...) means the
-# toolchain or the flags are wrong. Only DLL names are checked here, not individual functions:
-# that check and the run on a real Windows 2000 are spike S1 (T066).
-WINDOWS_LEGACY_ALLOWED_DLLS = ("kernel32.dll", "user32.dll", "gdi32.dll", "advapi32.dll",
-                               "shell32.dll", "msvcrt.dll")
+# The imports of each executable are checked function by function against
+# tools/win2000_imports.json by tools/check_imports.py (x86: the Windows 2000 SP4 allowlist; x64:
+# the Windows XP x64 one). A DLL (a UCRT api-ms-win-crt-* import, libstdc++-6.dll, libgcc_s_*.dll,
+# libwinpthread-1.dll, ...) or a function that is not listed fails the build: the toolchain, its
+# flags or the code pulled in something the oldest supported Windows does not have (spike S1,
+# docs/implementation/adr/0002).
 
 MINGW_INSTALL_HELP = """\
 windows legacy needs the MinGW-w64 GCC cross compilers, both of them, on PATH:
@@ -235,9 +238,9 @@ def gcc_info(cxx):
     return version, thread.group(1) if thread else "unknown"
 
 
-def imported_dlls(objdump, exe):
-    out = capture([objdump, "-p", exe])
-    return sorted(set(m.lower() for m in re.findall(r"DLL Name:\s*(\S+)", out)))
+def imported_functions(objdump, exe):
+    """{dll (lowercase): [functions]} of the import table of an executable."""
+    return check_imports.parse_objdump(capture([objdump, "-p", exe]))[1]
 
 
 def build_windows_legacy_arch(platform_id, toolchain, prefix, span, build_root):
@@ -254,17 +257,29 @@ def build_windows_legacy_arch(platform_id, toolchain, prefix, span, build_root):
     if not exe.is_file():
         sys.exit("build finished but %s is missing" % exe)
 
-    dlls = imported_dlls(prefix + "objdump", exe)
-    unexpected = [d for d in dlls if d not in WINDOWS_LEGACY_ALLOWED_DLLS]
-    if unexpected:
-        sys.exit("%s imports DLLs that Windows 2000 does not provide or that must be linked "
-                 "statically: %s (all imports: %s). Check the toolchain runtime (msvcrt, not "
-                 "UCRT) and the -static flags." % (exe, ", ".join(unexpected), ", ".join(dlls)))
+    allowlist_arch = "x86" if arch == "x86" else "x64"
+    if not check_imports.check_exe(exe, prefix + "objdump", allowlist_arch):
+        sys.exit("%s: the import check failed (see above); nothing was recorded for %s"
+                 % (exe, platform_id))
+    imports = imported_functions(prefix + "objdump", exe)
+    dlls = sorted(imports)
+    function_count = sum(len(f) for f in imports.values())
+    floor = check_imports.allowed_for(check_imports.load_allowlist(), allowlist_arch)[0]
 
     out_dir = common.ROOT / "out" / "windows-legacy" / arch
     out_dir.mkdir(parents=True, exist_ok=True)
     artifact = out_dir / "loomora.exe"
     shutil.copyfile(str(exe), str(artifact))
+
+    has_get_thread_id = "GetThreadId" in imports.get("kernel32.dll", [])
+    if arch == "x86":
+        getthreadid = ("KERNEL32!GetThreadId (Vista and later) is not imported: the reference "
+                       "from libgcc gthr-win32.o is satisfied by "
+                       "ui/legacy/windows-win32/getthreadid_shim.cpp (ADR 0002)")
+    else:
+        state = "is imported" if has_get_thread_id else "is not imported"
+        getthreadid = ("KERNEL32!GetThreadId %s (XP x64 has it, so the toolchain output is "
+                       "unchanged, ADR 0002)" % state)
 
     cxx = prefix + "g++"
     version, thread_model = gcc_info(cxx)
@@ -285,10 +300,13 @@ def build_windows_legacy_arch(platform_id, toolchain, prefix, span, build_root):
         "notes": "cmake + ninja (ui/legacy/windows-win32/CMakeLists.txt) with "
                  "cmake/toolchains/%s; static libloomora.a built from core/src with -std=c++11; "
                  "-static, libstdc++ and libgcc linked statically; GCC thread model %s; imported "
-                 "DLLs: %s (names only: the function-level check and the run on Windows 2000 are "
-                 "spike S1 / T066); meant for %s, not verified on any of them by this build; "
-                 "artifact copied to out/windows-legacy/%s/."
-                 % (toolchain, thread_model, ", ".join(dlls), span, arch),
+                 "DLLs: %s; %d imported functions, each on the %s allowlist of "
+                 "tools/win2000_imports.json (tools/check_imports.py; entries marked verify are "
+                 "unconfirmed); %s; meant for %s, not verified on any of them by this build (the "
+                 "run on Windows 2000 is spike S1 / T066); artifact copied to "
+                 "out/windows-legacy/%s/."
+                 % (toolchain, thread_model, ", ".join(dlls), function_count, floor, getthreadid,
+                    span, arch),
     }
     return record, artifact
 
