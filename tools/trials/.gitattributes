@@ -1,0 +1,3 @@
+# Trial drivers are hashed in the verdicts (docs/implementation/validation/verdicts/):
+# keep their bytes whatever core.autocrlf and the *.sh rule of the root say.
+* -text
