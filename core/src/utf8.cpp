@@ -27,6 +27,28 @@ constexpr Lead classify(unsigned char b) {
                       : Lead{0, 0, 0};
 }
 
+/* Strictly decodes the sequence starting at `pos`. On success returns true, sets `cp` and
+   advances `pos`; on malformed input returns false and leaves `pos` untouched. */
+bool decode_one(const std::string &bytes, std::size_t &pos, char32_t &cp) {
+    const Lead lead = classify(static_cast<unsigned char>(bytes[pos]));
+    if (lead.length == 0 || bytes.size() - pos < lead.length)
+        return false;
+
+    char32_t value = lead.payload;
+    for (std::size_t k = 1; k < lead.length; ++k) {
+        const unsigned char b = static_cast<unsigned char>(bytes[pos + k]);
+        if (!is_continuation(b))
+            return false;
+        value = (value << 6) | (b & 0x3F);
+    }
+    if (value < lead.min_cp || value > kMaxCodePoint || is_surrogate(value))
+        return false; // overlong, surrogate or out of range
+
+    cp = value;
+    pos += lead.length;
+    return true;
+}
+
 } // namespace
 
 std::u32string decode_utf8(const std::string &bytes) {
@@ -35,22 +57,27 @@ std::u32string decode_utf8(const std::string &bytes) {
 
     std::size_t pos = 0;
     while (pos < bytes.size()) {
-        const Lead lead = classify(static_cast<unsigned char>(bytes[pos]));
-        if (lead.length == 0 || bytes.size() - pos < lead.length)
-            throw InvalidUtf8("invalid or truncated UTF-8 sequence");
+        char32_t cp = 0;
+        if (!decode_one(bytes, pos, cp))
+            throw InvalidUtf8("invalid, truncated or non-shortest UTF-8 sequence");
+        code_points.push_back(cp);
+    }
+    return code_points;
+}
 
-        char32_t value = lead.payload;
-        for (std::size_t k = 1; k < lead.length; ++k) {
-            const unsigned char b = static_cast<unsigned char>(bytes[pos + k]);
-            if (!is_continuation(b))
-                throw InvalidUtf8("invalid UTF-8 continuation byte");
-            value = (value << 6) | (b & 0x3F);
+std::u32string decode_utf8_lossy(const std::string &bytes) {
+    std::u32string code_points;
+    code_points.reserve(bytes.size());
+
+    std::size_t pos = 0;
+    while (pos < bytes.size()) {
+        char32_t cp = 0;
+        if (decode_one(bytes, pos, cp)) {
+            code_points.push_back(cp);
+        } else {
+            code_points.push_back(kReplacementCharacter);
+            ++pos; // skip the offending byte and resynchronise on the next one
         }
-        if (value < lead.min_cp || value > kMaxCodePoint || is_surrogate(value))
-            throw InvalidUtf8("overlong, surrogate or out-of-range code point");
-
-        code_points.push_back(value);
-        pos += lead.length;
     }
     return code_points;
 }

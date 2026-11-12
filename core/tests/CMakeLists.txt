@@ -30,22 +30,17 @@ set_target_properties(loomora_selftest PROPERTIES CXX_STANDARD 11 CXX_STANDARD_R
 add_test(NAME selftest COMMAND loomora_selftest)
 
 # --- loomora_tests: Catch2 --------------------------------------------------------------
-# Until step 2b implements loomora_is_eol, loomora_eol_warning and loomora_probe_record
-# (T020, T022), test_eol.cpp and test_probe.cpp cannot link, so this target is
-# EXCLUDE_FROM_ALL and is not registered with ctest: the default build stays green.
-# Build it explicitly with `cmake --build <dir> --target loomora_tests`. Turn
-# LOOMORA_BUILD_CATCH2_TESTS ON (default OFF) once the backend is complete to put it in the
-# default build and in ctest.
-option(LOOMORA_BUILD_CATCH2_TESTS "Build and register the Catch2 tests (needs the full backend)" OFF)
+# The backend is complete (greet, is_eol, eol_warning, probe_record), so loomora_tests is part
+# of the default build and registered with ctest. It needs the Catch2 submodule
+# (git submodule update --init); without it the target is skipped with a status message.
+# Turn LOOMORA_BUILD_CATCH2_TESTS OFF to leave it out (for example on a cross build).
+option(LOOMORA_BUILD_CATCH2_TESTS "Build and register the Catch2 tests" ON)
 
 set(LOOMORA_CATCH2_DIR "${PROJECT_SOURCE_DIR}/third_party/catch2/single_include")
-if(EXISTS "${LOOMORA_CATCH2_DIR}/catch2/catch.hpp")
-  if(LOOMORA_BUILD_CATCH2_TESTS)
-    set(LOOMORA_TESTS_ALL "")
-  else()
-    set(LOOMORA_TESTS_ALL EXCLUDE_FROM_ALL)
-  endif()
-  add_executable(loomora_tests ${LOOMORA_TESTS_ALL}
+if(NOT LOOMORA_BUILD_CATCH2_TESTS)
+  message(STATUS "Catch2 tests disabled (LOOMORA_BUILD_CATCH2_TESTS=OFF)")
+elseif(EXISTS "${LOOMORA_CATCH2_DIR}/catch2/catch.hpp")
+  add_executable(loomora_tests
     test_main.cpp test_greet.cpp test_eol.cpp test_probe.cpp "${LOOMORA_VECTORS_INC}")
   add_dependencies(loomora_tests loomora_vectors)
   target_include_directories(loomora_tests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}"
@@ -53,9 +48,7 @@ if(EXISTS "${LOOMORA_CATCH2_DIR}/catch2/catch.hpp")
   target_link_libraries(loomora_tests PRIVATE loomora)
   set_target_properties(loomora_tests PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON
                                                  CXX_EXTENSIONS OFF)
-  if(LOOMORA_BUILD_CATCH2_TESTS)
-    add_test(NAME loomora_tests COMMAND loomora_tests)
-  endif()
+  add_test(NAME loomora_tests COMMAND loomora_tests)
 else()
   message(STATUS "Catch2 submodule not checked out (git submodule update --init): "
                  "loomora_tests is not defined")

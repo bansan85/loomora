@@ -63,7 +63,8 @@ const char *loomora_build_compiler(void);
    means not measured; `disabled_features` is a comma-separated list ("" if none);
    `timestamp_utc` is "YYYY-MM-DDTHH:MM:SSZ" supplied by the UI. The `compiler` field
    comes from loomora_build_compiler(); `greeting_matches` compares `displayed_text`
-   with the greeting of `input`. */
+   with the greeting of `input` (false when the greeting fails). Returns 0, writing
+   nothing, for an unknown `ui_variant` or `core_kind` or on internal failure. */
 size_t loomora_probe_record(const char *platform_id, int32_t ui_variant, int32_t core_kind,
                             const char *input, const char *displayed_text, int32_t displayed,
                             uint32_t display_ms, int64_t rss_kb, int32_t eol_warning_shown,
