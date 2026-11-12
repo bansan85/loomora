@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ProbeResult",
+  "description": "Record produced by the Loomora application in probe mode (one ASCII JSON line). Each UI writes it to standard output, a file or the system log depending on the family.",
+  "type": "object",
+  "required": ["schema", "platform_id", "ui_variant", "input", "message", "greeting_matches", "core", "compiler", "displayed", "display_ms", "eol_warning_shown", "disabled_features", "timestamp_utc"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": 1 },
+    "platform_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+    "ui_variant": { "enum": ["legacy", "modern"], "description": "Which UI implementation produced the record." },
+    "input": { "type": "string", "description": "Text given to the greeting function (the default \"Coucou\" in probe mode)." },
+    "message": { "type": "string", "description": "Greeting actually displayed (UTF-8)." },
+    "greeting_matches": { "type": "boolean", "description": "True if message equals \"Bonjour \" + input as computed by the backend." },
+    "core": { "enum": ["cpp", "cpp-wasm", "cpp-js"], "description": "cpp = native; cpp-wasm = WebAssembly; cpp-js = JavaScript fallback (Emscripten without WebAssembly)." },
+    "compiler": { "type": "string", "description": "Compiler that built the backend, from loomora_build_compiler(), e.g. gcc 8.3.0, clang 17.0.6, emscripten 1.39.20." },
+    "displayed": { "type": "boolean", "description": "True if the window/screen was drawn without error." },
+    "display_ms": { "type": "integer", "minimum": 0, "description": "Delay from launch to first display, in milliseconds." },
+    "peak_rss_kb": { "type": ["integer", "null"], "minimum": 0, "description": "Peak resident memory, null if not measurable." },
+    "eol_warning_shown": { "type": "boolean" },
+    "disabled_features": { "type": "array", "items": { "type": "string" }, "description": "Features disabled in this UI on this platform (empty if none)." },
+    "timestamp_utc": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" }
+  }
+}
