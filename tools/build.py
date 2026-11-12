@@ -105,7 +105,9 @@ def build_linux_modern():
     """Native Linux build of ui/modern/linux-gtk3; returns the Deliverable record."""
     require_tools(["meson", "ninja", "pkg-config", "gcc", "g++"])
     src = common.ROOT / "ui" / "modern" / "linux-gtk3"
-    build_dir = Path(os.environ.get("LOOMORA_BUILD_DIR") or "/tmp") / "loomora-linux-modern"
+    # Always under $HOME (never /tmp): the user must be able to find the build in WSL.
+    build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (Path.home() / "loomora-build"))
+    build_dir = build_root / "linux-modern"
     if (build_dir / "build.ninja").exists():
         common.run(["meson", "setup", "--reconfigure", build_dir, src])
     else:
