@@ -28,15 +28,22 @@ Implemented targets:
                  tool prefixes can be overridden with $LOOMORA_MINGW_PREFIX_X86 and
                  $LOOMORA_MINGW_PREFIX_X64. Checks every imported function of each executable
                  against tools/win2000_imports.json (tools/check_imports.py) and fails on one
-                 that is not listed. Records windows-x86-legacy.json and
-                 windows-x64-legacy.json in docs/implementation/validation/deliverables/.
+                 that is not listed. Writes one record per Windows platform that has a record in
+                 docs/implementation/validation/platforms/ (<platform-id>-legacy.json in docs/implementation/validation/deliverables/: the
+                 x86 executable for a platform whose arch is x86, the x64 one for x86_64); for an
+                 architecture without any platform record it writes windows-<arch>-legacy.json
+                 instead, which tools/validate_records.py reports as a deliverable without
+                 platform until the platform record exists.
 
 Platform id of a Linux deliverable: "linux-<os-release ID>-<VERSION_ID>-<machine>" such as
 "linux-ubuntu-24.04-x86_64", the same rule as ui/modern/linux-gtk3/probe.c uses for the probe
 record's platform_id (keep both in step).
-Platform id of a Windows Legacy deliverable: "windows-x86" or "windows-x64". One executable runs on
-every Windows of its range, so the id names the family and the architecture, not an operating
-system version (the per-system ids of the trials come from T088).
+Platform id of a Windows Legacy deliverable: the id of a Windows platform record
+(docs/implementation/validation/platforms/, for example "windows-2000-x86" or "windows-11-x64"; data-model.md wants one
+Deliverable per platform and variant). One executable runs on every Windows of its architecture,
+so several platforms share one artifact: each record names the same file with its own size and
+sha256. Only while an architecture has no platform record does the tool fall back to the generic
+ids "windows-x86" / "windows-x64".
 """
 import argparse
 import json
@@ -302,7 +309,8 @@ def build_windows_legacy_arch(platform_id, toolchain, prefix, span, build_root):
                  "-static, libstdc++ and libgcc linked statically; GCC thread model %s; imported "
                  "DLLs: %s; %d imported functions, each on the %s allowlist of "
                  "tools/win2000_imports.json (tools/check_imports.py; entries marked verify are "
-                 "unconfirmed); %s; meant for %s, not verified on any of them by this build (the "
+                 "unconfirmed, entries marked verified-on-vm were read in the export tables of "
+                 "the real system named in the file); %s; meant for %s, not verified on any of them by this build (the "
                  "run on Windows 2000 is spike S1 / T066); artifact copied to "
                  "out/windows-legacy/%s/."
                  % (toolchain, thread_model, ", ".join(dlls), function_count, floor, getthreadid,
@@ -326,10 +334,64 @@ def run_windows_legacy(args):
         build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (common.ROOT / "build"))
     else:  # WSL / Linux: always under $HOME, never /tmp or the Windows tree
         build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (Path.home() / "loomora-build"))
+    built = {}  # architecture ("x86", "x64") -> (generic record, artifact)
     for platform_id, toolchain, prefix, span in archs:
-        record, artifact = build_windows_legacy_arch(platform_id, toolchain, prefix, span,
-                                                     build_root)
+        built[platform_id.split("-", 1)[1]] = build_windows_legacy_arch(
+            platform_id, toolchain, prefix, span, build_root)
+    for record, artifact in windows_legacy_records(built, windows_platforms()):
         write_deliverable(record, artifact)
+
+
+# Architecture of a platform record (data-model.md, Platform.arch) -> architecture of the
+# executable built for it.
+PLATFORM_ARCH_TO_BUILD = {"x86": "x86", "x86_64": "x64"}
+
+
+def windows_platforms():
+    """{platform id: record} of the Windows platforms of docs/implementation/validation/platforms/."""
+    found = {}
+    if not common.docs_present():
+        return found  # no docs submodule: no platform records
+    for path in sorted((common.VALIDATION / "platforms").glob("*.json")):
+        rec = common.read_json(path)
+        if isinstance(rec, dict) and rec.get("family") == "windows" and rec.get("id"):
+            found[rec["id"]] = rec
+    return found
+
+
+def windows_legacy_records(built, platforms):
+    """The Deliverable records of the Windows Legacy build: [(record, artifact)].
+
+    One record per Windows platform that has a platform record, naming the executable of that
+    platform's architecture (same file, size and sha256 as the generic record, and the same
+    build facts); a 64-bit platform also names the i686 executable, which runs there under WOW64.
+    An architecture without any platform record gets the generic record (windows-x86 /
+    windows-x64), which the validator reports as a deliverable without platform."""
+    out = []
+    covered = set()
+    for platform_id, platform_rec in sorted(platforms.items()):
+        arch = PLATFORM_ARCH_TO_BUILD.get(platform_rec.get("arch"))
+        if arch not in built:
+            continue
+        covered.add(arch)
+        generic, artifact = built[arch]
+        record = dict(generic)
+        record["platform_id"] = platform_id
+        notes = ("Deliverable of platform %s (validation/platforms/%s.json). %s; artifact sha256 "
+                 "%s." % (platform_id, platform_id, generic["notes"], common.sha256(artifact)))
+        if arch == "x64" and "x86" in built:
+            x86_record, x86_artifact = built["x86"]
+            notes += (" The i686 executable of the same build (%s, %d bytes, sha256 %s, "
+                      "out/windows-legacy/x86/) also runs on this 64-bit system under WOW64; the "
+                      "verdict of this platform says what was run."
+                      % (x86_artifact.name, x86_record["artifact"]["size"],
+                         common.sha256(x86_artifact)))
+        record["notes"] = notes
+        out.append((record, artifact))
+    for arch, (generic, artifact) in sorted(built.items()):
+        if arch not in covered:
+            out.append((generic, artifact))
+    return out
 
 
 def write_deliverable(record, artifact):

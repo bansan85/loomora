@@ -6,10 +6,11 @@ Usage:
                               [--evidence-dir DIR] [--wsl-distro NAME] [--arch x64|x86]
                               [--dry-run]
 
-  platform-id  for example linux-ubuntu-24.04-x86_64 or windows-11-x64 (the id the UI itself
-               puts in its probe line)
+  platform-id  for example linux-ubuntu-24.04-x86_64, windows-11-x64 or windows-2000-x86 (the id
+               the UI itself puts in its probe line)
   variant      legacy | modern
   --arch       Windows only: which executable of the Windows Legacy UI runs, x64 (default) or x86
+               (windows-2000-x86 runs the x86 executable in a VirtualBox VM and accepts x86 only)
 
 For each valid vector the UI is launched in probe mode with the input override of
 contracts/ui-contract.md (`--probe-input <utf8>` on Windows, macOS and Linux; the intent extra
@@ -40,9 +41,11 @@ Which vectors are "valid", and what a UI is expected to show for them (decision,
     mixes the two cases (the vectors longer than 1,000 characters are all BMP): the rule is
     there for future vectors.
 
-Platform launchers (registry LAUNCHERS, keyed by family and variant). Implemented: linux
-modern and windows legacy. Every other family exits with status 1 and "launcher not implemented yet" until the
-tasks that add the UIs (T060-T093) add theirs: they only have to implement Launcher.run().
+Platform launchers (registry LAUNCHERS, keyed by family and variant; select_launcher picks the
+VirtualBox launcher for the guest platforms of VBOX_PLATFORMS). Implemented: linux modern, windows
+legacy on the local Windows host and windows legacy in a VirtualBox guest (windows-2000-x86).
+Every other family exits with status 1 and "launcher not implemented yet" until the tasks that
+add the UIs (T060-T093) add theirs: they only have to implement Launcher.run().
 Linux modern: the executable built by `python tools/build.py linux modern`
 ($HOME/loomora-build/linux-modern/loomora-gtk3, or out/linux-modern/ as fallback) runs on this
 machine on Linux or inside WSL on a Windows host (`wsl -d <distro>`, default Ubuntu-24.04 or
@@ -64,6 +67,14 @@ plan_vectors already skips, and an unpaired surrogate, which cannot come from va
 platform id the exe reports is windows-<system>-<architecture of the operating system>, so the
 x86 exe under WOW64 reports the same id as the x64 exe (windows-11-x64 on 64-bit Windows 11):
 --arch only selects the file and is recorded in the log and the evidence file names.
+Windows legacy in a VirtualBox guest (windows-2000-x86): see WindowsVirtualBoxLauncher. The VM
+must already be running with a logged-on desktop (the launcher never starts, stops, snapshots or
+restores it and changes no setting); credentials and names come from LOOMORA_VM_NAME,
+LOOMORA_VM_USER (default "name"), LOOMORA_VM_PASSWORD (default empty), LOOMORA_VM_DIR and
+LOOMORA_VBOXMANAGE. The runs are serial (one VM). A NUL is the only character a Windows command
+line cannot carry; tabs, newlines, control characters, quotes, backslashes, %VARIABLES%, every
+BMP and non-BMP character and the empty string reach the executable unchanged (the helper
+tools/guest/runw.c passes the exact UTF-16 command line to CreateProcessW).
 """
 import argparse
 import json
@@ -72,6 +83,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -185,6 +197,8 @@ class RunResult(object):
         self.stderr = stderr
         self.elapsed = elapsed
         self.error = error  # the launcher could not even start the UI
+        self.leftover = None  # UI processes still alive after the run (None: not measured)
+        self.guest_wall_ms = None  # process lifetime measured inside the guest (None: not measured)
 
 
 class Launcher(object):
@@ -192,6 +206,7 @@ class Launcher(object):
 
     length_unit = "codepoints"  # what the field limit counts: "codepoints" or "utf16"
     tag = ""                    # evidence file name suffix when one id has several runs
+    max_jobs = None             # runs in parallel the target allows (None: no limit)
 
     def __init__(self, args):
         self.args = args
@@ -203,6 +218,9 @@ class Launcher(object):
     def run(self, text, timeout):
         """Launch the UI in probe mode with `text` (str) as input override; return RunResult."""
         raise NotImplementedError
+
+    def close(self):
+        """Release what prepare() acquired."""
 
 
 def local_executable():
@@ -359,8 +377,352 @@ class WindowsLegacyLauncher(Launcher):
             shutil.rmtree(scratch, ignore_errors=True)
 
 
+# ---- Windows Legacy UI in a VirtualBox guest (Windows 2000) -------------------------------------
+
+# Guest platforms run through VirtualBox: platform id -> (default VM name, executable architecture).
+# The VM name can be overridden with LOOMORA_VM_NAME.
+VBOX_PLATFORMS = {"windows-2000-x86": ("Windows 2000", "x86")}
+
+GUEST_EXE = "loomora.exe"
+GUEST_HELPER = "runw.exe"
+GUEST_CMDLINE = "cmdline.txt"
+GUEST_RUN_BAT = "run.bat"
+GUEST_KILL_BAT = "kill.bat"
+GUEST_LAUNCH_BAT = "launch.bat"
+HELPER_SOURCE = "tools/guest/runw.c"
+HELPER_BUILD = "tools/guest/build_runw.sh"
+TAG_EXIT = "LOOMORA-EXIT "
+TAG_WALL = "LOOMORA-WALLMS "
+TAG_STARTED = "LOOMORA-STARTED "
+TAG_PROBE = "LOOMORA-PROBE "
+TAG_LEFTOVER = "LOOMORA-LEFTOVER "
+TAG_ERROR = "LOOMORA-RUNERROR "
+
+
+def quote_windows_arg(arg):
+    """One argument quoted for the Microsoft C runtime command-line rules (the rules probe.cpp
+    applies in reverse): always in double quotes, a quote preceded by a backslash, the
+    backslashes in front of a quote or of the closing quote doubled. "" for the empty string."""
+    out = ['"']
+    slashes = 0
+    for ch in arg:
+        if ch == "\\":
+            slashes += 1
+            continue
+        if ch == '"':
+            out.append("\\" * (2 * slashes + 1) + '"')
+        else:
+            out.append("\\" * slashes + ch)
+        slashes = 0
+    out.append("\\" * (2 * slashes) + '"')
+    return "".join(out)
+
+
+def build_command_line(exe_path, args):
+    """The command line of the guest process: the quoted program path and the quoted arguments."""
+    return " ".join([quote_windows_arg(exe_path)] + [quote_windows_arg(a) for a in args])
+
+
+def encode_command_line(command_line):
+    """cmdline.txt as runw.exe reads it: UTF-16LE with a byte order mark, no line ending."""
+    return b"\xff\xfe" + command_line.encode("utf-16-le")
+
+
+def sha256_retry(path, attempts=20):
+    """sha256 of a file another process has just written: a virus scanner may hold it for a moment."""
+    for attempt in range(attempts):
+        try:
+            return common.sha256(path)
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.5)
+
+
+class VBoxError(RuntimeError):
+    """The VM cannot be driven: not running, credentials rejected, VBoxManage missing, ..."""
+
+
+class VBoxGuest(object):
+    """Drives one running VirtualBox guest with VBoxManage guestcontrol, as a given guest user.
+    Never starts, stops, snapshots, restores or reconfigures the VM."""
+
+    def __init__(self, vboxmanage, vm, user, password):
+        self.vboxmanage = vboxmanage
+        self.vm = vm
+        self.user = user
+        self.password = password
+        self._password_file = None
+
+    @staticmethod
+    def find_vboxmanage():
+        candidates = [os.environ.get("LOOMORA_VBOXMANAGE"), shutil.which("VBoxManage"),
+                      r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe"]
+        for c in candidates:
+            if c and os.path.isfile(c):
+                return c
+        raise VBoxError("VBoxManage not found: install VirtualBox or set LOOMORA_VBOXMANAGE")
+
+    def close(self):
+        if self._password_file:
+            try:
+                os.remove(self._password_file)
+            except OSError:
+                pass
+            self._password_file = None
+
+    def _credentials(self):
+        if not self.password:
+            return ["--username", self.user, "--password", ""]
+        if self._password_file is None:  # not on the command line, where any process could read it
+            fd, self._password_file = tempfile.mkstemp(prefix="loomora-vm-")
+            with os.fdopen(fd, "w") as f:
+                f.write(self.password)
+        return ["--username", self.user, "--passwordfile", self._password_file]
+
+    def vbm(self, args, timeout):
+        """Runs VBoxManage; returns (returncode, stdout text, stderr text)."""
+        try:
+            res = subprocess.run([self.vboxmanage] + list(args), stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise VBoxError("VBoxManage %s timed out after %s s" % (args[0], timeout))
+        except OSError as e:
+            raise VBoxError("cannot start %s: %s" % (self.vboxmanage, e))
+        return (res.returncode, res.stdout.decode("utf-8", "replace"),
+                res.stderr.decode("utf-8", "replace"))
+
+    def guestcontrol(self, sub, args, timeout=60):
+        rc, out, err = self.vbm(["guestcontrol", self.vm, sub] + self._credentials() + list(args),
+                                timeout)
+        if "not able to logon" in err or "VERR_AUTHENTICATION_FAILURE" in err:
+            raise VBoxError("the guest rejected the credentials of user %r on VM %r (set "
+                            "LOOMORA_VM_USER / LOOMORA_VM_PASSWORD)" % (self.user, self.vm))
+        return rc, out, err
+
+    def state(self):
+        rc, out, err = self.vbm(["showvminfo", self.vm, "--machinereadable"], 60)
+        if rc != 0:
+            raise VBoxError("VM %r not found by VBoxManage (LOOMORA_VM_NAME): %s"
+                            % (self.vm, err.strip()[:300]))
+        info = {}
+        for line in out.splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                info[key] = value.strip().strip('"')
+        return info
+
+    def guest_property(self, name):
+        rc, out, _err = self.vbm(["guestproperty", "get", self.vm, name], 60)
+        return out.strip()[len("Value: "):] if rc == 0 and out.startswith("Value: ") else ""
+
+    def mkdir(self, guest_dir):
+        rc, _out, err = self.guestcontrol("mkdir", ["--parents", guest_dir])
+        if rc != 0:
+            raise VBoxError("cannot create %s in the guest: %s" % (guest_dir, err.strip()[:300]))
+
+    def copyto(self, host_path, guest_path):
+        rc, _out, err = self.guestcontrol("copyto", [str(host_path), guest_path])
+        if rc != 0:
+            raise VBoxError("cannot copy %s to %s in the guest: %s"
+                            % (host_path, guest_path, err.strip()[:300]))
+
+    def copyfrom(self, guest_path, host_path):
+        rc, _out, _err = self.guestcontrol("copyfrom", [guest_path, str(host_path)])
+        return rc == 0
+
+    def run_program(self, guest_exe, timeout):
+        """Runs a guest program and waits for it (the old Guest Additions pass no arguments, so
+        this is a .bat or an .exe that takes none); returns (VBoxManage status, stdout, stderr)."""
+        return self.guestcontrol("run", ["--exe", guest_exe, "--wait-stdout", "--wait-stderr",
+                                         "--timeout", str(int(timeout * 1000))], timeout + 60)
+
+
+class WindowsVirtualBoxLauncher(Launcher):
+    """The Windows Legacy UI (x86 executable) in a VirtualBox guest, for example Windows 2000.
+
+    Two limits of the guest shape the design (measured on Windows 2000 build 2195, Guest Additions
+    6.1.18): VBoxManage guestcontrol run does not pass command-line arguments to the guest
+    program, and Windows Script Host 5.1 (WshShell.Run) converts the command line to the ANSI code
+    page (every other character becomes '?') and expands %VARIABLES%, so a script cannot carry
+    the vectors. Each run therefore copies cmdline.txt (the whole command line, UTF-16LE) into
+    the guest folder and runs run.bat, which starts tools/guest/runw.c (built with MinGW-w64 on
+    first use). runw.exe reads cmdline.txt, starts loomora.exe with that exact Unicode command line
+    through CreateProcessW, waits for it, and prints the exit status, the first line of
+    loomora-probe.json (written next to the executable) and the number of loomora.exe processes
+    still alive (terminated), which come back on the standard output of the guest run. Quoting
+    follows the C runtime rules probe.cpp applies in reverse (quote_windows_arg).
+
+    Settings (environment; nothing secret is in the repository): LOOMORA_VM_NAME, LOOMORA_VM_USER
+    (default "name"), LOOMORA_VM_PASSWORD (default empty), LOOMORA_VM_DIR (default
+    "C:\\Documents and Settings\\<user>\\loomora-vectors"), LOOMORA_VBOXMANAGE. The VM must already
+    be running with the user logged on; the launcher never starts, stops or restores it."""
+
+    length_unit = "utf16"  # EM_LIMITTEXT counts UTF-16 code units
+    max_jobs = 1           # one VM, one guest session at a time
+
+    def __init__(self, args):
+        Launcher.__init__(self, args)
+        default_vm, self.arch = VBOX_PLATFORMS[args.platform_id]
+        if args.arch and args.arch != self.arch:
+            raise VBoxError("platform %s runs the %s executable only (--arch %s given)"
+                            % (args.platform_id, self.arch, args.arch))
+        self.vm = os.environ.get("LOOMORA_VM_NAME") or default_vm
+        self.user = os.environ.get("LOOMORA_VM_USER") or "name"
+        password = os.environ.get("LOOMORA_VM_PASSWORD") or ""
+        self.guest_dir = (os.environ.get("LOOMORA_VM_DIR")
+                          or "C:\\Documents and Settings\\%s\\loomora-vectors" % self.user)
+        self.exe = windows_executable(self.arch)
+        self.helper = common.ROOT / "out" / "windows-legacy" / "guest" / GUEST_HELPER
+        self.guest = VBoxGuest(VBoxGuest.find_vboxmanage(), self.vm, self.user, password)
+        # Not tempfile.mkdtemp: its owner-only ACL (Python 3.13 on Windows) makes the files that
+        # VBoxManage copyfrom creates in it unreadable to us.
+        self.scratch = os.path.join(tempfile.gettempdir(), "loomora-vbox-%d" % os.getpid())
+        os.makedirs(self.scratch)
+        self._serial = threading.Lock()  # copy of cmdline.txt and its run are one step
+
+    def close(self):
+        self.guest.close()
+        shutil.rmtree(self.scratch, ignore_errors=True)
+
+    def guest_path(self, name):
+        return self.guest_dir + "\\" + name
+
+    def _host_file(self, name, data):
+        path = os.path.join(self.scratch, name)
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+
+    def _build_helper(self):
+        distro = self.args.wsl_distro or os.environ.get("LOOMORA_WSL_DISTRO") or DEFAULT_WSL_DISTRO
+        res = subprocess.run(["wsl", "-d", distro, "--cd", str(common.ROOT), "--", "sh",
+                              HELPER_BUILD], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             timeout=600)
+        if res.returncode != 0 or not self.helper.is_file():
+            raise VBoxError("cannot build the guest helper %s in WSL (%s):\n%s"
+                            % (HELPER_SOURCE, distro, res.stdout.decode("utf-8", "replace")[-1500:]))
+
+    def _sync(self, host_file, name):
+        """Makes the guest copy of a file identical to the host file; True when it was reused."""
+        want = sha256_retry(str(host_file))
+        have = os.path.join(self.scratch, "guest-" + name)
+        if self.guest.copyfrom(self.guest_path(name), have) and sha256_retry(have) == want:
+            return True
+        self.guest.copyto(host_file, self.guest_path(name))
+        if not (self.guest.copyfrom(self.guest_path(name), have) and sha256_retry(have) == want):
+            raise VBoxError("the copy of %s in the guest differs from the host file" % name)
+        return False
+
+    def prepare(self):
+        info = self.guest.state()
+        if info.get("VMState") != "running":
+            raise VBoxError("VM %r is not running (state: %s): start it and log on first, this "
+                            "launcher never starts, stops or restores a VM"
+                            % (self.vm, info.get("VMState", "unknown")))
+        if not self.exe.is_file():
+            raise VBoxError("executable not found: %s (run 'python tools/build.py windows legacy' "
+                            "in WSL)" % self.exe)
+        source = common.ROOT / HELPER_SOURCE
+        if not self.helper.is_file() or self.helper.stat().st_mtime < source.stat().st_mtime:
+            self._build_helper()
+        self.guest.mkdir(self.guest_dir)  # also proves the credentials
+        reused_exe = self._sync(self.exe, GUEST_EXE)
+        self._sync(self.helper, GUEST_HELPER)
+        for name, option in ((GUEST_RUN_BAT, ""), (GUEST_KILL_BAT, " --kill"),
+                             (GUEST_LAUNCH_BAT, " --nowait")):
+            bat = "@echo off\r\ncd /d \"%s\"\r\n\"%s\"%s\r\n" % (
+                self.guest_dir, self.guest_path(GUEST_HELPER), option)
+            self.guest.copyto(self._host_file(name, bat.encode("ascii")), self.guest_path(name))
+        product = self.guest.guest_property("/VirtualBox/GuestInfo/OS/Product")
+        release = self.guest.guest_property("/VirtualBox/GuestInfo/OS/Release")
+        service_pack = self.guest.guest_property("/VirtualBox/GuestInfo/OS/ServicePack")
+        return ("VirtualBox VM %r (%s MB RAM), guest %s %s service pack %r, guest user %r, "
+                "folder %s, %s %s (%d bytes, sha256 %s)"
+                % (self.vm, info.get("memory", "?"), product or "?", release or "?",
+                   service_pack or "none reported", self.user, self.guest_dir,
+                   "reused" if reused_exe else "copied",
+                   self.exe.relative_to(common.ROOT).as_posix(), self.exe.stat().st_size,
+                   common.sha256(self.exe)))
+
+    def kill_leftovers(self):
+        """Terminates loomora.exe and runw.exe in the guest (after a timeout); returns the count
+        reported by the guest, or None."""
+        try:
+            _rc, out, _err = self.guest.run_program(self.guest_path(GUEST_KILL_BAT), 60)
+        except VBoxError:
+            return None
+        for line in out.splitlines():
+            if line.startswith("LOOMORA-KILLED "):
+                return int(line.split()[-1])
+        return None
+
+    def run_exe(self, exe_args, timeout):
+        """Runs loomora.exe in the guest with `exe_args` (list of str, any Unicode text) and
+        waits; returns a RunResult whose `leftover` is the number of loomora.exe processes alive
+        after the run (None: unknown) and whose stdout is the first line of loomora-probe.json."""
+        start = time.time()
+        command = build_command_line(self.guest_path(GUEST_EXE), exe_args)
+        with self._serial:
+            try:
+                self.guest.copyto(self._host_file(GUEST_CMDLINE, encode_command_line(command)),
+                                  self.guest_path(GUEST_CMDLINE))
+                rc, out, err = self.guest.run_program(self.guest_path(GUEST_RUN_BAT), timeout)
+            except VBoxError as e:
+                if "credentials" in str(e):
+                    raise
+                killed = self.kill_leftovers()
+                return RunResult(None, "", "", time.time() - start,
+                                 "%s (guest processes terminated: %s)" % (e, killed))
+            result = RunResult(None, "", err, 0)
+            probe = []
+            for line in out.splitlines():
+                if line.startswith(TAG_EXIT):
+                    result.returncode = int(line[len(TAG_EXIT):])
+                elif line.startswith(TAG_WALL):
+                    result.guest_wall_ms = int(line[len(TAG_WALL):])
+                elif line.startswith(TAG_PROBE):
+                    probe.append(line[len(TAG_PROBE):])
+                elif line.startswith(TAG_LEFTOVER):
+                    result.leftover = int(line[len(TAG_LEFTOVER):])
+                elif line.startswith(TAG_ERROR):
+                    result.error = "guest helper: " + line[len(TAG_ERROR):]
+            result.stdout = "".join(l + "\n" for l in probe)
+            if result.returncode is None and not result.error:
+                killed = self.kill_leftovers()
+                result.error = ("no exit status came back from the guest (VBoxManage status %d, "
+                                "timeout %s s, guest processes terminated: %s): %s"
+                                % (rc, timeout, killed, (out + err).strip()[:300]))
+        result.elapsed = time.time() - start
+        return result
+
+    def start_exe(self, exe_args, timeout=60, exe_name=GUEST_EXE):
+        """Starts a program of the guest folder (loomora.exe) without waiting (a window left open
+        on the desktop); returns its process id. Raises VBoxError when it does not start."""
+        command = build_command_line(self.guest_path(exe_name), exe_args)
+        with self._serial:
+            self.guest.copyto(self._host_file(GUEST_CMDLINE, encode_command_line(command)),
+                              self.guest_path(GUEST_CMDLINE))
+            rc, out, err = self.guest.run_program(self.guest_path(GUEST_LAUNCH_BAT), timeout)
+        for line in out.splitlines():
+            if line.startswith(TAG_STARTED):
+                return int(line[len(TAG_STARTED):])
+        raise VBoxError("loomora.exe did not start in the guest: %s" % (out + err).strip()[:300])
+
+    def run(self, text, timeout):
+        return self.run_exe(["--probe", "--probe-input", text], timeout)
+
+
 LAUNCHERS = {("linux", "modern"): LinuxModernLauncher,
              ("windows", "legacy"): WindowsLegacyLauncher}
+
+
+def select_launcher(family, variant, platform_id):
+    """The launcher class (or factory) for a platform: a VirtualBox guest platform of the Windows
+    Legacy UI gets the VM launcher, everything else the launcher of its family and variant."""
+    if (family, variant) == ("windows", "legacy") and platform_id in VBOX_PLATFORMS:
+        return WindowsVirtualBoxLauncher
+    return LAUNCHERS.get((family, variant))
 
 
 def family_of(platform_id):
@@ -375,6 +737,8 @@ def check_run(vector, result, platform_id, variant):
     if result.error:
         return ["launch: " + result.error], None
     problems = []
+    if result.leftover:
+        problems.append("%d loomora.exe process(es) still alive after the run" % result.leftover)
     if result.returncode != 0:
         problems.append("exit status %s, stderr: %s" % (result.returncode, result.stderr.strip()[:300]))
     line, problem = check_probe.find_probe_line(result.stdout)
@@ -445,7 +809,7 @@ def main(argv=None):
         return 2
 
     data = common.read_json(args.vectors)
-    launcher_cls = LAUNCHERS.get((family, args.variant))
+    launcher_cls = select_launcher(family, args.variant, args.platform_id)
     unit = launcher_cls.length_unit if launcher_cls else Launcher.length_unit
     runs, skipped = plan_vectors(data, unit)
     log = []
@@ -472,12 +836,18 @@ def main(argv=None):
                                    ", ".join("%s-%s" % k for k in sorted(LAUNCHERS))),
               file=sys.stderr)
         return 1
-    launcher = launcher_cls(args)
+    launcher = None
     try:
+        launcher = launcher_cls(args)
         say("launcher: " + launcher.prepare())
     except (RuntimeError, OSError, subprocess.SubprocessError) as e:
         print("run_vectors: %s" % e, file=sys.stderr)
+        if launcher is not None:
+            launcher.close()
         return 1
+    jobs = max(1, args.jobs)
+    if launcher.max_jobs:
+        jobs = min(jobs, launcher.max_jobs)
 
     started = time.time()
 
@@ -486,8 +856,14 @@ def main(argv=None):
         problems, line = check_run(vector, result, args.platform_id, args.variant)
         return vector, result, problems, line
 
-    with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
-        outcomes = list(pool.map(one, runs))  # keeps the order of vectors.json
+    try:
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            outcomes = list(pool.map(one, runs))  # keeps the order of vectors.json
+    except VBoxError as e:  # the guest stopped accepting the credentials in the middle of a run
+        print("run_vectors: %s" % e, file=sys.stderr)
+        return 1
+    finally:
+        launcher.close()
 
     passed = failed = 0
     lines = []
@@ -507,7 +883,7 @@ def main(argv=None):
         "%.1f s with %d worker(s)"
         % (len(runs), passed, failed, len(skipped),
            sum(1 for v in runs if v.kind == "truncated"), UI_MAX_CHARS,
-           "UTF-16 units" if unit == "utf16" else "chars", total, args.jobs))
+           "UTF-16 units" if unit == "utf16" else "chars", total, jobs))
     say("result: %s" % ("PASSED" if failed == 0 else "FAILED"))
 
     if args.evidence_dir:
