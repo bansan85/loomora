@@ -302,7 +302,8 @@ def build_windows_legacy_arch(platform_id, toolchain, prefix, span, build_root):
                  "-static, libstdc++ and libgcc linked statically; GCC thread model %s; imported "
                  "DLLs: %s; %d imported functions, each on the %s allowlist of "
                  "tools/win2000_imports.json (tools/check_imports.py; entries marked verify are "
-                 "unconfirmed); %s; meant for %s, not verified on any of them by this build (the "
+                 "unconfirmed, entries marked verified-on-vm were read in the export tables of "
+                 "the real system named in the file); %s; meant for %s, not verified on any of them by this build (the "
                  "run on Windows 2000 is spike S1 / T066); artifact copied to "
                  "out/windows-legacy/%s/."
                  % (toolchain, thread_model, ", ".join(dlls), function_count, floor, getthreadid,

@@ -1,0 +1,2 @@
+# Shell scripts run inside WSL: keep LF whatever core.autocrlf says on the Windows host.
+*.sh text eol=lf
