@@ -1,0 +1,6 @@
+[submodule "third_party/catch2"]
+	path = third_party/catch2
+	url = https://github.com/catchorg/Catch2.git
+[submodule "docs/implementation"]
+	path = docs/implementation
+	url = ../loomora-docs
