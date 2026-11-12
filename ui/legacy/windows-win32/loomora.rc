@@ -1,0 +1,45 @@
+// Resources of the Loomora Legacy UI. The file is UTF-8; the resource compiler stores the strings
+// as UTF-16, which every Windows version since NT reads natively.
+#pragma code_page(65001)
+
+#include <windows.h>
+
+#include "resource.h"
+
+// 1 (CREATEPROCESS_MANIFEST_RESOURCE_ID) 24 (RT_MANIFEST): see loomora.manifest. The CMake
+// build defines LOOMORA_RC_MANIFEST except where the linker embeds the manifest itself.
+#ifdef LOOMORA_RC_MANIFEST
+1 24 "loomora.manifest"
+#endif
+
+STRINGTABLE
+BEGIN
+    IDS_TITLE "Loomora"
+    IDS_DEFAULT_INPUT "Coucou"
+    IDS_GREETING_ERROR "(erreur)"
+    IDS_ABI_MISMATCH "Version ABI incompatible entre l'interface et le moteur."
+END
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION 0, 1, 0, 0
+PRODUCTVERSION 0, 1, 0, 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040C04B0" // French, Unicode
+        BEGIN
+            VALUE "FileDescription", "Loomora - interface Legacy pour Windows (2000 à 11)"
+            VALUE "FileVersion", "0.1.0.0"
+            VALUE "InternalName", "loomora"
+            VALUE "OriginalFilename", "loomora.exe"
+            VALUE "ProductName", "Loomora"
+            VALUE "ProductVersion", "0.1.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x040C, 1200
+    END
+END

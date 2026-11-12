@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Application manifest of the Loomora Legacy UI.
+     Deliberately minimal so that nothing in it requires a system newer than Windows 2000
+     (which ignores manifests altogether):
+       - no Common Controls v6 dependency (the UI only uses the built-in EDIT and STATIC classes);
+       - no <compatibility>/<supportedOS> entry: the application does not opt in to the
+         behaviour of any later Windows version;
+       - requestedExecutionLevel asInvoker: no administrator rights (UI contract, point 5), and it
+         switches off file and registry virtualization on Windows Vista and later. -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="Loomora.Legacy" version="0.1.0.0"
+                    processorArchitecture="*"/>
+  <description>Loomora Legacy UI</description>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>

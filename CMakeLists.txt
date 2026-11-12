@@ -10,6 +10,5 @@ endif()
 add_subdirectory(core)
 
 if(WIN32)
-  add_executable(loomora_win32 WIN32 ui/legacy/windows-win32/main.c)
-  target_link_libraries(loomora_win32 PRIVATE loomora user32 gdi32)
+  add_subdirectory(ui/legacy/windows-win32)
 endif()
