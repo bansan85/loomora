@@ -1,0 +1,6 @@
+# Link libstdc++ and libgcc into the executable. Off by default: the distribution's own libstdc++
+# is used, which keeps the executable small and its glibc requirement as low as the build host
+# allows. Turn it on only for a distribution that has no libstdc++.so.6 or one older than GCC 5
+# (docs/implementation/adr/0004-fallback-per-case.md). Declared in docs/implementation/validation/fallbacks.json.
+option('static_cxx_runtime', type: 'boolean', value: false,
+       description: 'Link the C++ runtime (libstdc++, libgcc) statically')
