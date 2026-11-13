@@ -5,6 +5,20 @@
 - Commit messages are written in **English**.
 - Conventional Commits prefix (`feat:`, `fix:`, `chore:`, ...), title of at most 50 characters, imperative mood.
 
+## Git workflow
+
+- `master` contains **only merge commits** (`git merge --no-ff`), except the empty root commit (`chore: start the project`), the only commit on `master` that is not a merge. Nothing is ever committed directly on `master`. The same holds for the documentation repository `../loomora-docs`.
+- Every change, whoever makes it (Claude or an agent), is committed on a dedicated branch and merged into `master` afterwards, so the content of each change can be reviewed as one merge. An agent works in a separate git worktree created outside the repository (for example `../loomora-<topic>`) on its own branch and does not merge: Claude merges it.
+- The tag `dont-move-me` points to the old `master` tip (the full history before it was rewritten to this standard); it is kept for reference and never moved.
+
+## Implementation documentation
+
+- Documentation tied to the implementation (not user documentation) lives in a git **submodule**, not in the main repository: the architecture decision records (`adr/`) and the whole validation folder (`validation/`: platforms, verdicts, deliverables, spikes, sources, fallbacks and `evidence/`). The submodule repository is `../loomora-docs`, checked out at `docs/implementation/`. Building the product never needs it; `git -c protocol.file.allow=always submodule update --init docs/implementation` fetches it when working on the implementation (the relative URL is a local sibling repository, which git refuses as a submodule transport unless `protocol.file.allow=always` is given). `tools/build.py` writes the deliverable records into `docs/implementation/validation/deliverables/` when the submodule is checked out; without it the build still works, prints a warning and writes no record (`tools/validate_records.py` then exits with status 2 and a message). The Spec Kit files stay in `specs/`.
+- The test drivers (scripts that produced evidence: `gui-driver.py`, `trial-driver.py`, `probe-series.py`, ...) are tooling, not evidence: they live in the main repository under `tools/trials/<platform-id>/` (marked `-text`, because their sha256 is recorded in the verdicts).
+- The requirements document is `docs/requirements-specification.md` (English), in the main repository.
+- Evidence is sorted: each piece goes in a subfolder dedicated to the ADR or the change it belongs to, then to the platform (`validation/evidence/<adr-or-change>/<platform-id>/`).
+- Store evidence only when it proves something new (a new feature or behaviour). Do not store again the same documents that were already validated: the tests (`run_vectors.py`, selftests, Catch2) are the proof that the behaviour is unchanged. A re-run is mentioned in the verdict notes, with its result, not stored again.
+
 ## Fallbacks
 
 - Never apply the most restrictive fallback to everyone. Apply a fallback only to the problematic case (a given platform, compiler, OS version or architecture), and use the modern version everywhere else.
