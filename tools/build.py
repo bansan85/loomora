@@ -169,7 +169,7 @@ def build_linux_modern():
         "target": capture([cxx, "-dumpmachine"]),
         "output": "native",
         "ui_language": "c",
-        "ui_toolkit": "gtk+-3.0 %s (3.10 API subset)" % gtk,
+        "ui_toolkit": "gtk+-3.0 %s (3.10 floor, newer features by macro)" % gtk,
         "ui_compiler": cc_id,
         "artifact": {"name": artifact.name, "size": artifact.stat().st_size},
         "disabled_features": [],

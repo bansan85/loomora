@@ -129,7 +129,7 @@ static gboolean on_probe_timeout(gpointer data) {
     size_t needed;
     size_t written;
     uint8_t *buf;
-    const char *input = gtk_entry_get_text(ctx->entry);
+    const char *input = loomora_entry_get_text(ctx->entry);
     const char *message = gtk_label_get_text(ctx->label);
 
     /* First call with no room measures, second one fills the buffer (the line is ASCII). */
@@ -156,7 +156,7 @@ static gboolean on_probe_timeout(gpointer data) {
     g_date_time_unref(now);
     g_free(platform_id);
     g_free(ctx);
-    gtk_main_quit();
+    loomora_main_loop_quit();
     return G_SOURCE_REMOVE;
 }
 

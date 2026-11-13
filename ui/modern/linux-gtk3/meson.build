@@ -20,15 +20,29 @@ project(
   meson_version: '>=0.53.0',
 )
 
-# Floor of the UI: the compiler flags every GTK/GDK symbol newer than 3.10. This is a check on the
-# source, not a limit on the executable: the object code is byte for byte the same without these
-# two flags (ADR 0004). A newer GTK API would go behind a build option, not behind these flags.
-gtk_floor = [
-  '-DGDK_VERSION_MIN_REQUIRED=GDK_VERSION_3_10',
-  '-DGDK_VERSION_MAX_ALLOWED=GDK_VERSION_3_10',
-]
-
-gtk_dep = dependency('gtk+-3.0', version: '>=3.10')
+# GTK version policy (CLAUDE.md, docs/implementation/adr/0005-gtk-version-policy.md). The UI always compiles with
+# GDK_VERSION_MIN_REQUIRED at 3.10. -Dgtk_api picks GTK 3 (default) or GTK 4; -Dgtk_floor=true
+# builds the 3.10 path only and makes the compiler reject every GTK/GDK symbol newer than 3.10
+# (the floor build). Newer features are enabled by the macros of gtk_compat.h, from the version of
+# the headers, and declared in docs/implementation/validation/fallbacks.json.
+gtk_api = get_option('gtk_api')
+gtk_floor = get_option('gtk_floor')
+if gtk_api == '4' and gtk_floor
+  error('gtk_floor proves the GTK 3.10 path: it cannot be combined with gtk_api=4')
+endif
+gtk_args = []
+if gtk_api == '3'
+  gtk_args += ['-DGDK_VERSION_MIN_REQUIRED=GDK_VERSION_3_10']
+  if gtk_floor
+    gtk_args += [
+      '-DGDK_VERSION_MAX_ALLOWED=GDK_VERSION_3_10',
+      '-Werror=deprecated-declarations',
+    ]
+  endif
+  gtk_dep = dependency('gtk+-3.0', version: '>=3.10')
+else
+  gtk_dep = dependency('gtk4', version: '>=4.0')
+endif
 
 core_include = include_directories('../../../core/include')
 core_src = [
@@ -50,11 +64,11 @@ libloomora = static_library(
 
 executable(
   'loomora-gtk3',
-  ['main.c', 'probe.c'],
+  ['main.c', 'probe.c', 'gtk_compat.c'],
   include_directories: core_include,
   dependencies: gtk_dep,
   link_with: libloomora,
-  c_args: gtk_floor,
+  c_args: gtk_args,
   link_args: get_option('static_cxx_runtime') ? ['-static-libstdc++', '-static-libgcc'] : [],
   install: true,
 )

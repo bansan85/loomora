@@ -4,3 +4,15 @@
 # (docs/implementation/adr/0004-fallback-per-case.md). Declared in docs/implementation/validation/fallbacks.json.
 option('static_cxx_runtime', type: 'boolean', value: false,
        description: 'Link the C++ runtime (libstdc++, libgcc) statically')
+
+# ---- GTK version policy (docs/implementation/adr/0005-gtk-version-policy.md) ----
+# Which GTK the UI is built against. 3 (default) is the GTK 3 UI of all the trials; 4 builds the
+# GTK 4 branch of main.c (LOOMORA_GTK4), not used for any validation record yet.
+option('gtk_api', type: 'combo', choices: ['3', '4'], value: '3',
+       description: 'GTK major version to build against')
+# Floor build: GTK 3 only, GDK_VERSION_MAX_ALLOWED pinned to 3.10 and
+# -Werror=deprecated-declarations, so that any symbol newer than GTK 3.10 fails the build and no
+# version-gated feature is compiled. It proves the 3.10 path; it is not the default.
+option('gtk_floor', type: 'boolean', value: false,
+       description: 'Build the GTK 3.10 path only and fail on any newer GTK/GDK symbol')
+# ---- end of the GTK version policy options ----

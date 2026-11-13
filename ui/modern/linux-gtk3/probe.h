@@ -3,7 +3,7 @@
 #ifndef LOOMORA_GTK3_PROBE_H
 #define LOOMORA_GTK3_PROBE_H
 
-#include <gtk/gtk.h>
+#include "gtk_compat.h"
 
 typedef struct {
     gboolean enabled;   /* --probe was given */
