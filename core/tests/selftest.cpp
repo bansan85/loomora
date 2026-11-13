@@ -3,22 +3,37 @@
 // The greet vectors come from vectors.inc, generated from core/tests/vectors.json.
 // (loomora_is_eol and loomora_probe_record are covered here once they are implemented.)
 //
-// Output goes through std::fputs of <cstdio>, not <iostream>: the iostream initialisation of
-// libstdc++ pulls the thread-support code of libgcc (gthr-win32-cond.o) into a MinGW-w64 build,
-// which imports Vista-only KERNEL32 functions and keeps the program from loading on Windows 2000
-// (spike S1, docs/implementation/adr/0002). Keep this file free of <iostream>, <thread>, <mutex>,
+// Output goes through <iostream>, except where LOOMORA_AVOID_IOSTREAM is defined: the MinGW-w64
+// toolchains of the Windows floors older than Vista (cmake/toolchains/mingw-w64-win*.cmake) define
+// it, because the iostream initialisation of a static libstdc++ pulls the thread-support code of
+// libgcc (gthr-win32-cond.o) into the program, which imports Vista-only KERNEL32 functions and
+// keeps it from loading on Windows 2000 (spike S1, docs/implementation/adr/0002 and 0004). There the output uses
+// std::fputs of <cstdio>, and this file must stay free of <iostream>, <thread>, <mutex>,
 // <condition_variable>, <locale> and std::call_once. std::printf is avoided too: with MinGW-w64
 // it becomes __mingw_vfprintf, which locks the stream through msvcrt's _lock / _unlock, two
 // internal exports that tools/win2000_imports.json does not list.
 #include <cstdint>
-#include <cstdio>
 #include <string>
 #include <vector>
+
+#ifdef LOOMORA_AVOID_IOSTREAM
+#include <cstdio>
+#else
+#include <iostream>
+#endif
 
 #include "../include/loomora.h"
 #include "vectors.inc"
 
 namespace {
+
+void print(const std::string &line) {
+#ifdef LOOMORA_AVOID_IOSTREAM
+    std::fputs(line.c_str(), stdout);
+#else
+    std::cout << line;
+#endif
+}
 
 class Checker {
   public:

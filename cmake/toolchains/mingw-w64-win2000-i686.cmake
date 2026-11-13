@@ -16,6 +16,12 @@
 #
 # Windows 2000 is NT 5.0: _WIN32_WINNT=0x0500 limits the Windows headers to the APIs of 2000, and
 # -static (with the GCC runtime libraries) leaves no runtime DLL to deploy next to the program.
+#
+# This is the one toolchain that serves Windows 2000, so it is the one that sets the switches of
+# the problems only Windows 2000 has (docs/implementation/adr/0004-fallback-per-case.md):
+#   LOOMORA_TARGET_WIN2000  (CMake variable) link the GetThreadId shim, docs/implementation/adr/0002;
+#   LOOMORA_AVOID_IOSTREAM  (compile definition) selftest prints with <cstdio>, not <iostream>,
+#                           whose condition variables are Vista and later.
 
 if(NOT DEFINED LOOMORA_MINGW_PREFIX)
   if(DEFINED ENV{LOOMORA_MINGW_PREFIX})
@@ -34,9 +40,12 @@ set(CMAKE_C_COMPILER "${LOOMORA_MINGW_PREFIX}gcc")
 set(CMAKE_CXX_COMPILER "${LOOMORA_MINGW_PREFIX}g++")
 set(CMAKE_RC_COMPILER "${LOOMORA_MINGW_PREFIX}windres")
 
-set(LOOMORA_WIN2000_DEFINES "-D_WIN32_WINNT=0x0500 -DWINVER=0x0500")
-set(CMAKE_C_FLAGS_INIT "${LOOMORA_WIN2000_DEFINES} -static-libgcc")
-set(CMAKE_CXX_FLAGS_INIT "${LOOMORA_WIN2000_DEFINES} -static-libgcc -static-libstdc++")
+set(LOOMORA_TARGET_WIN2000 ON)
+set(LOOMORA_WINNT 0x0500)
+set(LOOMORA_WINNT_DEFINES "-D_WIN32_WINNT=${LOOMORA_WINNT} -DWINVER=${LOOMORA_WINNT}")
+set(CMAKE_C_FLAGS_INIT "${LOOMORA_WINNT_DEFINES} -static-libgcc")
+set(CMAKE_CXX_FLAGS_INIT
+    "${LOOMORA_WINNT_DEFINES} -DLOOMORA_AVOID_IOSTREAM=1 -static-libgcc -static-libstdc++")
 set(CMAKE_EXE_LINKER_FLAGS_INIT "-static -static-libgcc -static-libstdc++")
 set(CMAKE_SHARED_LINKER_FLAGS_INIT "-static-libgcc -static-libstdc++")
 

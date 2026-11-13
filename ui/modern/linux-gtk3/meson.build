@@ -4,8 +4,9 @@
 #   ninja -C <builddir>        ->  <builddir>/loomora-gtk3
 #
 # The C++11 backend of core/ is compiled here into the static library libloomora.a (same sources
-# as core/CMakeLists.txt) and linked with the C++ runtime statically (ADR 0001, rule 4), so the
-# executable depends only on the shared GTK and system libraries of the distribution.
+# as core/CMakeLists.txt). The C++ runtime is the distribution's own (libstdc++.so.6 comes with
+# every distribution that has GTK 3); -Dstatic_cxx_runtime=true links it statically for one that
+# does not (ADR 0001 rule 4, ADR 0004).
 project(
   'loomora-gtk3',
   ['c', 'cpp'],
@@ -19,7 +20,9 @@ project(
   meson_version: '>=0.53.0',
 )
 
-# Floor of the UI: the compiler flags every GTK/GDK symbol newer than 3.10.
+# Floor of the UI: the compiler flags every GTK/GDK symbol newer than 3.10. This is a check on the
+# source, not a limit on the executable: the object code is byte for byte the same without these
+# two flags (ADR 0004). A newer GTK API would go behind a build option, not behind these flags.
 gtk_floor = [
   '-DGDK_VERSION_MIN_REQUIRED=GDK_VERSION_3_10',
   '-DGDK_VERSION_MAX_ALLOWED=GDK_VERSION_3_10',
@@ -52,6 +55,6 @@ executable(
   dependencies: gtk_dep,
   link_with: libloomora,
   c_args: gtk_floor,
-  link_args: ['-static-libstdc++', '-static-libgcc'],
+  link_args: get_option('static_cxx_runtime') ? ['-static-libstdc++', '-static-libgcc'] : [],
   install: true,
 )
