@@ -1,16 +1,38 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <!-- Application manifest of the Loomora Legacy UI.
-     Deliberately minimal so that nothing in it requires a system newer than Windows 2000
-     (which ignores manifests altogether):
-       - no Common Controls v6 dependency (the UI only uses the built-in EDIT and STATIC classes);
-       - no <compatibility>/<supportedOS> entry: the application does not opt in to the
-         behaviour of any later Windows version;
+     Windows 2000 ignores manifests altogether, and Windows XP and later read what they know and
+     skip what they do not, so every entry here applies only to the systems that understand it
+     (docs/implementation/adr/0004-fallback-per-case.md):
+       - Common Controls v6 (visual styles): the built-in EDIT and STATIC classes are drawn with the
+         theme of the system on Windows XP and later; Windows 2000 keeps the classic look, which
+         is its only look. No call to InitCommonControls is needed for these two classes;
+       - <supportedOS>: the application states the Windows versions it was written for, so that
+         Windows Vista to 11 do not apply the compatibility settings meant for old programs;
+         the Windows version the program reports does not depend on it (sysinfo.cpp asks
+         ntdll!RtlGetVersion);
        - requestedExecutionLevel asInvoker: no administrator rights (UI contract, point 5), and it
-         switches off file and registry virtualization on Windows Vista and later. -->
+         switches off file and registry virtualization on Windows Vista and later;
+       - not here: DPI awareness, which dynfeatures.cpp requests at run time where the system has
+         it, and the UTF-8 code page, because the program only calls the UTF-16 ("W") functions. -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <assemblyIdentity type="win32" name="Loomora.Legacy" version="0.1.0.0"
                     processorArchitecture="*"/>
   <description>Loomora Legacy UI</description>
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0"
+                        processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>
+    </dependentAssembly>
+  </dependency>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{e2011457-1546-43c5-a5fe-008deee3d3f0}"/> <!-- Windows Vista -->
+      <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}"/> <!-- Windows 7 -->
+      <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}"/> <!-- Windows 8 -->
+      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}"/> <!-- Windows 8.1 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/> <!-- Windows 10 and 11 -->
+    </application>
+  </compatibility>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>

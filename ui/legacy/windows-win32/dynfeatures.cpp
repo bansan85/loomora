@@ -2,6 +2,8 @@
 
 #include <psapi.h>
 
+#include <stddef.h>
+
 #include "dynload.h"
 
 namespace dynfeatures {
@@ -51,12 +53,17 @@ void EnableDpiAwareness() {
     }
 }
 
-// SPI_GETHIGHCONTRAST through SystemParametersInfoW (looked up at run time like the rest). When a
-// high contrast scheme is on, the system colours are left alone: no dark theme of our own.
+typedef BOOL(WINAPI *ParametersFn)(UINT, UINT, PVOID, UINT);
+
+// SystemParametersInfoW, looked up at run time like the rest.
+ParametersFn Parameters() {
+    return dynload::Resolve<ParametersFn>(GetModuleHandleW(L"user32.dll"), "SystemParametersInfoW");
+}
+
+// SPI_GETHIGHCONTRAST. When a high contrast scheme is on, the system colours are left alone: no
+// dark theme of our own.
 bool HighContrastOn() {
-    typedef BOOL(WINAPI * ParametersFn)(UINT, UINT, PVOID, UINT);
-    const ParametersFn parameters =
-        dynload::Resolve<ParametersFn>(GetModuleHandleW(L"user32.dll"), "SystemParametersInfoW");
+    const ParametersFn parameters = Parameters();
     if (parameters == NULL) {
         Disable(LOOMORA_FEATURE_HIGH_CONTRAST_QUERY);
         return false;
@@ -101,17 +108,50 @@ bool ReadAppsUseLightTheme(bool *light) {
     return found;
 }
 
+// The font the system uses for message boxes and dialogs (SPI_GETNONCLIENTMETRICS, lfMessageFont:
+// Segoe UI 9 pt on Windows Vista and later, Tahoma or MS Sans Serif 8 pt before). The system
+// already gives it at its own DPI, which this process (DPI aware) shares, so it is not scaled
+// again. NONCLIENTMETRICSW grew by one int (iPaddedBorderWidth) in Windows Vista and the call fails
+// when cbSize is not the size the system knows: the Vista size is tried first, then the older one;
+// lfMessageFont comes before that field and sits at the same offset in both.
+HFONT CreateMessageFont() {
+    const ParametersFn parameters = Parameters();
+    if (parameters == NULL)
+        return NULL;
+    const UINT olderSize =
+        static_cast<UINT>(offsetof(NONCLIENTMETRICSW, lfMessageFont) + sizeof(LOGFONTW));
+    struct {
+        NONCLIENTMETRICSW metrics;
+        int paddedBorderWidth; // room for the Vista field whatever the SDK level of the headers
+    } buffer = {};
+    const UINT sizes[2] = {static_cast<UINT>(olderSize + sizeof(int)), olderSize};
+    for (int i = 0; i < 2; ++i) {
+        buffer = {};
+        buffer.metrics.cbSize = sizes[i];
+        if (parameters(SPI_GETNONCLIENTMETRICS, sizes[i], &buffer.metrics, 0) != 0)
+            return CreateFontIndirectW(&buffer.metrics.lfMessageFont);
+    }
+    return NULL;
+}
+
 void CreateFontAndBrushes() {
-    const HGDIOBJ stock = GetStockObject(DEFAULT_GUI_FONT);
-    g_font = static_cast<HFONT>(stock);
-    LOGFONTW description = LOGFONTW();
-    if (g_dpi != 96 && GetObjectW(stock, sizeof(description), &description) > 0) {
-        description.lfHeight = MulDiv(description.lfHeight, g_dpi, 96);
-        description.lfWidth = 0;
-        const HFONT scaled = CreateFontIndirectW(&description);
-        if (scaled != NULL) {
-            g_font = scaled;
-            g_ownFont = true;
+    g_font = CreateMessageFont();
+    if (g_font != NULL) {
+        g_ownFont = true;
+    } else {
+        // No message font: the stock GUI font, which the system does not scale to the DPI.
+        Disable(LOOMORA_FEATURE_MESSAGE_FONT);
+        const HGDIOBJ stock = GetStockObject(DEFAULT_GUI_FONT);
+        g_font = static_cast<HFONT>(stock);
+        LOGFONTW description = LOGFONTW();
+        if (g_dpi != 96 && GetObjectW(stock, sizeof(description), &description) > 0) {
+            description.lfHeight = MulDiv(description.lfHeight, g_dpi, 96);
+            description.lfWidth = 0;
+            const HFONT scaled = CreateFontIndirectW(&description);
+            if (scaled != NULL) {
+                g_font = scaled;
+                g_ownFont = true;
+            }
         }
     }
     if (g_dark) {

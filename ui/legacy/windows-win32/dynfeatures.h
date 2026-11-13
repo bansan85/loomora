@@ -1,7 +1,7 @@
-// Features newer than Windows 2000 (dark mode, DPI awareness, high contrast query, process memory
-// measurement). Every one of them is looked up at run time (GetProcAddress / LoadLibrary) and
-// skipped when the system does not have it; a skipped feature is added to the list of disabled
-// features, which probe mode copies into the probe record. Each id below is declared in
+// Features newer than Windows 2000 (dark mode, DPI awareness, high contrast query, message font,
+// process memory measurement). Every one of them is looked up at run time (GetProcAddress /
+// LoadLibrary) and skipped when the system does not have it; a skipped feature is added to the list
+// of disabled features, which probe mode copies into the probe record. Each id below is declared in
 // docs/implementation/validation/fallbacks.json under the macro that names it.
 #ifndef LOOMORA_WIN32_DYNFEATURES_H
 #define LOOMORA_WIN32_DYNFEATURES_H
@@ -14,6 +14,7 @@
 #define LOOMORA_FEATURE_DARK_MODE "dark-mode"
 #define LOOMORA_FEATURE_DPI_AWARENESS "dpi-awareness"
 #define LOOMORA_FEATURE_HIGH_CONTRAST_QUERY "high-contrast-query"
+#define LOOMORA_FEATURE_MESSAGE_FONT "message-font"
 #define LOOMORA_FEATURE_PEAK_MEMORY "peak-memory"
 
 namespace dynfeatures {
@@ -28,7 +29,8 @@ void Shutdown();
 // Pixels for a length given at 96 DPI.
 int Scale(int pixels);
 
-// The font of the controls (the system GUI font, scaled to the DPI of the system).
+// The font of the controls: the message font of the system (Segoe UI 9 pt since Vista), or the
+// stock GUI font scaled to the DPI of the system when the message font cannot be read.
 HFONT Font();
 
 // Brush for the class background of the main window (the system face colour, or the dark one).
