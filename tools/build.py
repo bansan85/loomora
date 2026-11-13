@@ -97,6 +97,15 @@ def require_tools(names):
         sys.exit("missing tool(s) on this machine: %s" % ", ".join(missing))
 
 
+def fallbacks_of(platform_id):
+    """Ids of docs/implementation/validation/fallbacks.json whose platform_ids name this platform: the fallbacks that
+    the build of that platform takes (docs/implementation/adr/0004-fallback-per-case.md)."""
+    if not common.docs_present():
+        return []  # no docs submodule: no fallbacks list (see write_deliverable)
+    data = common.read_json(common.VALIDATION / "fallbacks.json")
+    return [rec["id"] for rec in data if platform_id in rec.get("platform_ids", [])]
+
+
 def id_part(text):
     """One platform-id component: lowercase, anything outside [a-z0-9._-] becomes '-'."""
     return re.sub(r"[^a-z0-9._-]", "-", text.lower())
@@ -151,8 +160,9 @@ def build_linux_modern():
     cxx = cpp["exelist"][0]
     gtk = capture(["pkg-config", "--modversion", "gtk+-3.0"])
 
+    platform_id = linux_platform_id()
     record = {
-        "platform_id": linux_platform_id(),
+        "platform_id": platform_id,
         "ui_variant": "modern",
         "cpp_std": "c++11",
         "compiler": cpp_id,
@@ -163,10 +173,12 @@ def build_linux_modern():
         "ui_compiler": cc_id,
         "artifact": {"name": artifact.name, "size": artifact.stat().st_size},
         "disabled_features": [],
-        "fallbacks": [],
+        "fallbacks": fallbacks_of(platform_id),
         "notes": "meson + ninja (ui/modern/linux-gtk3/meson.build); static libloomora.a built "
-                 "from core/src with -std=c++11; libstdc++ and libgcc linked statically, GTK 3 "
-                 "and the system libraries dynamically; artifact copied to out/linux-modern/.",
+                 "from core/src with -std=c++11; libstdc++, libgcc, GTK 3 and the system "
+                 "libraries linked dynamically (the meson option static_cxx_runtime links the "
+                 "C++ runtime statically for a distribution that lacks it, ADR 0004); artifact "
+                 "copied to out/linux-modern/.",
     }
     return record, artifact
 
@@ -250,6 +262,10 @@ def imported_functions(objdump, exe):
     return check_imports.parse_objdump(capture([objdump, "-p", exe]))[1]
 
 
+# _WIN32_WINNT of each executable, set by its toolchain file: the API level of its floor.
+WINNT_LEVEL = {"x86": "0x0500", "x64": "0x0502"}
+
+
 def build_windows_legacy_arch(platform_id, toolchain, prefix, span, build_root):
     """Cross-builds loomora.exe for one architecture; returns (record, artifact)."""
     arch = platform_id.split("-", 1)[1]
@@ -298,12 +314,13 @@ def build_windows_legacy_arch(platform_id, toolchain, prefix, span, build_root):
         "target": capture([cxx, "-dumpmachine"]),
         "output": "native",
         "ui_language": "c++",
-        "ui_toolkit": "Win32 API (user32, gdi32), EDIT + STATIC controls, _WIN32_WINNT=0x0500, "
-                      "no MFC, no common controls",
+        "ui_toolkit": "Win32 API (user32, gdi32), EDIT + STATIC controls, _WIN32_WINNT=%s, "
+                      "no MFC, Common Controls 6 visual styles through the manifest (ignored "
+                      "before Windows XP)" % WINNT_LEVEL[arch],
         "ui_compiler": "mingw-w64-gcc-%s" % version,
         "artifact": {"name": artifact.name, "size": artifact.stat().st_size},
         "disabled_features": [],
-        "fallbacks": [],
+        "fallbacks": [],  # filled per platform by windows_legacy_records
         "notes": "cmake + ninja (ui/legacy/windows-win32/CMakeLists.txt) with "
                  "cmake/toolchains/%s; static libloomora.a built from core/src with -std=c++11; "
                  "-static, libstdc++ and libgcc linked statically; GCC thread model %s; imported "
@@ -377,6 +394,7 @@ def windows_legacy_records(built, platforms):
         generic, artifact = built[arch]
         record = dict(generic)
         record["platform_id"] = platform_id
+        record["fallbacks"] = fallbacks_of(platform_id)
         notes = ("Deliverable of platform %s (validation/platforms/%s.json). %s; artifact sha256 "
                  "%s." % (platform_id, platform_id, generic["notes"], common.sha256(artifact)))
         if arch == "x64" and "x86" in built:
