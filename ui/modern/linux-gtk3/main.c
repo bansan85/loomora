@@ -77,6 +77,7 @@ int main(int argc, char **argv) {
     GtkWidget *box;
     GtkWidget *entry;
     GtkWidget *greeting;
+    GtkWidget *scroller;
     PangoAttrList *attrs;
 
     probe_start();
@@ -127,7 +128,14 @@ int main(int argc, char **argv) {
     pango_attr_list_insert(attrs, pango_attr_scale_new(1.8)); /* colours come from the theme */
     gtk_label_set_attributes(GTK_LABEL(greeting), attrs);
     pango_attr_list_unref(attrs);
-    gtk_box_pack_start(GTK_BOX(box), greeting, TRUE, TRUE, 0);
+    /* A greeting of up to 1,000 characters wraps to many lines: without a scrolled window the
+       label overflows the window, is clipped (blank at 250 characters) and the window
+       grows, instead of scrolling. */
+    scroller = gtk_scrolled_window_new(NULL, NULL);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER,
+                                   GTK_POLICY_AUTOMATIC);
+    gtk_container_add(GTK_CONTAINER(scroller), greeting);
+    gtk_box_pack_start(GTK_BOX(box), scroller, TRUE, TRUE, 0);
 
     g_signal_connect(entry, "changed", G_CALLBACK(on_entry_changed), greeting);
     show_greeting(GTK_ENTRY(entry), GTK_LABEL(greeting));
