@@ -20,6 +20,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_subdirectory(ui/legacy/linux-xlib)
 endif()
 
+# Android Legacy UI (JNI glue + backend): only with cmake/toolchains/android-ndk-r15c.cmake.
+if(LOOMORA_TARGET_ANDROID)
+  add_subdirectory(ui/legacy/android-views)
+endif()
+
 if(LOOMORA_BUILD_LINUX_MODERN)
   add_subdirectory(ui/modern/linux-gtk3)
 endif()
