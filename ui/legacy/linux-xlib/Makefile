@@ -6,7 +6,10 @@
 #
 # The C++11 backend of core/ is compiled here into the static library libloomora.a (same sources
 # as core/CMakeLists.txt) and linked into the executable. The only library linked dynamically
-# besides libc and libm is libX11 (-lX11); the C++ runtime (libstdc++, libgcc) is linked
+# besides libc (and libdl, where dlopen lives before glibc 2.34) is libX11 (-lX11): libXft and
+# fontconfig, which draw the text, are opened at run time with dlopen (xftdl.c), so neither their
+# development files nor the libraries themselves are needed to build or to start the program.
+# The C++ runtime (libstdc++, libgcc) is linked
 # statically (STATIC_CXX=1, the default: the backend is C++11 and the floor of this UI is a
 # distribution with an old or no libstdc++; STATIC_CXX=0 uses the distribution's own, see the
 # fallback "static-cxx-runtime-xlib" of validation/fallbacks.json).
@@ -28,6 +31,7 @@ STATIC_CXX  ?= 1
 BUILD       ?= $(HOME)/loomora-build/linux-legacy-$(ARCH)
 X11_CFLAGS  ?=
 X11_LIBS    ?= -lX11
+DL_LIBS     ?= -ldl
 
 CORE        := ../../../core
 ifeq ($(ARCH),i686)
@@ -51,13 +55,13 @@ endif
 
 CORE_SRC    := c_api eol greet probe utf8 version
 CORE_OBJ    := $(addprefix $(BUILD)/core/,$(addsuffix .o,$(CORE_SRC)))
-UI_OBJ      := $(BUILD)/main.o $(BUILD)/probe.o
+UI_OBJ      := $(BUILD)/main.o $(BUILD)/probe.o $(BUILD)/xftdl.o $(BUILD)/keys.o
 EXE         := $(BUILD)/loomora-xlib
 
 all: $(EXE)
 
 $(EXE): $(UI_OBJ) $(BUILD)/libloomora.a
-	$(CXX) -o $@ $(UI_OBJ) $(BUILD)/libloomora.a $(LDFLAGS_ALL) $(LDFLAGS) $(X11_LIBS)
+	$(CXX) -o $@ $(UI_OBJ) $(BUILD)/libloomora.a $(LDFLAGS_ALL) $(LDFLAGS) $(X11_LIBS) $(DL_LIBS)
 
 $(BUILD)/libloomora.a: $(CORE_OBJ)
 	rm -f $@
@@ -66,7 +70,7 @@ $(BUILD)/libloomora.a: $(CORE_OBJ)
 $(BUILD)/core/%.o: $(CORE)/src/%.cpp | $(BUILD)/core
 	$(CXX) $(CORE_CXXFLAGS) -c -o $@ $<
 
-$(BUILD)/%.o: %.c probe.h $(CORE)/include/loomora.h | $(BUILD)
+$(BUILD)/%.o: %.c probe.h xftdl.h keys.h $(CORE)/include/loomora.h | $(BUILD)
 	$(CC) $(UI_CFLAGS) -c -o $@ $<
 
 $(BUILD) $(BUILD)/core:
