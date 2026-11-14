@@ -4,7 +4,7 @@
 Usage:
   python tools/run_vectors.py <platform-id> <variant> [--vectors FILE] [--jobs N] [--timeout S]
                               [--evidence-dir DIR] [--wsl-distro NAME] [--arch x64|x86]
-                              [--dry-run]
+                              [--exe PATH] [--dry-run]
 
   platform-id  for example linux-ubuntu-24.04-x86_64, windows-11-x64 or windows-2000-x86 (the id
                the UI itself puts in its probe line)
@@ -42,8 +42,9 @@ Which vectors are "valid", and what a UI is expected to show for them (decision,
     there for future vectors.
 
 Platform launchers (registry LAUNCHERS, keyed by family and variant; select_launcher picks the
-VirtualBox launcher for the guest platforms of VBOX_PLATFORMS). Implemented: linux modern, windows
-legacy on the local Windows host and windows legacy in a VirtualBox guest (windows-2000-x86).
+VirtualBox launcher for the guest platforms of VBOX_PLATFORMS). Implemented: linux modern, linux
+legacy (the Xlib UI, same way; executable from $HOME/loomora-build/linux-legacy-x86_64, then out/,
+or --exe), windows legacy on the local Windows host and windows legacy in a VirtualBox guest (windows-2000-x86).
 Every other family exits with status 1 and "launcher not implemented yet" until the tasks that
 add the UIs (T060-T093) add theirs: they only have to implement Launcher.run().
 Linux modern: the executable built by `python tools/build.py linux modern`
@@ -223,11 +224,23 @@ class Launcher(object):
         """Release what prepare() acquired."""
 
 
+# Which Linux UI the local (Linux side) functions run: set from the command line by main(), also
+# for the --inner-* calls that the Windows launcher makes inside WSL.
+LINUX_UI = {"variant": "modern", "exe": None}
+
+
 def local_executable():
-    """The Linux Modern executable: the build tree under $HOME first, then out/."""
+    """The Linux UI executable: --exe when given, else the build tree under $HOME, then out/."""
+    if LINUX_UI["exe"]:
+        path = Path(LINUX_UI["exe"])
+        return path if path.is_file() else None
     build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (Path.home() / "loomora-build"))
-    candidates = [build_root / "linux-modern" / "loomora-gtk3",
-                  common.ROOT / "out" / "linux-modern" / "loomora-gtk3"]
+    if LINUX_UI["variant"] == "legacy":
+        candidates = [build_root / "linux-legacy-x86_64" / "loomora-xlib",
+                      common.ROOT / "out" / "linux-legacy" / "x86_64" / "loomora-xlib"]
+    else:
+        candidates = [build_root / "linux-modern" / "loomora-gtk3",
+                      common.ROOT / "out" / "linux-modern" / "loomora-gtk3"]
     for path in candidates:
         if path.is_file():
             return path
@@ -238,7 +251,8 @@ def run_ui(data, timeout):
     """Start the Linux Modern UI with `data` (bytes) as input override; return a reply dict."""
     exe = local_executable()
     if exe is None:
-        return {"error": "executable not found: build it with 'python tools/build.py linux modern'"}
+        return {"error": "executable not found: build it with 'python tools/build.py linux %s'"
+                         % LINUX_UI["variant"]}
     start = time.time()
     try:
         res = subprocess.run([str(exe), "--probe", "--probe-input", data],
@@ -262,14 +276,20 @@ def inner_run(hex_text, timeout):
 
 
 class LinuxModernLauncher(Launcher):
+    """Runs the Linux UI of LINUX_UI["variant"]: the GTK one (modern) or the Xlib one (legacy, see
+    LinuxLegacyLauncher). The text is passed to the UI process exactly as on the Windows side."""
+
     def __init__(self, args):
         Launcher.__init__(self, args)
         self.distro = args.wsl_distro or os.environ.get("LOOMORA_WSL_DISTRO") or DEFAULT_WSL_DISTRO
         self.on_windows = sys.platform == "win32"
 
     def _wsl_script(self, *script_args):
+        inner = ["--inner-variant", LINUX_UI["variant"]]
+        if LINUX_UI["exe"]:
+            inner += ["--exe", LINUX_UI["exe"]]
         return ["wsl", "-d", self.distro, "--cd", str(common.ROOT), "--", "python3",
-                "tools/run_vectors.py"] + list(script_args)
+                "tools/run_vectors.py"] + inner + list(script_args)
 
     def prepare(self):
         if self.on_windows:
@@ -278,13 +298,15 @@ class LinuxModernLauncher(Launcher):
             exe = res.stdout.decode("utf-8", "replace").strip().splitlines()
             if res.returncode != 0 or not exe or not exe[-1].startswith("/"):
                 raise RuntimeError(
-                    "cannot locate the Linux Modern executable in WSL (%s): run "
-                    "'python tools/build.py linux modern'\n%s"
-                    % (self.distro, res.stderr.decode("utf-8", "replace").strip()))
+                    "cannot locate the Linux %s executable in WSL (%s): run "
+                    "'python tools/build.py linux %s'\n%s"
+                    % (LINUX_UI["variant"], self.distro, LINUX_UI["variant"],
+                       res.stderr.decode("utf-8", "replace").strip()))
             return "WSL %s: %s" % (self.distro, exe[-1])
         exe = local_executable()
         if exe is None:
-            raise RuntimeError("executable not found: run 'python tools/build.py linux modern'")
+            raise RuntimeError("executable not found: run 'python tools/build.py linux %s'"
+                               % LINUX_UI["variant"])
         return str(exe)
 
     def run(self, text, timeout):
@@ -309,6 +331,10 @@ class LinuxModernLauncher(Launcher):
         if "error" in reply:
             return RunResult(None, "", "", time.time() - start, reply["error"])
         return RunResult(reply["returncode"], reply["stdout"], reply["stderr"], time.time() - start)
+
+
+class LinuxLegacyLauncher(LinuxModernLauncher):
+    """The Linux Legacy (Xlib) UI: the same launch and checks, another executable."""
 
 
 WINDOWS_PROBE_FILE = "loomora-probe.json"
@@ -714,6 +740,7 @@ class WindowsVirtualBoxLauncher(Launcher):
 
 
 LAUNCHERS = {("linux", "modern"): LinuxModernLauncher,
+             ("linux", "legacy"): LinuxLegacyLauncher,
              ("windows", "legacy"): WindowsLegacyLauncher}
 
 
@@ -786,10 +813,15 @@ def main(argv=None):
                     "reports the same platform id as the x64 one)")
     ap.add_argument("--dry-run", action="store_true",
                     help="only list the vectors that would run and those skipped")
+    ap.add_argument("--exe", help="Linux only: the executable to run (a path on the Linux side), "
+                    "instead of the one that tools/build.py left in $HOME/loomora-build or out/")
+    ap.add_argument("--inner-variant", choices=("legacy", "modern"), help=argparse.SUPPRESS)
     ap.add_argument("--inner-run", help=argparse.SUPPRESS)    # Linux side, see the docstring
     ap.add_argument("--inner-where", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
+    LINUX_UI["exe"] = args.exe
+    LINUX_UI["variant"] = args.inner_variant or args.variant or "modern"
     if args.inner_where:
         exe = local_executable()
         if exe is None:
