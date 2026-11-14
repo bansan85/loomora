@@ -2,7 +2,7 @@
 <!-- Loomora Legacy UI for Android: API 9 (Android 2.3) and later, plain framework views, no
      AndroidX. No permission: the probe line goes to logcat and nothing is written or sent. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="fr.loomora.probe"
+    package="fr.bansan.loomora.probe"
     android:versionCode="1"
     android:versionName="1.0">
     <uses-sdk android:minSdkVersion="9" android:targetSdkVersion="23" />

@@ -1,4 +1,4 @@
-package fr.loomora.probe;
+package fr.bansan.loomora.probe;
 
 /**
  * The C API of the backend (contracts/c-api.md) as seen from Java: the implementation is the JNI

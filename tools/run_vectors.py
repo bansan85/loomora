@@ -759,7 +759,7 @@ class WindowsVirtualBoxLauncher(Launcher):
 
 # ---- Android Legacy UI on an emulator or device through adb -----------------------------------
 
-ANDROID_PACKAGE = "fr.loomora.probe"
+ANDROID_PACKAGE = "fr.bansan.loomora.probe"
 ANDROID_ACTIVITY = ANDROID_PACKAGE + "/.MainActivity"
 ANDROID_TAG = "LOOMORA_PROBE"
 ANDROID_INPUT_FILE = "/data/local/tmp/loomora-probe-input.txt"
@@ -797,7 +797,7 @@ class AndroidLegacyLauncher(Launcher):
 
     The APK (out/android-legacy/loomora.apk from `python tools/build.py android legacy`, or --exe)
     is installed in prepare(). A run force-stops the application, clears logcat, starts
-    fr.loomora.probe/.MainActivity with `am start -W --ez probe true --es probe_input '<text>'`
+    fr.bansan.loomora.probe/.MainActivity with `am start -W --ez probe true --es probe_input '<text>'`
     (the text is one single-quoted shell word, so quotes, newlines, backslashes and the empty
     string reach the extra unchanged; a text with a character outside the BMP or of more than
     ANDROID_MAX_EXTRA_BYTES bytes is pushed to a file and given as `probe_input_file`, because the

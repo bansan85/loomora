@@ -41,7 +41,7 @@
 - Q: Is the label prefix "Coucou " or "Bonjour "? → A: The UI passes the **content of the text field** to the backend function, which returns `"Bonjour "` (capital B) + that parameter; the label displays this result. The prefix lives only in the backend, never in a UI. The field starts pre-filled with "Coucou", so the label starts as "Bonjour Coucou".
 - Q: What is the Windows Legacy UI? → A: Superseded by the third session below (MFC dropped). Any UI may use its platform's native language, including C++.
 - Q: How is the Linux Modern UI delivered? → A: **No Flatpak.** A plain executable that can be built on any recent distribution having the required libraries.
-- Q: What is the name of the project and of this probe? → A: **Loomora**. Everything is renamed accordingly: the feature directory (`001-loomora-cross-platform`), the application, the C++ namespace `loomora`, the C API prefix `loomora_`, the header `loomora.h`, the libraries and the Java package `fr.loomora.probe`. "Coucou" stays only as the default text of the input field and in the greeting `Bonjour Coucou`.
+- Q: What is the name of the project and of this probe? → A: **Loomora**. Everything is renamed accordingly: the feature directory (`001-loomora-cross-platform`), the application, the C++ namespace `loomora`, the C API prefix `loomora_`, the header `loomora.h`, the libraries and the Java package `fr.bansan.loomora.probe`. "Coucou" stays only as the default text of the input field and in the greeting `Bonjour Coucou`.
 - Q: How is SC-011 (reference inputs on every UI) tested? → A: Every UI accepts a probe input override so a runner can feed each reference input and compare the displayed greeting with `"Bonjour "` + input.
 
 ### Session 2026-11-12 (second, backend language change)

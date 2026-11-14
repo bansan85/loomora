@@ -826,7 +826,7 @@ def android_check_library(ndk, abi, lib):
         sys.exit("%s: needs %s, which Android 2.3 does not provide (allowed: %s)"
                  % (lib, ", ".join(bad), ", ".join(ANDROID_ALLOWED_NEEDED)))
     exported = [name for kind, name in nm_symbols(ndk, abi, lib, "--defined-only") if kind == "T"]
-    other = [e for e in exported if not e.startswith("Java_fr_loomora_probe_Native_")]
+    other = [e for e in exported if not e.startswith("Java_fr_bansan_loomora_probe_Native_")]
     if other:
         sys.exit("%s: exports %s besides the JNI functions" % (lib, ", ".join(other)))
     undefined = [name for kind, name in nm_symbols(ndk, abi, lib, "--undefined-only")
