@@ -16,10 +16,16 @@ The records live in the docs submodule: when docs/implementation is not checked 
 still runs, a warning is printed and no record is written (the product build never needs it).
 
 Implemented targets:
-  linux modern   meson + ninja on ui/modern/linux-gtk3 (T058). On a Windows host the build runs
-                 inside WSL (distribution --wsl-distro, or $LOOMORA_WSL_DISTRO, default
-                 Ubuntu-24.04): the tool re-runs itself there. Needs meson, ninja, a C and a C++
-                 compiler and the gtk+-3.0 development files.
+  linux modern   CMake + Ninja on ui/modern/linux-gtk3 (T058): C++ with gtkmm (the system
+                 gtkmm-3.0 packages; the GTK 4 build with gtkmm-4.0 is a CMake option, see
+                 ui/modern/linux-gtk3/CMakeLists.txt), the C++11 backend as the static library
+                 libloomora. The build goes under $HOME/loomora-build/linux-modern. Checks in
+                 compile_commands.json that the backend sources are compiled with -std=c++11 and
+                 the UI sources with one UI standard, and records the UI standard, the runtime
+                 libraries and the highest GLIBC / GLIBCXX symbol versions. On a Windows host the
+                 build runs inside WSL (distribution --wsl-distro, or $LOOMORA_WSL_DISTRO, default
+                 Ubuntu-24.04): the tool re-runs itself there. Needs cmake, ninja, a C and a C++
+                 compiler and the gtkmm-3.0 development files (libgtkmm-3.0-dev).
 
   linux legacy   make on ui/legacy/linux-xlib (T084): plain C and Xlib, the C++11 backend as a
                  static libloomora.a, libX11 the only library linked besides libc (libXft and
@@ -63,7 +69,7 @@ Implemented targets:
                  platform until the platform record exists.
 
 Platform id of a Linux deliverable: "linux-<os-release ID>-<VERSION_ID>-<machine>" such as
-"linux-ubuntu-24.04-x86_64", the same rule as ui/modern/linux-gtk3/probe.c and
+"linux-ubuntu-24.04-x86_64", the same rule as ui/modern/linux-gtk3/probe.cpp and
 ui/legacy/linux-xlib/probe.c use for the probe record's platform_id (keep them in step). The
 Linux Legacy native x86_64 record uses the id of the build machine; the native i686 executable
 has no platform record yet (T087) and is recorded under the generic id "linux-i686" until it exists;
@@ -164,34 +170,98 @@ def linux_platform_id():
 
 # ---- linux modern (T058) -------------------------------------------------------------------
 
+LINUX_MODERN_CORE_STD = "c++11"  # the backend is always C++11, whatever the UI standard is
+LINUX_MODERN_UI_STDS = ("c++11", "c++14", "c++17")  # the UI standards CMakeLists.txt may pick
+
+
+def cmake_compiler(build_dir, language="CXX"):
+    """(id, version) of the compiler CMake detected, from CMakeFiles/<version>/CMake<L>Compiler.cmake."""
+    files = sorted((build_dir / "CMakeFiles").glob("*/CMake%sCompiler.cmake" % language))
+    if not files:
+        sys.exit("no CMake%sCompiler.cmake under %s" % (language, build_dir / "CMakeFiles"))
+    text = files[-1].read_text(encoding="utf-8")
+    cid = re.search(r'set\(CMAKE_%s_COMPILER_ID "([^"]*)"\)' % language, text)
+    version = re.search(r'set\(CMAKE_%s_COMPILER_VERSION "([^"]*)"\)' % language, text)
+    path = re.search(r'set\(CMAKE_%s_COMPILER "([^"]*)"\)' % language, text)
+    if not (cid and version and path):
+        sys.exit("cannot read the compiler of %s from %s" % (language, files[-1]))
+    name = {"GNU": "gcc", "Clang": "clang"}.get(cid.group(1), cid.group(1).lower())
+    return "%s-%s" % (name, version.group(1)), path.group(1)
+
+
+def check_linux_modern_standards(build_dir):
+    """Reads compile_commands.json: every backend source (core/src) must be compiled with
+    -std=c++11 and every UI source with one -std=c++NN of LINUX_MODERN_UI_STDS (the standard of the
+    UI target, set as a target property, never globally). Returns the UI standard, e.g. "c++17"."""
+    commands = common.read_json(build_dir / "compile_commands.json")
+    ui_dir = (common.ROOT / "ui" / "modern" / "linux-gtk3").as_posix()
+    core_dir = (common.ROOT / "core" / "src").as_posix()
+    core_seen, ui_stds = 0, set()
+    for entry in commands:
+        source = Path(entry["file"]).as_posix()
+        stds = re.findall(r"-std=\S+", entry.get("command") or " ".join(entry.get("arguments", [])))
+        if source.startswith(core_dir + "/"):
+            core_seen += 1
+            if stds != ["-std=" + LINUX_MODERN_CORE_STD]:
+                sys.exit("%s is compiled with %s, the backend must be -std=%s only (strict, no "
+                         "extensions)" % (source, stds or "no -std", LINUX_MODERN_CORE_STD))
+        elif source.startswith(ui_dir + "/"):
+            if len(stds) != 1 or stds[0][5:] not in LINUX_MODERN_UI_STDS:
+                sys.exit("%s is compiled with %s, expected one of %s"
+                         % (source, stds or "no -std", ", ".join(LINUX_MODERN_UI_STDS)))
+            ui_stds.add(stds[0][5:])
+    if core_seen == 0 or len(ui_stds) != 1:
+        sys.exit("compile_commands.json: expected the backend sources and one UI standard, found "
+                 "%d backend sources and UI standards %s" % (core_seen, sorted(ui_stds)))
+    return ui_stds.pop()
+
+
+def elf_runtime_facts(exe):
+    """(direct DT_NEEDED libraries, number of libraries ldd resolves, {GLIBC, GLIBCXX, CXXABI}
+    highest symbol versions) of an executable."""
+    needed = re.findall(r"\(NEEDED\)\s+Shared library: \[([^\]]+)\]",
+                        capture(["readelf", "-d", exe]))
+    ldd = capture(["ldd", exe])
+    if "not found" in ldd:
+        sys.exit("ldd reports a missing library for %s:\n%s" % (exe, ldd))
+    dynamic = capture(["objdump", "-T", exe])
+    highest = {}
+    for kind in ("GLIBC", "GLIBCXX", "CXXABI"):
+        versions = set(re.findall(r"\b%s_([0-9][0-9.]*)" % kind, dynamic))
+        if versions:
+            best = max(versions, key=lambda v: [int(p) for p in v.split(".")])
+            highest[kind] = "%s_%s" % (kind, best)
+    return needed, len(ldd.splitlines()), highest
+
+
 def build_linux_modern():
-    """Native Linux build of ui/modern/linux-gtk3; returns the Deliverable record."""
-    require_tools(["meson", "ninja", "pkg-config", "gcc", "g++"])
-    src = common.ROOT / "ui" / "modern" / "linux-gtk3"
+    """Native Linux build of ui/modern/linux-gtk3 (C++ and gtkmm, CMake + Ninja); returns the
+    Deliverable record."""
+    require_tools(["cmake", "ninja", "pkg-config", "gcc", "g++", "readelf", "objdump", "ldd"])
     # Always under $HOME (never /tmp): the user must be able to find the build in WSL.
     build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (Path.home() / "loomora-build"))
     build_dir = build_root / "linux-modern"
-    if (build_dir / "build.ninja").exists():
-        common.run(["meson", "setup", "--reconfigure", build_dir, src])
-    else:
-        common.run(["meson", "setup", build_dir, src])
-    common.run(["ninja", "-C", build_dir])
+    if (build_dir / "meson-private").is_dir():  # the build directory of the former Meson build
+        shutil.rmtree(str(build_dir))
+    common.run(["cmake", "-S", common.ROOT, "-B", build_dir, "-G", "Ninja",
+                "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+                "-DLOOMORA_BUILD_TESTS=OFF", "-DLOOMORA_BUILD_LINUX_MODERN=ON"])
+    common.run(["cmake", "--build", build_dir, "--target", "loomora_gtk3"])
 
     exe = build_dir / "loomora-gtk3"
     if not exe.is_file():
         sys.exit("build finished but %s is missing" % exe)
+    ui_std = check_linux_modern_standards(build_dir)
     out_dir = common.ROOT / "out" / "linux-modern"
     out_dir.mkdir(parents=True, exist_ok=True)
     artifact = out_dir / exe.name
     shutil.copyfile(str(exe), str(artifact))
     os.chmod(str(artifact), 0o755)
 
-    compilers = json.loads(capture(["meson", "introspect", build_dir, "--compilers"]))["host"]
-    cpp, cc = compilers["cpp"], compilers["c"]
-    cpp_id = "%s-%s" % (cpp["id"], cpp["version"])
-    cc_id = "%s-%s" % (cc["id"], cc["version"])
-    cxx = cpp["exelist"][0]
+    cpp_id, cxx = cmake_compiler(build_dir, "CXX")
+    gtkmm = capture(["pkg-config", "--modversion", "gtkmm-3.0"])
     gtk = capture(["pkg-config", "--modversion", "gtk+-3.0"])
+    needed, ldd_count, highest = elf_runtime_facts(exe)
 
     platform_id = linux_platform_id()
     record = {
@@ -201,17 +271,22 @@ def build_linux_modern():
         "compiler": cpp_id,
         "target": capture([cxx, "-dumpmachine"]),
         "output": "native",
-        "ui_language": "c",
-        "ui_toolkit": "gtk+-3.0 %s (3.10 floor, newer features by macro)" % gtk,
-        "ui_compiler": cc_id,
+        "ui_language": "c++",
+        "ui_toolkit": "gtkmm-3.0 %s on gtk+-3.0 %s (%s UI; GTK 3.10 floor, newer features by macro)"
+                      % (gtkmm, gtk, ui_std.upper()),
+        "ui_compiler": cpp_id,
         "artifact": {"name": artifact.name, "size": artifact.stat().st_size},
         "disabled_features": [],
         "fallbacks": fallbacks_of(platform_id),
-        "notes": "meson + ninja (ui/modern/linux-gtk3/meson.build); static libloomora.a built "
-                 "from core/src with -std=c++11; libstdc++, libgcc, GTK 3 and the system "
-                 "libraries linked dynamically (the meson option static_cxx_runtime links the "
-                 "C++ runtime statically for a distribution that lacks it, ADR 0004); artifact "
-                 "copied to out/linux-modern/.",
+        "notes": "cmake + ninja (ui/modern/linux-gtk3/CMakeLists.txt, CMAKE_BUILD_TYPE=Release, "
+                 "LOOMORA_BUILD_LINUX_MODERN=ON); static libloomora.a built from core/src with "
+                 "-std=%s, the UI sources with -std=%s (both checked in compile_commands.json); "
+                 "libstdc++, libgcc, gtkmm and the system libraries linked dynamically (the CMake "
+                 "option LOOMORA_STATIC_CXX_RUNTIME links the C++ runtime statically, ADR 0004, "
+                 "ADR 0006); direct DT_NEEDED: %s; %d libraries resolved by ldd; highest symbol "
+                 "versions asked for: %s; artifact copied to out/linux-modern/."
+                 % (LINUX_MODERN_CORE_STD, ui_std, ", ".join(needed), ldd_count,
+                    ", ".join(highest[k] for k in sorted(highest))),
     }
     return record, artifact
 
