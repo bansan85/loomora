@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Window theme before Compose draws: dark system theme. -->
+<resources>
+    <style name="Theme.Loomora" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#FF1C1B1F</item>
+    </style>
+</resources>

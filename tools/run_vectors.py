@@ -45,8 +45,8 @@ Platform launchers (registry LAUNCHERS, keyed by family and variant; select_laun
 VirtualBox launcher for the guest platforms of VBOX_PLATFORMS). Implemented: linux modern, linux
 legacy (the Xlib UI, same way; executable from $HOME/loomora-build/linux-legacy-x86_64, then out/,
 or --exe), windows legacy on the local Windows host and windows legacy in a VirtualBox guest (windows-2000-x86).
-Android legacy (platform id android-<release>-<abi>, for example android-4.1.2-x86): see
-AndroidLegacyLauncher. The APK out/android-legacy/loomora.apk (or --exe) is installed on the one
+Android legacy and modern (platform id android-<release>-<abi>, for example android-4.1.2-x86 or
+android-7.0-x86_64): see AndroidLegacyLauncher and AndroidModernLauncher (out/android-modern/). The APK out/android-legacy/loomora.apk (or --exe) is installed on the one
 emulator or device adb sees (--serial / $ANDROID_SERIAL to choose); the launcher never starts or
 stops the emulator. Each run starts the activity with the intent extras of the UI contract and
 reads the probe line from logcat (tag LOOMORA_PROBE; a long line is logged in numbered parts
@@ -759,7 +759,8 @@ class WindowsVirtualBoxLauncher(Launcher):
 
 # ---- Android Legacy UI on an emulator or device through adb -----------------------------------
 
-ANDROID_PACKAGE = "fr.bansan.loomora.probe"
+ANDROID_PACKAGE = "fr.bansan.loomora.probe"  # Legacy UI
+ANDROID_MODERN_PACKAGE = ANDROID_PACKAGE + ".modern"
 ANDROID_ACTIVITY = ANDROID_PACKAGE + "/.MainActivity"
 ANDROID_TAG = "LOOMORA_PROBE"
 ANDROID_INPUT_FILE = "/data/local/tmp/loomora-probe-input.txt"
@@ -810,10 +811,14 @@ class AndroidLegacyLauncher(Launcher):
 
     length_unit = "utf16"  # the field limit counts Java chars (UTF-16 units)
     max_jobs = 1
+    variant = "legacy"
+    package = ANDROID_PACKAGE
+    activity = ".MainActivity"
+    build_command = "python tools/build.py android legacy"
 
     def __init__(self, args):
         Launcher.__init__(self, args)
-        self.apk = Path(args.exe) if args.exe else common.ROOT / "out" / "android-legacy" / "loomora.apk"
+        self.apk = Path(args.exe) if args.exe else common.ROOT / "out" / ("android-" + self.variant) / "loomora.apk"
         self.serial = args.serial or os.environ.get("ANDROID_SERIAL")
         self.adb = adb_executable(args)
 
@@ -828,8 +833,8 @@ class AndroidLegacyLauncher(Launcher):
 
     def prepare(self):
         if not self.apk.is_file():
-            raise RuntimeError("APK not found: %s (run 'python tools/build.py android legacy')"
-                               % self.apk)
+            raise RuntimeError("APK not found: %s (run '%s')"
+                               % (self.apk, self.build_command))
         code, out, err = self._adb("get-state")
         if code != 0 or out.strip() != "device":
             raise RuntimeError("no Android device or emulator ready (adb get-state: %r %s); start "
@@ -838,12 +843,13 @@ class AndroidLegacyLauncher(Launcher):
             raise RuntimeError("the device has not finished booting (sys.boot_completed)")
         code, out, err = self._adb("install", "-r", self.apk, timeout=300)
         if "INCONSISTENT_CERTIFICATES" in out:  # an APK signed with another debug key is installed
-            self._adb("uninstall", ANDROID_PACKAGE)
+            self._adb("uninstall", self.package)
             code, out, err = self._adb("install", self.apk, timeout=300)
         if code != 0 or "Success" not in out:
             raise RuntimeError("adb install failed: %s %s" % (out.strip(), err.strip()))
-        return "Android Legacy %s (release %s, API %s, abi %s): %s (%d bytes, sha256 %s)" % (
-            self._prop("ro.product.model") or "device", self._prop("ro.build.version.release"),
+        return "Android %s UI %s (release %s, API %s, abi %s): %s (%d bytes, sha256 %s)" % (
+            self.variant.capitalize(), self._prop("ro.product.model") or "device",
+            self._prop("ro.build.version.release"),
             self._prop("ro.build.version.sdk"), self._prop("ro.product.cpu.abi"),
             self.apk.name, self.apk.stat().st_size, common.sha256(self.apk))
 
@@ -869,7 +875,7 @@ class AndroidLegacyLauncher(Launcher):
 
     def run(self, text, timeout):
         start = time.time()
-        self._adb("shell", "am force-stop " + ANDROID_PACKAGE)
+        self._adb("shell", "am force-stop " + self.package)
         self._adb("logcat", "-c")
         data = text.encode("utf-8")
         if len(data) <= ANDROID_MAX_EXTRA_BYTES and all(ord(c) < 0x10000 for c in text):
@@ -883,7 +889,7 @@ class AndroidLegacyLauncher(Launcher):
                 self._adb("push", local, ANDROID_INPUT_FILE)
             self._adb("shell", "chmod 644 " + ANDROID_INPUT_FILE)
             extra = "--es probe_input_file " + ANDROID_INPUT_FILE
-        cmd = "am start -W -n %s --ez probe true %s" % (ANDROID_ACTIVITY, extra)
+        cmd = "am start -W -n %s/%s --ez probe true %s" % (self.package, self.activity, extra)
         code, out, err = self._adb("shell", cmd, timeout=60)
         if code != 0 or "Error" in out:
             return RunResult(None, "", err, time.time() - start,
@@ -905,7 +911,7 @@ class AndroidLegacyLauncher(Launcher):
         deadline = time.time() + 6
         while status == 0:
             top = self._adb("shell", "dumpsys activity activities")[1]
-            resumed = [l for l in top.splitlines() if "esumed" in l and ANDROID_PACKAGE in l]
+            resumed = [l for l in top.splitlines() if "esumed" in l and self.package in l]
             if not resumed:
                 break
             if time.time() > deadline:
@@ -915,10 +921,25 @@ class AndroidLegacyLauncher(Launcher):
         return RunResult(status, line + "\n", stderr, time.time() - start)
 
 
+class AndroidModernLauncher(AndroidLegacyLauncher):
+    """The Android Modern UI (Kotlin and Jetpack Compose, applicationId fr.bansan.loomora.probe.modern,
+    out/android-modern/loomora.apk from `python tools/build.py android modern`): the same adb
+    protocol as the Legacy UI (same intent extras, logcat tag, chunked lines). The field limit
+    counts code points (a character outside the BMP counts as one)."""
+
+    length_unit = "codepoints"
+    variant = "modern"
+    package = ANDROID_MODERN_PACKAGE
+    # the class lives in the namespace of the code (fr.bansan.loomora.probe), not in the applicationId
+    activity = ANDROID_PACKAGE + ".MainActivity"
+    build_command = "python tools/build.py android modern"
+
+
 LAUNCHERS = {("linux", "modern"): LinuxModernLauncher,
              ("linux", "legacy"): LinuxLegacyLauncher,
              ("windows", "legacy"): WindowsLegacyLauncher,
-             ("android", "legacy"): AndroidLegacyLauncher}
+             ("android", "legacy"): AndroidLegacyLauncher,
+             ("android", "modern"): AndroidModernLauncher}
 
 
 def select_launcher(family, variant, platform_id):

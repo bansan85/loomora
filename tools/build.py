@@ -74,6 +74,20 @@ Implemented targets:
                  the API 9 libraries), -std=c++11 for the backend. Writes one record per Android
                  platform of docs/implementation/validation/platforms/ (the same APK for all).
 
+  android modern gradlew assembleRelease on ui/modern/android-compose (T053, T054, T055): Kotlin and
+                 Jetpack Compose, AGP 9, compileSdk and targetSdk 37, minSdk 24; Gradle's
+                 externalNativeBuild runs CMake 3.22.1 with NDK r30 (libc++ static) for the JNI
+                 glue bridge/jni/loomora_jni.cpp and the C++11 backend, ABIs armeabi-v7a, arm64-v8a,
+                 x86, x86_64, into ONE APK signed (v2/v3) with a throwaway key that the tool makes
+                 with keytool in the build directory: out/android-modern/loomora.apk. Runs on the
+                 Windows host; needs the Android SDK (platforms/android-37.0, build-tools, cmake
+                 3.22.1, ndk/30.0.16248370), a JDK (JAVA_HOME) and network access for the Gradle
+                 wrapper. It checks each library of the APK (DT_NEEDED limited to libc, libm,
+                 libdl; only Java_* exported; 16 KB LOAD alignment), -std=c++11 for the backend,
+                 apksigner verify and zipalign -P 16. --min-sdk N builds with another minSdk
+                 (spike S8) and writes no record. Writes one record per Android platform of API 24
+                 or later of docs/implementation/validation/platforms/.
+
 Platform id of a Linux deliverable: "linux-<os-release ID>-<VERSION_ID>-<machine>" such as
 "linux-ubuntu-24.04-x86_64", the same rule as ui/modern/linux-gtk3/probe.cpp and
 ui/legacy/linux-xlib/probe.c use for the probe record's platform_id (keep them in step). The
@@ -94,6 +108,8 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import zipfile
 from pathlib import Path
 
 import check_imports
@@ -109,7 +125,6 @@ PENDING = {
     ("windows", "modern"): "T046",
     ("macos", "modern"): "T049",
     ("ios", "modern"): "T052",
-    ("android", "modern"): "T055",
     ("macos", "legacy"): "T077",
     ("ios", "legacy"): "T079",
     ("web", "legacy"): "T086",
@@ -959,8 +974,198 @@ def android_legacy_records(apk, revision, clang_version, facts):
         }
 
 
+# ---- android modern (T053, T054, T055) ------------------------------------------------------
+
+ANDROID_MODERN_ABIS = ("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+ANDROID_MODERN_NDK = "30.0.16248370"
+ANDROID_MODERN_ALLOWED_NEEDED = ("libc.so", "libm.so", "libdl.so")  # c++_static: no libc++_shared
+ANDROID_MODERN_MIN_API = 24
+# Platform record arch -> the ABI of the APK that runs on it.
+ANDROID_MODERN_PLATFORM_ABI = {"x86": "x86", "x86_64": "x86_64", "arm": "armeabi-v7a",
+                               "arm64": "arm64-v8a"}
+
+ANDROID_MODERN_INSTALL_HELP = """\
+android modern needs, on the Windows host (no WSL):
+  LOOMORA_ANDROID_SDK   (or ANDROID_HOME) the Android SDK with platforms/android-37.0, build-tools
+                        36.0.0, cmake/3.22.1 and ndk/30.0.16248370 (sdkmanager "platforms;android-37.0"
+                        "build-tools;36.0.0" "cmake;3.22.1" "ndk;30.0.16248370")
+  JAVA_HOME             a JDK 17 or later (JDK 25 was run with Gradle 9.9.1 and AGP 9.5.1)
+  Gradle                the wrapper of ui/modern/android-compose (gradlew), which downloads Gradle
+                        and the AndroidX / AGP artifacts from Google Maven and Maven Central"""
+
+
+def android_modern_versions(project):
+    """Pinned versions: gradle/libs.versions.toml and gradle/wrapper/gradle-wrapper.properties."""
+    toml = (project / "gradle" / "libs.versions.toml").read_text(encoding="utf-8")
+    versions = dict(re.findall(r'^(\w+)\s*=\s*"([^"]+)"', toml, re.M))
+    props = (project / "gradle" / "wrapper" / "gradle-wrapper.properties").read_text(encoding="utf-8")
+    m = re.search(r"gradle-([0-9.]+)-bin\.zip", props)
+    versions["gradle"] = m.group(1) if m else "unknown"
+    return versions
+
+
+def android_modern_keystore(path, java_home):
+    """A throwaway signing key, made once outside the repository (nothing secret, never committed)."""
+    if path.is_file():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    keytool = Path(java_home) / "bin" / ("keytool.exe" if sys.platform == "win32" else "keytool")
+    common.run([keytool, "-genkeypair", "-keystore", path, "-storepass", "android", "-keypass",
+                "android", "-alias", "loomora", "-keyalg", "RSA", "-keysize", "2048", "-validity",
+                "10000", "-dname", "CN=Loomora throwaway,O=Loomora,C=FR"])
+
+
+def android_modern_check_library(llvm_bin, abi, lib):
+    """Facts about a libloomora_jni.so of the APK; stops on a library, symbol or alignment it must not have."""
+    exe = ".exe" if sys.platform == "win32" else ""
+    needed = re.findall(r"Shared library: \[([^\]]+)\]",
+                        capture([llvm_bin / ("llvm-readelf" + exe), "-d", lib]))
+    bad = [n for n in needed if n not in ANDROID_MODERN_ALLOWED_NEEDED]
+    if bad:
+        sys.exit("%s (%s): needs %s (allowed: %s)"
+                 % (lib, abi, ", ".join(bad), ", ".join(ANDROID_MODERN_ALLOWED_NEEDED)))
+    defined = []
+    undefined = []
+    for line in capture([llvm_bin / ("llvm-nm" + exe), "-D", lib]).splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and fields[-2] == "T":
+            defined.append(fields[-1])
+        elif len(fields) >= 2 and fields[-2] in ("U", "w"):
+            undefined.append(fields[-1])
+    other = [e for e in defined if not e.startswith("Java_fr_bansan_loomora_probe_Native_")]
+    if other:
+        sys.exit("%s (%s): exports %s besides the JNI functions" % (lib, abi, ", ".join(other)))
+    aligns = re.findall(r"LOAD\s+0x[0-9a-f]+\s+0x[0-9a-f]+\s+0x[0-9a-f]+\s+0x[0-9a-f]+\s+0x[0-9a-f]+"
+                        r"\s+\S+\s+(0x[0-9a-f]+)", capture([llvm_bin / ("llvm-readelf" + exe), "-lW", lib]))
+    if not aligns or any(int(a, 16) < 16384 for a in aligns):
+        sys.exit("%s (%s): a LOAD segment is aligned below 16 KB (%s)" % (lib, abi, aligns))
+    return needed, defined, undefined
+
+
+def run_android_modern(args):
+    sdk_text = os.environ.get("LOOMORA_ANDROID_SDK") or os.environ.get("ANDROID_HOME") or \
+        os.environ.get("ANDROID_SDK_ROOT") or ""
+    if not sdk_text or not Path(sdk_text).is_dir():
+        sys.exit("android modern: LOOMORA_ANDROID_SDK (or ANDROID_HOME) is not set to an existing "
+                 "directory\n\n%s" % ANDROID_MODERN_INSTALL_HELP)
+    sdk = Path(sdk_text)
+    ndk = sdk / "ndk" / ANDROID_MODERN_NDK
+    java_home = os.environ.get("JAVA_HOME")
+    if not java_home or not Path(java_home).is_dir():
+        sys.exit("android modern: JAVA_HOME is not set to an existing JDK\n\n%s"
+                 % ANDROID_MODERN_INSTALL_HELP)
+    needed_dirs = [ndk, sdk / "cmake" / "3.22.1", sdk / "platforms" / "android-37.0"]
+    missing = [str(p) for p in needed_dirs if not p.is_dir()]
+    if missing:
+        sys.exit("android modern: missing %s\n\n%s" % (", ".join(missing), ANDROID_MODERN_INSTALL_HELP))
+    project = common.ROOT / "ui" / "modern" / "android-compose"
+    versions = android_modern_versions(project)
+    build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (common.ROOT / "build"))
+    keystore = build_root / "android-modern-throwaway.keystore"
+    android_modern_keystore(keystore, java_home)
+    env = dict(os.environ, ANDROID_HOME=str(sdk), LOOMORA_ANDROID_SDK=str(sdk))
+    gradlew = project / ("gradlew.bat" if sys.platform == "win32" else "gradlew")
+    cmd = [gradlew, "assembleRelease", "-Ploomora.keystore=" + str(keystore),
+           "-Ploomora.storepass=android", "-Ploomora.keyalias=loomora"]
+    if args.min_sdk:
+        cmd.append("-Ploomora.minSdk=%d" % args.min_sdk)
+    res = subprocess.run([str(c) for c in cmd], cwd=str(project), env=env)
+    if res.returncode != 0:
+        sys.exit("gradlew assembleRelease failed (%d)" % res.returncode)
+    built = project / "app" / "build" / "outputs" / "apk" / "release" / "app-release.apk"
+    if not built.is_file():
+        sys.exit("gradle finished but %s is missing (not signed?)" % built)
+    out_dir = common.ROOT / "out" / "android-modern"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    apk = out_dir / ("loomora-minsdk%d.apk" % args.min_sdk if args.min_sdk else "loomora.apk")
+    shutil.copyfile(str(built), str(apk))
+    if args.min_sdk:
+        print("minSdk %d build (spike S8): %s, %d bytes; no deliverable record is written"
+              % (args.min_sdk, apk, apk.stat().st_size))
+        return
+
+    # Checks on what was really built: the compile commands, then the libraries inside the APK.
+    for abi in ANDROID_MODERN_ABIS:
+        found = sorted((project / "app" / ".cxx").glob("RelWithDebInfo/*/%s/compile_commands.json" % abi))
+        if not found:
+            sys.exit("no compile_commands.json for %s under %s" % (abi, project / "app" / ".cxx"))
+        check_android_standards(found[-1].parent)
+    llvm_bin = ndk / "toolchains" / "llvm" / "prebuilt" / android_host_tag() / "bin"
+    facts = {}
+    with tempfile.TemporaryDirectory() as scratch:
+        with zipfile.ZipFile(str(apk)) as z:
+            names = z.namelist()
+            for abi in ANDROID_MODERN_ABIS:
+                member = "lib/%s/libloomora_jni.so" % abi
+                if member not in names:
+                    sys.exit("%s is not in the APK" % member)
+                target = Path(scratch) / abi / "libloomora_jni.so"
+                target.parent.mkdir(parents=True)
+                target.write_bytes(z.read(member))
+                facts[abi] = android_modern_check_library(llvm_bin, abi, target)
+                print("%s: needs %s; exports %d JNI function(s); %d undefined symbol(s); LOAD "
+                      "segments aligned to 16 KB or more; -std=c++11 for the backend and the glue"
+                      % (abi, ", ".join(facts[abi][0]), len(facts[abi][1]), len(facts[abi][2])))
+            others = sorted(n for n in names if n.startswith("lib/") and not n.endswith("/libloomora_jni.so"))
+            print("other native libraries in the APK: %s" % (", ".join(others) or "none"))
+    bt = sorted((sdk / "build-tools").iterdir())[-1]
+    exe = ".exe" if sys.platform == "win32" else ""
+    print(capture([bt / ("apksigner" + (".bat" if sys.platform == "win32" else "")), "verify",
+                   "--verbose", "--min-sdk-version", str(ANDROID_MODERN_MIN_API), apk]))
+    print(capture([bt / ("zipalign" + exe), "-c", "-P", "16", "-v", "4", apk]).splitlines()[-1])
+    clang = llvm_bin / ("clang++" + exe)
+    m = re.search(r"clang version (\S+)", capture([clang, "--version"]).splitlines()[0])
+    clang_version = m.group(1) if m else "unknown"
+    for record in android_modern_records(apk, clang_version, versions, facts, java_home):
+        write_deliverable(record, apk)
+
+
+def android_api_of(platform_rec):
+    m = re.search(r"API (\d+)", platform_rec.get("os_version", ""))
+    return int(m.group(1)) if m else 0
+
+
+def android_modern_records(apk, clang_version, versions, facts, java_home):
+    """One Deliverable record per Android platform record of API 24 or later (the Modern floor)."""
+    sha = common.sha256(apk)
+    libs = "; ".join("%s: needs %s, %d JNI export(s)" % (abi, ", ".join(f[0]), len(f[1]))
+                     for abi, f in sorted(facts.items()))
+    for platform_id, rec in sorted(android_platforms().items()):
+        abi = ANDROID_MODERN_PLATFORM_ABI.get(rec.get("arch"))
+        if abi is None or android_api_of(rec) < ANDROID_MODERN_MIN_API:
+            continue
+        yield {
+            "platform_id": platform_id,
+            "ui_variant": "modern",
+            "cpp_std": "c++11",
+            "compiler": "clang-%s-ndk-r30" % clang_version,
+            "target": "%s (API %d, NDK r30, libc++ linked statically)" % (abi, ANDROID_MODERN_MIN_API),
+            "output": "native",
+            "ui_language": "kotlin",
+            "ui_toolkit": "Jetpack Compose (Material 3), Compose BOM %s, activity-compose %s; "
+                          "minSdk %d, targetSdk 37, compileSdk 37; JNI glue bridge/jni/loomora_jni.cpp"
+                          % (versions["composeBom"], versions["activityCompose"],
+                             ANDROID_MODERN_MIN_API),
+            "ui_compiler": "Kotlin %s (Compose compiler plugin), Android Gradle Plugin %s, Gradle %s, "
+                           "R8 minify and resource shrinking, JDK %s, apksigner v2/v3 with a "
+                           "throwaway key" % (versions["kotlin"], versions["agp"], versions["gradle"],
+                                              Path(java_home).name),
+            "artifact": {"name": apk.name, "size": apk.stat().st_size},
+            "disabled_features": [],
+            "fallbacks": fallbacks_of(platform_id),
+            "notes": "gradlew assembleRelease (ui/modern/android-compose), externalNativeBuild with "
+                     "CMake 3.22.1 and NDK %s (Clang %s, ANDROID_STL c++_static) for the C++11 "
+                     "backend (static libloomora.a, target property CXX_STANDARD 11) and "
+                     "libloomora_jni.so per ABI (%s); ONE universal APK holding the four ABIs "
+                     "armeabi-v7a, arm64-v8a, x86, x86_64; the ABI of this platform: %s; artifact "
+                     "sha256 %s; artifact copied to out/android-modern/."
+                     % (ANDROID_MODERN_NDK, clang_version, libs, abi, sha),
+        }
+
+
 TARGETS = {
     ("android", "legacy"): run_android_legacy,
+    ("android", "modern"): run_android_modern,
     ("linux", "modern"): run_linux_modern,
     ("linux", "legacy"): run_linux_legacy,
     ("windows", "legacy"): run_windows_legacy,
@@ -974,6 +1179,8 @@ def main(argv=None):
     parser.add_argument("variant", choices=VARIANTS)
     parser.add_argument("--wsl-distro", help="WSL distribution used on a Windows host "
                         "(default $LOOMORA_WSL_DISTRO or %s)" % DEFAULT_WSL_DISTRO)
+    parser.add_argument("--min-sdk", type=int, help="android modern only: build with this minSdk "
+                        "instead of 24 (spike S8: 21), the APK is then NOT the deliverable")
     parser.add_argument("--arch", choices=LINUX_LEGACY_ARCHS + ("all",), default="all",
                         help="linux legacy only: the architecture to build (default all)")
     args = parser.parse_args(argv)
