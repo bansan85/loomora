@@ -15,28 +15,34 @@ Run spikes S1–S9 (S4 removed on 2026-11-14) of [research.md](research.md) firs
 
 ## Scenario 1 — backend and vectors
 
-1. `python tools/check_std.py`: builds `core/` with GCC and Clang (`-std=c++11 -pedantic-errors -Wall -Wextra -Werror`) and fails if the shared build exports any symbol other than the `loomora_*` C functions.
-2. `cmake --preset host-gcc && cmake --build --preset host-gcc && ctest`, then the same with `host-clang`: runs the vectors of `core/tests/vectors.json`.
+1. In WSL (or on Linux), `python3 tools/check_std.py`: builds `core/` with GCC and Clang (`-std=c++11 -pedantic-errors -Wall -Wextra -Werror`) and fails if the shared build exports any symbol other than the `loomora_*` C functions. On a Windows host clang uses the MSVC STL, which needs C++14, so the strict steps are skipped there.
+2. In WSL: `cmake -S . -B ~/loomora-build/core-gcc -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ && cmake --build ~/loomora-build/core-gcc && ctest --test-dir ~/loomora-build/core-gcc`. On the Windows host: `cmake --preset host-clang && cmake --build --preset host-clang && ctest --test-dir build/host-clang`. ctest runs `loomora_selftest` and the Catch2 tests on the vectors of `core/tests/vectors.json`. (`python tools/verify.py quick` runs all of this in one command; see `docs/building/README.md`.)
 3. **Expected**: all vectors pass with both compilers; the list of active fallbacks per compiler is produced (`docs/implementation/validation/fallbacks.json` up to date).
 
 ## Scenario 2 — one platform, Legacy UI (example: Windows 2000 SP4)
 
-1. `python tools/build.py windows-2000 legacy`: builds the backend and the Win32 UI with MinGW-w64 and produces the executable.
-2. Copy the executable to the Windows 2000 VM (no Internet).
+1. In WSL, `python3 tools/build.py windows legacy` (from the Windows host: `wsl -d Ubuntu-24.04 --cd <repository path> -- python3 tools/build.py windows legacy`): builds the backend and the Win32 UI with MinGW-w64 and produces `out/windows-legacy/x86/loomora.exe` (Windows 2000 to 11) and `out/windows-legacy/x64/loomora.exe` (XP x64 to 11), after checking every import against `tools/win2000_imports.json`. The self-test is built separately: `wsl -d Ubuntu-24.04 --cd <repository path> -- sh tools/guest/build_selftest.sh` writes `out/windows-legacy/guest/loomora_selftest.exe`.
+2. Copy the x86 executable and `loomora_selftest.exe` to the Windows 2000 VM (no Internet).
 3. Run `loomora_selftest.exe` (backend vectors, no UI), then `loomora.exe --probe`.
 4. **Expected**: window with the field "Coucou" and the greeting "Bonjour Coucou" in under 3 s, typing "Marie" shows "Bonjour Marie", end-of-life warning visible, one valid JSON line in `loomora-probe.json` (`ui_variant = legacy`), clean exit.
-5. Run `python tools/run_vectors.py <platform-id> legacy`: every valid reference input must produce `"Bonjour "` + input (SC-011).
+5. Run `python tools/run_vectors.py <platform-id> legacy` (for the VM, `windows-2000-x86`; `--arch x86|x64` picks the executable on a Windows host): every valid reference input must produce `"Bonjour "` + input (SC-011).
 6. Save screenshot and JSON in `docs/implementation/validation/evidence/<change>/<id>/`; fill in `docs/implementation/validation/verdicts/<id>-legacy.json`.
 
 ## Scenario 3 — one platform, Modern UI (example: Windows 11 x64)
 
-1. `python tools/build.py windows-11 modern`: produces the package (WinUI 3 UI + `loomora.dll` built by current MSVC).
+The Windows 11 (WinUI 3) UI is not written yet: `python tools/build.py windows modern` fails with "not implemented yet". The steps below are the target; the only Modern UI that exists today is Linux (see the end of this scenario).
+
+1. `python tools/build.py windows modern`: produces the package (WinUI 3 UI + `loomora.dll` built by current MSVC).
 2. Run it with `--probe` on a Windows 11 machine.
 3. **Expected**: native-looking window showing "Bonjour Coucou" in under 3 s (typing updates it), JSON with `ui_variant = modern`, same message as the Legacy UI.
 
+Available today, Linux Modern (gtkmm 3), in WSL or on Linux: `python3 tools/build.py linux modern`, then `python3 tools/run_vectors.py linux-ubuntu-24.04-x86_64 modern` (the platform id is `linux-<ID>-<VERSION_ID>-<machine>` of `/etc/os-release`) and `out/linux-modern/loomora-gtk3 --probe`.
+
 ## Scenario 4 — Web, two paths
 
-1. `python tools/build.py web`: produces `loomora.wasm` and `loomora.js` (WebAssembly-free build) from the same C++ code.
+Not available yet: `python tools/build.py web legacy` and `web modern` fail with "not implemented yet".
+
+1. `python tools/build.py web <legacy|modern>`: produces `loomora.wasm` and `loomora.js` (WebAssembly-free build) from the same C++ code.
 2. Open the Modern page in a recent browser: it loads the WebAssembly path (`core = cpp-wasm`).
 3. Open the Legacy page in a browser without WebAssembly (for example IE 9 or Firefox 8): it loads the JavaScript path (`core = cpp-js`).
 4. **Expected**: identical greeting for the same input; the oldest platform of each path is recorded.
