@@ -524,6 +524,24 @@ def preflight_full():
         sys.exit(2)
 
 
+def reexec_with_private_x11_dir(argv):
+    """Under WSLg /tmp/.X11-unix is a read-only mount, so Xvfb cannot create its socket there.
+    Re-run this script in a private mount namespace (unshare -rm) with a writable tmpfs on that
+    directory: the real WSLg sockets are not touched and the children of this run see the private one.
+    If the namespace cannot be created, carry on: Xvfb then fails and the inherited display is used."""
+    sockdir = "/tmp/.X11-unix"
+    if (IS_WINDOWS or os.environ.get("LOOMORA_VERIFY_NS") or not shutil.which("Xvfb") or not shutil.which("unshare")
+            or not os.path.isdir(sockdir) or os.access(sockdir, os.W_OK)):
+        return
+    mount = "mount -t tmpfs -o mode=1777 tmpfs " + sockdir
+    if subprocess.call(["unshare", "-rm", "sh", "-c", mount], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0:
+        return
+    os.environ["LOOMORA_VERIFY_NS"] = "1"
+    args = list(sys.argv[1:] if argv is None else argv)
+    os.execvp("unshare", ["unshare", "-rm", "sh", "-c", mount + ' && exec "$0" "$@"', sys.executable,
+                          os.path.abspath(sys.argv[0])] + args)
+
+
 def main(argv=None):
     common.setup_utf8_output()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -553,6 +571,7 @@ def main(argv=None):
         return 2
     if ctx.mode == "full" and not IS_WINDOWS:
         preflight_full()
+    reexec_with_private_x11_dir(argv)
     if any(s[4] for s in plan) and not any(s[0] == "build" for s in plan):
         plan.insert(0, make_plan(ctx)[0])  # the checks that run a binary need the build
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143)) if hasattr(signal, "SIGTERM") else None
