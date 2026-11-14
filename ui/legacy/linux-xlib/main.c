@@ -1,8 +1,8 @@
 /* Loomora Legacy UI for Linux: plain C and Xlib (libX11 is the only toolkit), no GTK, no
    FreeType, no input method.
 
-   One input line pre-filled "Coucou" (limited to 1,000 bytes) and the greeting returned by the
-   C++ backend, wrapped and centred below it, drawn with the core X11 font `fixed`; an
+   One input line pre-filled "Coucou" (limited to 1,000 characters) and the greeting returned by
+   the C++ backend, wrapped and centred below it, drawn with the core X11 font `fixed`; an
    end-of-life banner at the top when the backend says this kernel is no longer maintained. This
    file only creates the window, runs the event loop, converts between the keys, the font codes
    and UTF-8, and draws; the greeting, the end-of-life test and its text and the probe line all
@@ -39,8 +39,12 @@
 #include "loomora.h"
 #include "probe.h"
 
-#define MAX_INPUT_BYTES 1000
-/* Largest greeting: 4,096 bytes of input at most, plus "Bonjour ". */
+/* ui-contract.md and spec.md ("Very long text"): 1,000 characters, counted as Unicode code points
+   (the GTK UI counts the same way). */
+#define MAX_INPUT_CHARS 1000
+/* A code point takes at most 4 bytes of UTF-8. */
+#define MAX_INPUT_BYTES (4 * MAX_INPUT_CHARS)
+/* Largest greeting: "Bonjour " and 4,000 bytes of input (the backend takes 4,096 at most). */
 #define GREETING_CAP (4096 + 64)
 #define MARGIN 12
 #define BANNER_PAD 8
@@ -63,7 +67,8 @@ typedef struct {
     int height;
     int eol;
     char input[MAX_INPUT_BYTES + 1];
-    size_t input_len;
+    size_t input_len;   /* bytes */
+    size_t input_chars; /* code points */
     char greeting[GREETING_CAP + 1];
     size_t greeting_len;
     int substituted; /* the greeting holds a character the font cannot draw */
@@ -474,19 +479,23 @@ static void delete_last(Ui *ui) {
     while (ui->input_len > 0 && ((unsigned char)ui->input[ui->input_len] & 0xC0) == 0x80)
         ui->input_len--;
     ui->input[ui->input_len] = '\0';
+    if (ui->input_chars > 0)
+        ui->input_chars--;
 }
 
-/* Appends one character; refused (silently) when it would pass 1,000 bytes. */
+/* Appends one character; refused (silently) when the input already holds 1,000 characters.
+   Never cuts inside a UTF-8 sequence: the buffer takes 1,000 code points of 4 bytes. */
 static int append_char(Ui *ui, unsigned long cp) {
     char bytes[4];
     size_t n;
     if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF))
         return 0;
-    n = utf8_encode(cp, bytes);
-    if (ui->input_len + n > MAX_INPUT_BYTES)
+    if (ui->input_chars >= MAX_INPUT_CHARS)
         return 0;
+    n = utf8_encode(cp, bytes);
     memcpy(ui->input + ui->input_len, bytes, n);
     ui->input_len += n;
+    ui->input_chars++;
     ui->input[ui->input_len] = '\0';
     return 1;
 }
@@ -557,6 +566,7 @@ int main(int argc, char **argv) {
     int kernel_minor = 0;
     const char *initial;
     size_t initial_len;
+    size_t initial_chars;
 
     probe_start();
     memset(&ui, 0, sizeof(ui));
@@ -572,17 +582,26 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    /* The initial text, cut to 1,000 bytes at a character boundary. */
+    /* The initial text, cut to 1,000 characters (code points) at a character boundary. */
     initial = probe.input != NULL ? probe.input : "Coucou";
-    initial_len = strlen(initial);
-    if (initial_len > MAX_INPUT_BYTES) {
-        initial_len = MAX_INPUT_BYTES;
-        while (initial_len > 0 && ((unsigned char)initial[initial_len] & 0xC0) == 0x80)
-            initial_len--;
+    initial_len = 0;
+    initial_chars = 0;
+    {
+        size_t total = strlen(initial);
+        while (initial_len < total && initial_chars < MAX_INPUT_CHARS) {
+            unsigned long cp;
+            size_t used = utf8_next((const unsigned char *)initial + initial_len,
+                                    total - initial_len, &cp);
+            if (used == 0)
+                break; /* cannot happen: the text was checked above */
+            initial_len += used;
+            initial_chars++;
+        }
     }
     memcpy(ui.input, initial, initial_len);
     ui.input[initial_len] = '\0';
     ui.input_len = initial_len;
+    ui.input_chars = initial_chars;
 
     ui.dpy = XOpenDisplay(NULL);
     if (ui.dpy == NULL) {
