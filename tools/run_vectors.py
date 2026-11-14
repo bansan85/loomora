@@ -671,8 +671,16 @@ class WindowsVirtualBoxLauncher(Launcher):
                 % (self.vm, info.get("memory", "?"), product or "?", release or "?",
                    service_pack or "none reported", self.user, self.guest_dir,
                    "reused" if reused_exe else "copied",
-                   self.exe.relative_to(common.ROOT).as_posix(), self.exe.stat().st_size,
+                   self.shown_exe(), self.exe.stat().st_size,
                    common.sha256(self.exe)))
+
+    def shown_exe(self):
+        """The executable as shown in the launcher line: relative to the repository, or as given
+        when it lies outside it (tools/prefix_check.py runs the exe of its copy)."""
+        try:
+            return self.exe.relative_to(common.ROOT).as_posix()
+        except ValueError:
+            return str(self.exe)
 
     def kill_leftovers(self):
         """Terminates loomora.exe and runw.exe in the guest (after a timeout); returns the count
