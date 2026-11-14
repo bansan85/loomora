@@ -165,6 +165,9 @@ void MainWindow::show_window() {
     present();
 #else
     show_all();
+    // The GTK 3 info bar is not shown by show_all() of the window: it is shown by the program.
+    if (eol_bar_)
+        eol_bar_->show_all();
 #endif
 }
 
