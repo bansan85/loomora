@@ -13,12 +13,11 @@
 // it becomes __mingw_vfprintf, which locks the stream through msvcrt's _lock / _unlock, two
 // internal exports that tools/win2000_imports.json does not list.
 #include <cstdint>
+#include <cstdio>
 #include <string>
 #include <vector>
 
-#ifdef LOOMORA_AVOID_IOSTREAM
-#include <cstdio>
-#else
+#ifndef LOOMORA_AVOID_IOSTREAM
 #include <iostream>
 #endif
 
@@ -26,6 +25,19 @@
 #include "vectors.inc"
 
 namespace {
+
+// Decimal text of a number (std::to_string is missing from the gnustl of the Android NDK and from
+// some old MinGW runtimes).
+std::string number(long value) {
+    const bool negative = value < 0;
+    unsigned long v = negative ? 0UL - static_cast<unsigned long>(value) : static_cast<unsigned long>(value);
+    std::string digits;
+    do {
+        digits.insert(digits.begin(), static_cast<char>('0' + v % 10));
+        v /= 10;
+    } while (v != 0);
+    return negative ? '-' + digits : digits;
+}
 
 void print(const std::string &line) {
 #ifdef LOOMORA_AVOID_IOSTREAM
@@ -53,8 +65,8 @@ class Checker {
                                                   v.input_len, buffer.data(), v.capacity);
         const std::string what = std::string("greet vector ") + v.id;
         if (status != v.expected_status) {
-            check(false, what + " (got " + std::to_string(status) + ", want " +
-                             std::to_string(v.expected_status) + ")");
+            check(false, what + " (got " + number(status) + ", want " +
+                             number(v.expected_status) + ")");
             return;
         }
         if (status < 0)
@@ -84,7 +96,7 @@ int main() {
         t.greet(vectors::kGreetVectors[i]);
 
     if (t.failures() != 0) {
-        std::fputs((std::to_string(t.failures()) + " failure(s)\n").c_str(), stdout);
+        std::fputs((number(t.failures()) + " failure(s)\n").c_str(), stdout);
         return 1;
     }
     std::fputs("all passed\n", stdout);
