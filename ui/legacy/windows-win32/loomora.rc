@@ -16,8 +16,8 @@ STRINGTABLE
 BEGIN
     IDS_TITLE "Loomora"
     IDS_DEFAULT_INPUT "Coucou"
-    IDS_GREETING_ERROR "(erreur)"
-    IDS_ABI_MISMATCH "Version ABI incompatible entre l'interface et le moteur."
+    IDS_GREETING_ERROR "(error)"
+    IDS_ABI_MISMATCH "ABI version mismatch between the interface and the engine."
 END
 
 VS_VERSION_INFO VERSIONINFO
@@ -28,9 +28,9 @@ FILETYPE VFT_APP
 BEGIN
     BLOCK "StringFileInfo"
     BEGIN
-        BLOCK "040C04B0" // French, Unicode
+        BLOCK "040904B0" // English (US), Unicode
         BEGIN
-            VALUE "FileDescription", "Loomora - interface Legacy pour Windows (2000 à 11)"
+            VALUE "FileDescription", "Loomora - Legacy interface for Windows (2000 to 11)"
             VALUE "FileVersion", "0.1.0.0"
             VALUE "InternalName", "loomora"
             VALUE "OriginalFilename", "loomora.exe"
@@ -40,6 +40,6 @@ BEGIN
     END
     BLOCK "VarFileInfo"
     BEGIN
-        VALUE "Translation", 0x040C, 1200
+        VALUE "Translation", 0x0409, 1200
     END
 END
