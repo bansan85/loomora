@@ -2,7 +2,7 @@
 """Build one Loomora deliverable and record it.
 
 Usage:
-  python tools/build.py <platform> <variant> [--wsl-distro NAME]
+  python tools/build.py <platform> <variant> [--wsl-distro NAME] [--arch x86_64|i686|all]
 
   platform  windows | macos | ios | android | linux | web
   variant   legacy | modern
@@ -20,6 +20,16 @@ Implemented targets:
                  Ubuntu-24.04): the tool re-runs itself there. Needs meson, ninja, a C and a C++
                  compiler and the gtk+-3.0 development files.
 
+  linux legacy   make on ui/legacy/linux-xlib (T084): plain C and Xlib, the C++11 backend as a
+                 static libloomora.a, libstdc++ and libgcc linked statically, libX11 the only
+                 other library. Two executables, x86_64 and i686 (gcc -m32; needs the i386
+                 libX11, the tool prints the apt packages when it is missing and still builds
+                 the x86_64 one). The build is NATIVE: the manylinux2010 container (glibc 2.12
+                 baseline, spike S4 / T069) is not used by this tool yet, so the deliverable
+                 records the highest GLIBC symbol version the executable needs and says that
+                 the glibc 2.12 baseline is NOT verified. On a Windows host the build runs
+                 inside WSL like linux modern. --arch x86_64|i686|all (default all).
+
   windows legacy CMake + Ninja + MinGW-w64 GCC on ui/legacy/windows-win32 (T075), twice: i686
                  (one executable for Windows 2000 -> 11, toolchain
                  cmake/toolchains/mingw-w64-win2000-i686.cmake) and x86_64 (XP x64 -> 11,
@@ -36,8 +46,10 @@ Implemented targets:
                  platform until the platform record exists.
 
 Platform id of a Linux deliverable: "linux-<os-release ID>-<VERSION_ID>-<machine>" such as
-"linux-ubuntu-24.04-x86_64", the same rule as ui/modern/linux-gtk3/probe.c uses for the probe
-record's platform_id (keep both in step).
+"linux-ubuntu-24.04-x86_64", the same rule as ui/modern/linux-gtk3/probe.c and
+ui/legacy/linux-xlib/probe.c use for the probe record's platform_id (keep them in step). The
+Linux Legacy x86_64 record uses the id of the build machine; the i686 executable has no platform
+record yet (T087) and is recorded under the generic id "linux-i686" until it exists.
 Platform id of a Windows Legacy deliverable: the id of a Windows platform record
 (docs/implementation/validation/platforms/, for example "windows-2000-x86" or "windows-11-x64"; data-model.md wants one
 Deliverable per platform and variant). One executable runs on every Windows of its architecture,
@@ -72,7 +84,6 @@ PENDING = {
     ("macos", "legacy"): "T077",
     ("ios", "legacy"): "T079",
     ("android", "legacy"): "T082",
-    ("linux", "legacy"): "T084",
     ("web", "legacy"): "T086",
 }
 
@@ -187,23 +198,163 @@ def in_wsl_or_linux():
     return sys.platform.startswith("linux")
 
 
+def rerun_in_wsl(args, platform_name, variant, extra=()):
+    """Runs this tool again inside WSL; the repository is reached through its Windows path."""
+    distro = args.wsl_distro or os.environ.get("LOOMORA_WSL_DISTRO") or DEFAULT_WSL_DISTRO
+    require_tools(["wsl"])
+    res = subprocess.run(
+        ["wsl", "-d", distro, "--cd", str(common.ROOT), "--",
+         "python3", "tools/build.py", platform_name, variant] + list(extra))
+    if res.returncode != 0:
+        sys.exit("the build inside WSL (%s) failed with status %d" % (distro, res.returncode))
+
+
 def run_linux_modern(args):
     if in_wsl_or_linux():
         record, artifact = build_linux_modern()
     elif sys.platform == "win32":
-        # Re-run this tool inside WSL; the repository is reached through its Windows path.
-        distro = args.wsl_distro or os.environ.get("LOOMORA_WSL_DISTRO") or DEFAULT_WSL_DISTRO
-        require_tools(["wsl"])
-        res = subprocess.run(
-            ["wsl", "-d", distro, "--cd", str(common.ROOT), "--",
-             "python3", "tools/build.py", "linux", "modern"])
-        if res.returncode != 0:
-            sys.exit("the build inside WSL (%s) failed with status %d" % (distro, res.returncode))
+        rerun_in_wsl(args, "linux", "modern")
         return  # the inner run has written the deliverable record
     else:
         sys.exit("linux modern cannot be built on this host (%s): use Linux or Windows with WSL"
                  % sys.platform)
     write_deliverable(record, artifact)
+
+
+# ---- linux legacy (T084) -------------------------------------------------------------------
+
+LINUX_LEGACY_ARCHS = ("x86_64", "i686")
+
+# Shared libraries the Xlib executable may name: libX11 and the C library of the system (with its
+# loader). libstdc++ and libgcc_s must NOT appear: the C++ runtime of the backend is static.
+LINUX_LEGACY_ALLOWED_NEEDED = re.compile(
+    r"^(libX11\.so\.6|libc\.so\.6|libm\.so\.6|libdl\.so\.2|libpthread\.so\.0|librt\.so\.1|"
+    r"ld-linux[-a-z0-9_.]*\.so\.[0-9]+)$")
+
+I386_X11_HELP = """\
+linux legacy i686: the 32-bit libX11 is not installed, so the i686 executable cannot be linked
+(`gcc -m32` itself works). On Ubuntu / Debian install it with:
+  sudo dpkg --add-architecture i386
+  sudo apt update
+  sudo apt install libx11-dev:i386
+(gcc-multilib and g++-multilib, for -m32 and a static 32-bit libstdc++, are needed too; they are
+already there when `gcc -m32` links a program.) Then run the tool again."""
+
+
+def can_link_i386_x11(cc):
+    """True when a 32-bit program using libX11 links (the i386 libX11 development files exist)."""
+    src = "#include <X11/Xlib.h>\nint main(void) { return XOpenDisplay(0) != 0; }\n"
+    res = subprocess.run([cc, "-m32", "-x", "c", "-", "-o", os.devnull, "-lX11"],
+                         input=src, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         universal_newlines=True)
+    return res.returncode == 0
+
+
+def elf_report(exe):
+    """(NEEDED libraries, {symbol family: highest version string}) of an ELF executable, read
+    with objdump: the needed libraries of `objdump -p` and the version nodes of `objdump -T`
+    (GLIBC_2.34, GLIBCXX_3.4.21, ...)."""
+    needed = re.findall(r"^\s*NEEDED\s+(\S+)", capture(["objdump", "-p", exe]), re.MULTILINE)
+    highest = {}
+    for m in re.finditer(r"\b(GLIBC|GLIBCXX|CXXABI|GCC)_([0-9][0-9.]*)",
+                         capture(["objdump", "-T", exe])):
+        key = tuple(int(x) for x in m.group(2).split("."))
+        if m.group(1) not in highest or key > highest[m.group(1)][0]:
+            highest[m.group(1)] = (key, m.group(2))
+    return needed, dict((family, value[1]) for family, value in highest.items())
+
+
+def build_linux_legacy_arch(arch, build_root):
+    """Builds ui/legacy/linux-xlib for one architecture with make; returns (record, artifact)."""
+    src = common.ROOT / "ui" / "legacy" / "linux-xlib"
+    build_dir = build_root / ("linux-legacy-" + arch)
+    common.run(["make", "-C", src, "ARCH=" + arch, "BUILD=" + str(build_dir)])
+    exe = build_dir / "loomora-xlib"
+    if not exe.is_file():
+        sys.exit("build finished but %s is missing" % exe)
+
+    needed, highest = elf_report(exe)
+    bad = [lib for lib in needed if not LINUX_LEGACY_ALLOWED_NEEDED.match(lib)]
+    if bad:
+        sys.exit("%s needs shared libraries the Linux Legacy UI must not need: %s (allowed: "
+                 "libX11 and the C library; the C++ runtime must be linked statically)"
+                 % (exe, ", ".join(bad)))
+    if "GLIBCXX" in highest or "CXXABI" in highest:
+        sys.exit("%s needs libstdc++ symbols (%s): the C++ runtime must be linked statically"
+                 % (exe, ", ".join(sorted(highest))))
+
+    out_dir = common.ROOT / "out" / "linux-legacy" / arch
+    out_dir.mkdir(parents=True, exist_ok=True)
+    artifact = out_dir / exe.name
+    shutil.copyfile(str(exe), str(artifact))
+    os.chmod(str(artifact), 0o755)
+
+    gxx_version = capture(["g++", "-dumpfullversion"])
+    gcc_version = capture(["gcc", "-dumpfullversion"])
+    glibc = "glibc " + capture(["ldd", "--version"]).splitlines()[0].split()[-1]
+    host_id = linux_platform_id()
+    host_triple = capture(["g++", "-dumpmachine"])
+    if arch == "x86_64":
+        platform_id = host_id
+        target = host_triple
+    else:
+        platform_id = "linux-i686"  # no platform record yet (T087)
+        target = "i686-linux-gnu (gcc -m32 on %s)" % host_triple
+    glibc_max = highest.get("GLIBC")
+    record = {
+        "platform_id": platform_id,
+        "ui_variant": "legacy",
+        "cpp_std": "c++11",
+        "compiler": "gcc-%s" % gxx_version,
+        "target": target,
+        "output": "native",
+        "ui_language": "c",
+        "ui_toolkit": "Xlib (libX11 only, no toolkit), core X11 font fixed, C89 (gnu89) with POSIX",
+        "ui_compiler": "gcc-%s" % gcc_version,
+        "artifact": {"name": artifact.name, "size": artifact.stat().st_size},
+        "disabled_features": [],
+        "fallbacks": fallbacks_of(platform_id),
+        "notes": "make (ui/legacy/linux-xlib/Makefile, ARCH=%s) on %s (%s); static libloomora.a "
+                 "built from core/src with -std=c++11; libstdc++ and libgcc linked statically; "
+                 "shared libraries needed: %s; highest symbol versions (objdump -T): %s. BUILT "
+                 "NATIVELY, NOT IN THE manylinux2010 CONTAINER: the executable needs %s or newer, "
+                 "so the glibc 2.12 baseline of the Linux Legacy floor is NOT verified (spike S4 "
+                 "/ T069 stays open); not run on any system other than the build machine. "
+                 "Artifact copied to out/linux-legacy/%s/, sha256 %s."
+                 % (arch, host_id, glibc, ", ".join(needed),
+                    ", ".join("%s_%s" % item for item in sorted(highest.items())) or "none",
+                    "GLIBC_" + glibc_max if glibc_max else "no GLIBC symbol version", arch,
+                    common.sha256(artifact)),
+    }
+    return record, artifact
+
+
+def run_linux_legacy(args):
+    if not in_wsl_or_linux():
+        if sys.platform == "win32":
+            rerun_in_wsl(args, "linux", "legacy", ["--arch", args.arch])
+            return  # the inner run has written the deliverable records
+        sys.exit("linux legacy cannot be built on this host (%s): use Linux or Windows with WSL"
+                 % sys.platform)
+    require_tools(["make", "gcc", "g++", "ar", "objdump", "ldd"])
+    if platform.machine() != "x86_64":
+        sys.exit("linux legacy: this tool builds both architectures on an x86_64 host (gcc -m32 "
+                 "for i686); this machine is %s" % platform.machine())
+    print("NOTE: linux legacy is built NATIVELY here (gcc %s), not in the manylinux2010 "
+          "container: the glibc 2.12 baseline is NOT verified (spike S4 / T069)."
+          % capture(["gcc", "-dumpfullversion"]))
+    build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (Path.home() / "loomora-build"))
+    wanted = LINUX_LEGACY_ARCHS if args.arch == "all" else (args.arch,)
+    failed = []
+    for arch in wanted:
+        if arch == "i686" and not can_link_i386_x11("gcc"):
+            print(I386_X11_HELP)
+            failed.append(arch)
+            continue
+        record, artifact = build_linux_legacy_arch(arch, build_root)
+        write_deliverable(record, artifact)
+    if failed:
+        sys.exit("linux legacy: not built: %s (see above)" % ", ".join(failed))
 
 
 # ---- windows legacy (T075) -----------------------------------------------------------------
@@ -427,6 +578,7 @@ def write_deliverable(record, artifact):
 
 TARGETS = {
     ("linux", "modern"): run_linux_modern,
+    ("linux", "legacy"): run_linux_legacy,
     ("windows", "legacy"): run_windows_legacy,
 }
 
@@ -438,6 +590,8 @@ def main(argv=None):
     parser.add_argument("variant", choices=VARIANTS)
     parser.add_argument("--wsl-distro", help="WSL distribution used on a Windows host "
                         "(default $LOOMORA_WSL_DISTRO or %s)" % DEFAULT_WSL_DISTRO)
+    parser.add_argument("--arch", choices=LINUX_LEGACY_ARCHS + ("all",), default="all",
+                        help="linux legacy only: the architecture to build (default all)")
     args = parser.parse_args(argv)
 
     key = (args.platform, args.variant)
