@@ -64,7 +64,7 @@ size_t      loomora_probe_record(const char *platform_id, int32_t ui_variant, in
 | Windows Legacy (Win32, C++), macOS / iOS (Objective-C), Linux Legacy (Xlib, C++), Linux Modern (GTK 3 with gtkmm, C++) | C symbols, static library `libloomora.a` | the native UI includes `loomora.h` |
 | Windows Modern (WinUI 3) | same C symbols in `loomora.dll` (x64, ARM64) | called from C# with `LibraryImport` |
 | macOS / iOS Modern (SwiftUI) | same C symbols in a static library | imported by Swift through a module map |
-| Android | `Java_fr_loomora_probe_Native_*` in `bridge/jni/loomora_jni.cpp` | `Native.java` declares the `native` methods; strings returned as `String`; glue only converts `jstring` ↔ UTF-8 |
+| Android | `Java_fr_bansan_loomora_probe_Native_*` in `bridge/jni/loomora_jni.cpp` | `Native.java` declares the `native` methods; strings returned as `String`; glue only converts `jstring` ↔ UTF-8 |
 | Web | Emscripten exports (`EXPORTED_FUNCTIONS` from `bridge/wasm/exports.txt`) | called with `ccall`/`cwrap`; same API in WebAssembly and in JavaScript |
 
 ## Guarantees

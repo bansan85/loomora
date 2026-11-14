@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Window theme before Compose draws: light system theme. -->
+<resources>
+    <style name="Theme.Loomora" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#FFFFFBFE</item>
+    </style>
+</resources>

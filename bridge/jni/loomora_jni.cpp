@@ -1,5 +1,5 @@
 // JNI glue of the Android UIs (Legacy: Java; Modern: Kotlin, same class): the functions of
-// contracts/c-api.md, called as fr.loomora.probe.Native.<name>.
+// contracts/c-api.md, called as fr.bansan.loomora.probe.Native.<name>.
 //
 // The glue only converts between Java strings and UTF-8 and forwards the call: no logic. A Java
 // string is UTF-16 and JNI's GetStringUTFChars gives "modified UTF-8" (a character outside the
@@ -123,12 +123,12 @@ jstring FromUtf8(JNIEnv *env, const char *bytes, std::size_t n) {
 
 extern "C" {
 
-JNIEXPORT jint JNICALL Java_fr_loomora_probe_Native_abiVersion(JNIEnv *, jclass) {
+JNIEXPORT jint JNICALL Java_fr_bansan_loomora_probe_Native_abiVersion(JNIEnv *, jclass) {
     return static_cast<jint>(loomora_abi_version());
 }
 
 // The greeting of `input`, or null when the backend refuses it (error code < 0).
-JNIEXPORT jstring JNICALL Java_fr_loomora_probe_Native_greet(JNIEnv *env, jclass, jstring input) {
+JNIEXPORT jstring JNICALL Java_fr_bansan_loomora_probe_Native_greet(JNIEnv *env, jclass, jstring input) {
     std::string in;
     if (!ToUtf8(env, input, in))
         return NULL;
@@ -144,23 +144,23 @@ JNIEXPORT jstring JNICALL Java_fr_loomora_probe_Native_greet(JNIEnv *env, jclass
     }
 }
 
-JNIEXPORT jint JNICALL Java_fr_loomora_probe_Native_isEol(JNIEnv *, jclass, jint family,
+JNIEXPORT jint JNICALL Java_fr_bansan_loomora_probe_Native_isEol(JNIEnv *, jclass, jint family,
                                                            jint major, jint minor) {
     return static_cast<jint>(loomora_is_eol(family, major, minor));
 }
 
-JNIEXPORT jstring JNICALL Java_fr_loomora_probe_Native_eolWarning(JNIEnv *env, jclass) {
+JNIEXPORT jstring JNICALL Java_fr_bansan_loomora_probe_Native_eolWarning(JNIEnv *env, jclass) {
     const char *text = loomora_eol_warning();
     return FromUtf8(env, text, std::char_traits<char>::length(text));
 }
 
-JNIEXPORT jstring JNICALL Java_fr_loomora_probe_Native_buildCompiler(JNIEnv *env, jclass) {
+JNIEXPORT jstring JNICALL Java_fr_bansan_loomora_probe_Native_buildCompiler(JNIEnv *env, jclass) {
     const char *text = loomora_build_compiler();
     return FromUtf8(env, text, std::char_traits<char>::length(text));
 }
 
 // The probe JSON line (ASCII), or null when the backend could not build it.
-JNIEXPORT jstring JNICALL Java_fr_loomora_probe_Native_probeRecord(
+JNIEXPORT jstring JNICALL Java_fr_bansan_loomora_probe_Native_probeRecord(
     JNIEnv *env, jclass, jstring platformId, jint uiVariant, jint coreKind, jstring input,
     jstring displayedText, jint displayed, jint displayMs, jlong rssKb, jint eolWarningShown,
     jstring disabledFeatures, jstring timestampUtc) {

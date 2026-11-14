@@ -1,4 +1,4 @@
-package fr.loomora.probe;
+package fr.bansan.loomora.probe;
 
 import android.content.Intent;
 import android.os.Build;
