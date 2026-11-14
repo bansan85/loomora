@@ -33,6 +33,11 @@
 - Modern UIs may use up to **C++17** (for example gtkmm 4 needs it). Pick the lowest standard the toolkit accepts when it does not need more.
 - Linux UIs are written in C++ (Xlib for Legacy, gtkmm for Modern) and built with CMake. Meson and Makefiles are not used.
 
+## Where binaries are built
+
+- Linux binaries (Legacy and Modern) are always compiled **on the target machine**, never built on a recent system and installed on an older one. The glibc and libstdc++ versions of the build host therefore do not matter, and there is no container or static C++ runtime to widen the baseline. The target needs a C++11 compiler, CMake and the development files of the libraries the UI uses.
+- Windows binaries (including the Windows 2000 floor) are cross-compiled with MinGW-w64 from WSL, because Visual Studio no longer supports Windows 2000.
+
 ## Linux Modern UI (GTK)
 
 - The Modern UI uses gtkmm (the system packages) on top of GTK. The minimum GTK version is **3.10**: the UI must always build and run with only the 3.10 API.
