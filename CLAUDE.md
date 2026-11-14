@@ -47,3 +47,13 @@
 ## Builds in WSL
 
 - Any build done in WSL goes in a subfolder of `$HOME` (for example `~/loomora-build/<target>`), never in `/tmp` and never inside the Windows tree.
+
+## Verification and cost
+
+- `python tools/verify.py quick` (the default) is the verification of any branch: build, ctest, the reference vectors through each UI, `check_std`, `validate_records`, one line per check, logs under the build directory. An agent runs it instead of improvising its own checks; the probe line, the vectors, ctest and `validate_records` are the functional proof.
+- `python tools/verify.py full` only for a graphical change: a new graphical component, a new graphics platform or toolkit, new font / Unicode / emoji / non-ASCII rendering support, or a change of how text is drawn. Never to "check that it still works". It runs the Linux UIs on a private Xvfb display (never WSLg's `:0`).
+- At most one screenshot per distinct rendering scenario, taken only by `full`, never to check that something works.
+- Screenshots and other images are not evidence by default: before adding any image to `docs/implementation` the owner's authorization is asked first. An agent does not commit images; it lists the candidates (scenario, why it proves something new, file name) in its report, and they are committed only after the owner approves. `verify.py full` prints its screenshots as candidates, not committed, and never copies them into the repository.
+- One default variant per UI during the probe phase. The other variants (`--variants`: GTK 3.10 floor, GTK 4, i686 Xlib, Xlib core font) only on request or when their own files change.
+- Sub-agent prompts state the scope and the essential rules inline (language, commit format, worktree, build location, what not to touch) instead of only pointing to linked documents, which cheaper models read badly, and ask for a final report of at most about 25 lines.
+- Parallel agents each use their own worktree and their own build directory (the default build directory of `verify.py` is per worktree).

@@ -351,7 +351,7 @@ class WindowsLegacyLauncher(Launcher):
         Launcher.__init__(self, args)
         self.arch = args.arch or "x64"
         self.tag = self.arch
-        self.exe = windows_executable(self.arch)
+        self.exe = Path(args.exe) if args.exe else windows_executable(self.arch)
 
     def _build(self):
         distro = self.args.wsl_distro or os.environ.get("LOOMORA_WSL_DISTRO") or DEFAULT_WSL_DISTRO
@@ -371,9 +371,12 @@ class WindowsLegacyLauncher(Launcher):
         if not self.exe.is_file():
             raise RuntimeError("executable not found: %s (run 'python tools/build.py windows "
                                "legacy' in WSL)" % self.exe)
+        try:
+            shown = self.exe.relative_to(common.ROOT).as_posix()
+        except ValueError:  # --exe outside the repository
+            shown = str(self.exe)
         return "Windows legacy %s: %s (%d bytes, sha256 %s)" % (
-            self.arch, self.exe.relative_to(common.ROOT).as_posix(), self.exe.stat().st_size,
-            common.sha256(self.exe))
+            self.arch, shown, self.exe.stat().st_size, common.sha256(self.exe))
 
     def run(self, text, timeout):
         start = time.time()
@@ -813,8 +816,9 @@ def main(argv=None):
                     "reports the same platform id as the x64 one)")
     ap.add_argument("--dry-run", action="store_true",
                     help="only list the vectors that would run and those skipped")
-    ap.add_argument("--exe", help="Linux only: the executable to run (a path on the Linux side), "
-                    "instead of the one that tools/build.py left in $HOME/loomora-build or out/")
+    ap.add_argument("--exe", help="the executable to run instead of the one that tools/build.py "
+                    "left (Linux: a path on the Linux side, in $HOME/loomora-build or out/; "
+                    "Windows legacy: a loomora.exe, default out/windows-legacy/<arch>/)")
     ap.add_argument("--inner-variant", choices=("legacy", "modern"), help=argparse.SUPPRESS)
     ap.add_argument("--inner-run", help=argparse.SUPPRESS)    # Linux side, see the docstring
     ap.add_argument("--inner-where", action="store_true", help=argparse.SUPPRESS)
