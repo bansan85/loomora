@@ -71,6 +71,18 @@ wsl$ out/linux-legacy/x86_64/loomora-xlib --probe
 
 The platform id is `linux-<ID>-<VERSION_ID>-<machine>` of `/etc/os-release`. `--probe` needs an X display (WSLg provides `:0`) and prints one JSON line on standard output.
 
+Android (API 9 to 23; built on the Windows host, not in WSL; the emulator can run only from API 16):
+
+```
+PS> $env:LOOMORA_ANDROID_NDK = "E:\Program\Androidndroid-ndk-r15c"   # NDK r15c only: r16b has no android-9
+PS> $env:LOOMORA_ANDROID_SDK = "E:\Program\Android\Sdk"                # platforms/android-9, build-tools with d8
+PS> python tools/build.py android legacy
+PS> emulator -avd API16 -no-window -no-audio -no-snapshot -no-boot-anim   # start it yourself, kill it with: adb emu kill
+PS> python tools/run_vectors.py android-4.1.2-x86 legacy
+```
+
+`build.py` builds the four ABIs (`armeabi`, `armeabi-v7a`, `x86`: API 9 sysroot; `arm64-v8a`: API 21) with `cmake/toolchains/android-ndk-r15c.cmake` and packages one APK, `outndroid-legacy\loomora.apk` (`ui/legacy/android-views/build_apk.py`); the self-tests are in `outndroid-legacy\selftest\<abi>\`. Only the x86 build can be run (the platform id is `android-<release>-<abi>`, read from the device). See ADR 0016.
+
 **Scenario 3: one platform, Modern UI**
 
 Only Linux exists (Windows 11 WinUI 3 is not written):

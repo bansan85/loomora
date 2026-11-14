@@ -20,7 +20,7 @@ The full list of features, platforms and constraints is the [requirements docume
 
 ## Where the project stands
 
-The graphical application does not exist yet. The project is in a validation phase: a minimal probe (a text field pre-filled "Coucou" and a label showing "Bonjour " followed by the field) checks, on each platform and for each interface variant, that the chosen technical approach holds, including on systems as old as Windows 2000. Three probe interfaces exist today: Windows Legacy, Linux Legacy and Linux Modern. The other platforms are specified but not written.
+The graphical application does not exist yet. The project is in a validation phase: a minimal probe (a text field pre-filled "Coucou" and a label showing "Bonjour " followed by the field) checks, on each platform and for each interface variant, that the chosen technical approach holds, including on systems as old as Windows 2000. Four probe interfaces exist today: Windows Legacy, Linux Legacy, Linux Modern and Android Legacy (built for API 9, run on API 16 only). The other platforms are specified but not written.
 
 ## Where to go next
 
