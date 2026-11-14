@@ -35,7 +35,7 @@ Rules enforced as ERROR, each quoted from data-model.md:
     (see below).
   * Deliverable -> Fallback: every id of fallbacks[] exists in fallbacks.json; Fallback
     platform_ids[] and Hypothesis platform_ids[] reference existing platforms; ids are unique;
-    Spike ids are S1-S9, status in {open, confirmed, refuted}, "result" non-empty unless open,
+    Spike ids are S1-S9 except S4 (removed on 2026-11-14), status in {open, confirmed, refuted}, "result" non-empty unless open,
     "A refuted spike must name the chosen fallback" (field "fallback" or "adr"); an "adr" path
     must exist; "sources" lists (any record) reference ids of sources.json.
 
@@ -47,8 +47,8 @@ is left without a verdict"), because trials are not done yet:
   * a verdict with no "reproduction" path (SC-004 wants a procedure) unless not_tested.
 
 Other WARN: ok / ok_restricted verdict without a deliverable of that platform and variant; ko
-verdict with fewer than two attempts (SC-003); in-scope floor inconsistencies; spikes S1-S9 not
-all present. INFO: optional fields that data-model.md does not name (for example the `verified`
+verdict with fewer than two attempts (SC-003); in-scope floor inconsistencies; spikes S1-S9 (S4
+excepted) not all present. INFO: optional fields that data-model.md does not name (for example the `verified`
 and `note` of sources.json) are allowed and listed, never silently ignored.
 """
 import argparse
@@ -73,7 +73,9 @@ ENVIRONMENTS = ("physical", "vm", "emulator", "browser-archive")
 OUTPUTS = ("native", "wasm", "js")
 WEB_PATHS = ("wasm", "js")
 SPIKE_STATUSES = ("open", "confirmed", "refuted")
-SPIKE_IDS = tuple("S%d" % i for i in range(1, 10))
+# S4 (manylinux2010 build, glibc 2.12) was removed on 2026-11-14: Linux binaries are built on the
+# machine that runs them (docs/implementation/adr/0007).
+SPIKE_IDS = tuple("S%d" % i for i in range(1, 10) if i != 4)
 HYPOTHESIS_IDS = tuple("V%d" % i for i in range(1, 21))
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")  # same pattern as probe-result.schema.json
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -337,7 +339,7 @@ def check_spikes(path, root, source_ids, report):
         check_source_refs(rec, source_ids, path, report, label)
     missing = [s for s in SPIKE_IDS if s not in seen]
     if missing:
-        report.warn(path, "spikes not recorded: %s (research.md defines S1-S9)" % ", ".join(missing))
+        report.warn(path, "spikes not recorded: %s (research.md defines S1-S9, S4 removed)" % ", ".join(missing))
     report_unknown(unknown, path, report, "spikes")
 
 
@@ -739,7 +741,7 @@ def _good_tree():
                      ("min_compiler", "gcc 7"), ("platform_ids", ["lin-1"]), ("reason", "r")])]
     tree["validation/spikes.json"] = [
         OrderedDict([("id", "S%d" % i), ("question", "q"), ("status", "open"), ("result", ""),
-                     ("adr", "")]) for i in range(1, 10)]
+                     ("adr", "")]) for i in range(1, 10) if i != 4]
     tree["validation/spikes.json"][0].update(status="confirmed", result="done")
     tree["validation/spikes.json"][1].update(status="refuted", result="no", adr="adr/0002-x.md")
     tree["validation/platforms/lin-1.json"] = platform("lin-1", "linux", "x86_64")

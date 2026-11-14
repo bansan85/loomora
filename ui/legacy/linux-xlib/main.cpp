@@ -1,5 +1,6 @@
-// Loomora Legacy UI for Linux: C++11 and Xlib (libX11 is the only library linked besides the C
-// library and, in a native build, the C++ runtime), no GTK, no FreeType at link time.
+// Loomora Legacy UI for Linux: C++11 and Xlib, no GTK. libX11 is linked, and libXft with
+// fontconfig when CMake finds them (LOOMORA_XLIB_HAVE_XFT); the C++ runtime of the system is
+// linked dynamically. The program is built on the machine it runs on.
 //
 // One input line pre-filled "Coucou" (limited to 1,000 characters, Unicode code points, as the
 // GTK UI) and the greeting returned by the C++ backend, wrapped and centred below it; an
@@ -7,18 +8,16 @@
 // file only creates the window, runs the event loop, converts between the keys, UTF-8 and the
 // code points drawn, and draws; the greeting, the end-of-life test and its text and the probe
 // line all come from the backend through loomora.h (the C API is the only link to the core).
-// Probe mode is in probe.cpp, the Xft loader in xftdl.cpp, the key symbol table in keys.cpp.
+// Probe mode is in probe.cpp, the Xft fonts in xftfonts.cpp, the key symbol table in keys.cpp.
 //
 // The Xlib resources (display, window, GC, core font, input method) and the Xft ones (font list,
 // colour, drawing context) are owned by RAII classes, so every path out of main() releases them in
 // the right order. No exception crosses the Xlib callback (OnXError) or the backend's C API; an
-// exception that reaches main() (out of memory) ends the program with status 1. The program uses
-// <cstdio>, <string> and <vector> only: no <iostream>, no <thread>, nothing that would need a
-// C library newer than glibc 2.12.
+// exception that reaches main() (out of memory) ends the program with status 1.
 //
 // TEXT. Two paths, chosen once at start:
-// * Xft (the normal path, xftdl.cpp): client-side fonts through libXft and fontconfig, both opened
-//   at RUN TIME with dlopen (nothing links against them). Each code point is drawn with the first
+// * Xft (the normal path, xftfonts.cpp, built when CMake finds libXft and fontconfig):
+//   client-side fonts. Each code point is drawn with the first
 //   font of fontconfig's list for "sans-serif" that has it, so Latin, Greek, Cyrillic, Hebrew,
 //   Arabic, CJK, symbols and emoji come from whichever installed font covers them.
 //   A code point NO installed font has is drawn as an empty box (a "tofu", drawn by this UI),
@@ -32,8 +31,9 @@
 //   at the pen position of the character before it only when its font gives it a zero advance, a
 //   ZWJ sequence (a family emoji, a flag) is drawn as its separate components, an Indic
 //   conjunct is not formed.
-// * Core font (no libXft or no fontconfig on the system, or LOOMORA_XLIB_NO_XFT set): the core X11
-//   font `fixed`. If it is an ISO 10646-1 font code points of the Basic Multilingual Plane are
+// * Core font (CMake did not find libXft and fontconfig, so the UI is built without them: this is
+//   the fallback xlib-core-font-glyphs; the same path is taken at run time when LOOMORA_XLIB_NO_XFT
+//   is set, a test switch, or when Xft cannot open any font): the core X11 font `fixed`. If it is an ISO 10646-1 font code points of the Basic Multilingual Plane are
 //   looked up in it with XDrawString16, otherwise it is taken as ISO 8859-1 and only U+0020..U+00FF
 //   can be drawn. A code point the font does not have (a missing glyph, a control character, a
 //   code point above U+FFFF, an invalid byte) is drawn as '?'; when that happens the UI reports
@@ -45,7 +45,7 @@
 // XLookupString (Latin-1) plus the key symbol to Unicode conversion of keys.cpp. No paste. The
 // caret is always at the end: Backspace (or Delete) deletes the last character. The environment
 // switches LOOMORA_XLIB_NO_XFT and LOOMORA_XLIB_NO_XIM force the core font and the no-input-method
-// paths (tests).
+// paths (tests); the first keeps the core-font path testable on a machine that has Xft.
 #include <sys/select.h>
 #include <sys/time.h>
 #include <sys/utsname.h>
@@ -69,7 +69,9 @@
 #include "keys.hpp"
 #include "loomora.h"
 #include "probe.hpp"
-#include "xftdl.hpp"
+#ifdef LOOMORA_XLIB_HAVE_XFT
+#include "xftfonts.hpp"
+#endif
 
 namespace {
 
@@ -88,7 +90,7 @@ const std::size_t kNoSpace = static_cast<std::size_t>(-1);
 const int kNoWrap = 1 << 20;
 
 // What a character of a block is drawn with (Block::font); a value >= 0 is the index of the Xft
-// font in the FontSet.
+// font in the FontSet (Xft builds only).
 const int kFontTofu = -1; // an empty box: no installed font has the code point
 const int kFontNone = -2; // nothing, no width: an invisible format character
 const int kFontCore = -3; // the core font `fixed`, glyph code in Block::glyphs
@@ -410,6 +412,7 @@ struct Block {
     std::size_t size() const { return cps.size(); }
 };
 
+#ifdef LOOMORA_XLIB_HAVE_XFT
 // true for the format characters that have no picture and no width of their own (see the top of
 // this file): drawn as nothing instead of a box when no shaping is available.
 bool IsInvisible(unsigned long cp) {
@@ -418,6 +421,7 @@ bool IsInvisible(unsigned long cp) {
            (cp >= 0xE0100 && cp <= 0xE01EF) || (cp >= 0x180B && cp <= 0x180D) || cp == 0x034F ||
            cp == 0x00AD || cp == 0xFEFF;
 }
+#endif
 
 int TextWidth(const Block &b, std::size_t from, std::size_t to) {
     int w = 0;
@@ -487,33 +491,13 @@ unsigned long AllocColour(Display *dpy, int screen, const char *name, unsigned l
     return fallback;
 }
 
-// Reads a non-negative decimal number at *p and advances *p past it; false when there is none.
-// (Not sscanf or strtol: with the headers of glibc 2.38 and later a C++ program that calls them
-// is linked to __isoc23_sscanf / __isoc23_strtol, GLIBC_2.38, and would not start on an older
-// glibc for nothing.)
-bool ParseNumber(const char **p, int *value) {
-    const char *s = *p;
-    if (*s < '0' || *s > '9')
-        return false;
-    int v = 0;
-    while (*s >= '0' && *s <= '9') {
-        if (v < 100000)
-            v = v * 10 + (*s - '0');
-        s++;
-    }
-    *value = v;
-    *p = s;
-    return true;
-}
-
 // Major and minor kernel version, the version the backend's Linux end-of-life rule is expressed
 // in ("6.18.58..." gives 6 and 18). Returns false when it cannot be read.
 bool KernelVersion(int *major, int *minor) {
     utsname un;
     if (uname(&un) != 0)
         return false;
-    const char *p = un.release;
-    return ParseNumber(&p, major) && *p++ == '.' && ParseNumber(&p, minor);
+    return std::sscanf(un.release, "%d.%d", major, minor) == 2;
 }
 
 // ---- the window ----------------------------------------------------------------------------
@@ -531,12 +515,14 @@ class App {
     int Run(const probe::Options &probeOptions);
 
   private:
+#ifdef LOOMORA_XLIB_HAVE_XFT
     int TextAscent() const { return fonts_ ? fonts_->Ascent() : core_.ascent(); }
-    int LineHeight() const {
-        const int asc = TextAscent();
-        const int desc = fonts_ ? fonts_->Descent() : core_.descent();
-        return asc + desc + 2;
-    }
+    int TextDescent() const { return fonts_ ? fonts_->Descent() : core_.descent(); }
+#else
+    int TextAscent() const { return core_.ascent(); }
+    int TextDescent() const { return core_.descent(); }
+#endif
+    int LineHeight() const { return TextAscent() + TextDescent() + 2; }
 
     Block MakeBlock(const std::string &utf8, int avail, bool newlineBreaks);
     void DrawGlyphs(const Block &b, std::size_t from, std::size_t to, int x, int y);
@@ -552,10 +538,12 @@ class App {
     XWindow window_;
     CoreFont core_; // loaded on the core font path only
     XGc gc_;
+#ifdef LOOMORA_XLIB_HAVE_XFT
     // The Xft objects, valid when fonts_ is set; ink_ and draw_ must die before fonts_.
-    std::unique_ptr<xftdl::FontSet> fonts_;
-    std::unique_ptr<xftdl::InkColor> ink_;
-    std::unique_ptr<xftdl::DrawHandle> draw_;
+    std::unique_ptr<xftfonts::FontSet> fonts_;
+    std::unique_ptr<xftfonts::InkColor> ink_;
+    std::unique_ptr<xftfonts::DrawHandle> draw_;
+#endif
     InputMethod input_method_;
     Visual *visual_ = nullptr;
     Colormap cmap_ = 0;
@@ -599,6 +587,7 @@ Block App::MakeBlock(const std::string &utf8, int avail, bool newlineBreaks) {
         if (newlineBreaks && cp == 0x0A) {
             font = kFontNone; // the break itself is made by WrapBlock
             advance = 0;
+#ifdef LOOMORA_XLIB_HAVE_XFT
         } else if (fonts_) {
             int index = 0;
             if (IsInvisible(cp)) {
@@ -612,6 +601,7 @@ Block App::MakeBlock(const std::string &utf8, int avail, bool newlineBreaks) {
                 advance = fonts_->TofuWidth();
                 b.missing++;
             }
+#endif
         } else {
             font = kFontCore;
             if (!core_.HasGlyph(cp)) {
@@ -639,6 +629,7 @@ void App::DrawGlyphs(const Block &b, std::size_t from, std::size_t to, int x, in
         int runW = b.adv[i];
         if (f == kFontNone) {
             // nothing to draw
+#ifdef LOOMORA_XLIB_HAVE_XFT
         } else if (f == kFontTofu) {
             const int tw = fonts_->TofuWidth();
             const int th = fonts_->TofuHeight();
@@ -651,6 +642,7 @@ void App::DrawGlyphs(const Block &b, std::size_t from, std::size_t to, int x, in
                 j++;
             }
             draw_->DrawString(*ink_, fonts_->Font(f), x, y, &b.cps[i], static_cast<int>(j - i));
+#endif
         } else {
             // core font: the run of core glyphs
             while (j < to && b.font[j] == kFontCore) {
@@ -907,14 +899,19 @@ int App::Init(const std::string &initialInput) {
     visual_ = DefaultVisual(dpy, screen_);
     cmap_ = DefaultColormap(dpy, screen_);
 
-    // Client-side fonts when libXft and fontconfig can be loaded, the core font otherwise.
-    fonts_ = xftdl::FontSet::Open(dpy, screen_);
+    // Client-side fonts (Xft) when the UI is built with them and one opens, the core font
+    // otherwise.
+    bool coreFont = true;
+#ifdef LOOMORA_XLIB_HAVE_XFT
+    fonts_ = xftfonts::FontSet::Open(dpy, screen_);
     if (fonts_) {
-        ink_ = xftdl::InkColor::Alloc(*fonts_, dpy, visual_, cmap_, "black");
+        ink_ = xftfonts::InkColor::Alloc(dpy, visual_, cmap_, "black");
         if (!ink_)
             fonts_.reset();
     }
-    if (!fonts_ && !core_.Load(dpy, "fixed")) {
+    coreFont = !fonts_;
+#endif
+    if (coreFont && !core_.Load(dpy, "fixed")) {
         std::fprintf(stderr, "loomora: the core font \"fixed\" is not available\n");
         return 1;
     }
@@ -947,13 +944,15 @@ int App::Init(const std::string &initialInput) {
         XSetFont(dpy, gc_.get(), core_.id());
     XSetForeground(dpy, gc_.get(), black_);
     XSetBackground(dpy, gc_.get(), white_);
+#ifdef LOOMORA_XLIB_HAVE_XFT
     if (fonts_) {
-        draw_ = xftdl::DrawHandle::Create(*fonts_, dpy, window_.id(), visual_, cmap_);
+        draw_ = xftfonts::DrawHandle::Create(dpy, window_.id(), visual_, cmap_);
         if (!draw_) {
             std::fprintf(stderr, "loomora: cannot create the Xft drawing context\n");
             return 1;
         }
     }
+#endif
     input_method_.Open(dpy, window_.id());
     return 0;
 }

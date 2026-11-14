@@ -9,9 +9,9 @@
 # The UI target has its own language standard, set as a property of that target only (never
 # CMAKE_CXX_STANDARD): C++17 with gtkmm-4.0, which needs it (sigc++-3), and C++11 with gtkmm-3.0,
 # the lowest standard whose headers (gtkmm 3.24, glibmm 2.66, sigc++ 2.12) compile; the UI needs
-# nothing newer than C++11 itself. The C++ runtime is the distribution's own (libstdc++.so.6 is
-# needed by gtkmm in any case); LOOMORA_STATIC_CXX_RUNTIME links it statically into the
-# executable (ADR 0001 rule 4, ADR 0004, ADR 0006).
+# nothing newer than C++11 itself. The C++ runtime (libstdc++, libgcc) is the system's own, linked
+# dynamically (gtkmm needs libstdc++.so.6 in any case). The program is built on the machine it
+# runs on (ADR 0007).
 #
 # GTK version policy (CLAUDE.md, docs/implementation/adr/0005-gtk-version-policy.md, 0006): the
 # UI always compiles with GDK_VERSION_MIN_REQUIRED at 3.10. LOOMORA_GTK_API picks GTK 3 with
@@ -26,10 +26,6 @@ set_property(CACHE LOOMORA_GTK_API PROPERTY STRINGS 3 4)
 # -Werror=deprecated-declarations, so that any GTK or GDK symbol newer than 3.10 fails the build
 # and no version-gated feature is compiled. It proves the 3.10 path; it is not the default.
 option(LOOMORA_GTK_FLOOR "Build the GTK 3.10 path only and fail on any newer GTK/GDK symbol" OFF)
-# Link libstdc++ and libgcc into the executable. Off by default: the distribution's own
-# libstdc++ is used, which keeps the executable small and its glibc requirement as low as the
-# build host allows. Declared in docs/implementation/validation/fallbacks.json.
-option(LOOMORA_STATIC_CXX_RUNTIME "Link the C++ runtime (libstdc++, libgcc) statically" OFF)
 
 if(NOT LOOMORA_GTK_API STREQUAL "3" AND NOT LOOMORA_GTK_API STREQUAL "4")
   message(FATAL_ERROR "LOOMORA_GTK_API must be 3 or 4, not \"${LOOMORA_GTK_API}\"")
@@ -63,10 +59,6 @@ if(LOOMORA_GTK_API STREQUAL "3")
     target_compile_definitions(loomora_gtk3 PRIVATE GDK_VERSION_MAX_ALLOWED=GDK_VERSION_3_10)
     target_compile_options(loomora_gtk3 PRIVATE -Werror=deprecated-declarations)
   endif()
-endif()
-
-if(LOOMORA_STATIC_CXX_RUNTIME)
-  target_link_options(loomora_gtk3 PRIVATE -static-libstdc++ -static-libgcc)
 endif()
 
 install(TARGETS loomora_gtk3 RUNTIME DESTINATION bin)
