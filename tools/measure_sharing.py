@@ -2,7 +2,7 @@
 """Measure the shared-code share per platform and variant (FR-011, SC-007, research R9, T104).
 
 Usage:
-  python tools/measure_sharing.py [--root DIR] [--format text|json] [--verbose] [--write]
+  python tools/measure_sharing.py [--root DIR] [--format text|json] [--verbose] [--write] [--platform ID[,ID]]
                                   [--min-ratio 0.8] [--strict] [--selftest]
 
 Counts non-empty, non-comment source lines of three kinds of code:
@@ -40,6 +40,8 @@ What is counted (a decision, so the numbers are reproducible):
 --verbose    text: also the line count of every counted file.
 --min-ratio  the share below which a row is marked "BELOW" (default 0.8, SC-007): such a gap must
              be justified in the report (T107), it is not hidden here.
+--platform   keep only the deliverable records of these platform ids (comma-separated) and the UIs they
+             use: the evidence of one platform (the numbers do not change).
 --strict     exit status 1 when a row is below --min-ratio (default 0: this is a measurement).
 --selftest   check the tool on a temporary tree with known counts and exit.
 
@@ -158,6 +160,16 @@ def measure(root):
     return result
 
 
+def filter_platforms(result, ids):
+    """The measurement restricted to the records of the platform ids and the UIs they use."""
+    kept = [d for d in result["deliverables"] if d["platform_id"] in ids]
+    used = set(d["ui"] for d in kept)
+    out = dict(result)
+    out["deliverables"] = kept
+    out["uis"] = [u for u in result["uis"] if u["ui"] in used]
+    return out
+
+
 def rows_of(result):
     return [("deliverable " + d["platform_id"] + "-" + d["ui_variant"], d) for d in result["deliverables"] if d["ui_has_code"]] + \
            [("ui " + u["ui"], u) for u in result["uis"]]
@@ -261,6 +273,8 @@ def selftest():
         expect("record fields", [rec[k] for k in ("shared_loc", "glue_loc", "ui_loc", "sharing_ratio", "notes")], [5, 0, 5, 0.5, "n"])
         rec = common.read_json(base / "docs/implementation/validation/deliverables/web-chrome-modern.json")
         expect("unmeasured record left alone", "sharing_ratio" in rec, False)
+        f = filter_platforms(r, {"linux-x-1"})
+        expect("platform filter keeps its record and UI", ([d["record"] for d in f["deliverables"]], [u["ui"] for u in f["uis"]]), (["linux-x-1-modern.json"], ["modern/linux-gtk3"]))
         text, below = render_text(r, 0.8, False)
         expect("rows below 80% (2 records + 2 UIs)", len(below), 4)
         expect("text table has the percentage", "50.0%" in text, True)
@@ -277,6 +291,7 @@ def main(argv=None):
     ap.add_argument("--format", choices=("text", "json"), default="text")
     ap.add_argument("--verbose", action="store_true", help="text: the line count of every counted file")
     ap.add_argument("--write", action="store_true", help="store the numbers in the deliverable records")
+    ap.add_argument("--platform", help="comma-separated platform ids: keep their records and UIs only")
     ap.add_argument("--min-ratio", type=float, default=0.8, help="share below which a row is marked (default 0.8)")
     ap.add_argument("--strict", action="store_true", help="exit 1 when a row is below --min-ratio")
     ap.add_argument("--selftest", action="store_true", help="check the tool on a temporary tree and exit")
@@ -287,6 +302,8 @@ def main(argv=None):
         print("measure_sharing: %s has no core/ directory" % args.root, file=sys.stderr)
         return 2
     result = measure(args.root)
+    if args.platform:
+        result = filter_platforms(result, set(args.platform.split(",")))
     text, below = render_text(result, args.min_ratio, args.verbose)
     if args.format == "json":
         slim = dict(result)
