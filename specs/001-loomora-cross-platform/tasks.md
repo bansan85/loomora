@@ -280,6 +280,24 @@ T069 (spike S4, the manylinux2010 build) was removed on 2026-11-14: Linux binari
 
 ---
 
+## Phase 9: Continuous integration (GitHub Actions)
+
+**Purpose**: build and test on GitHub everything a hosted runner can build and run, so that a regression shows before a merge (FR-030), with no manual step. A GitHub-hosted runner runs what it can; a self-hosted runner (T131) drives VirtualBox virtual machines and Docker containers for the rest (Windows 2000 to 10, old Linux distributions, old browsers). The images are supplied by the owner and kept outside the repository. Where no image can exist (Apple floors without Apple hardware), the job reports the platform `not_tested` instead of passing.
+
+- [ ] T121 Spike S10, find how to run the build and the tests on GitHub-hosted runners and record the answer as an ADR (next free number in `docs/implementation/adr/`) and as spike S10 in `docs/implementation/validation/spikes.json`: which runner image gives each family (Linux 22.04 and 24.04 with the packages of `docs/building/README.md` and Xvfb, the i686 Xlib build through multiarch, MinGW-w64 cross builds on Linux and their runs on a Windows runner, the Android SDK with NDK r15c and r30 and whether an API 16 x86 and an API 24 emulator boot with KVM on a hosted runner, Emscripten with headless Chrome and Firefox, macOS and the iOS simulator with the Xcode versions offered, WinUI 3 on x64 and ARM64 Windows runners); what cannot run there and therefore goes to the self-hosted runner with VirtualBox virtual machines or Docker containers, platform by platform; the security of a self-hosted runner (never run the code of a pull request from a fork on it); how a virtual machine is restored to a clean snapshot before each run and driven without a window; where the images live; how the docs repository (`../loomora-docs`, a sibling repository) is checked out on GitHub (same owner and relative submodule URL, or a token if the repository is private); the cost in minutes (public or private repository) and the caching of toolchains. Every statement is tried on a real workflow run, not assumed. Needs the GitHub repository to exist (the owner decides its visibility).
+- [ ] T122 [P] Write `.github/workflows/ci.yml`, Linux job: matrix Ubuntu 22.04 and 24.04, install the packages, run `python tools/verify.py quick` (backend build, ctest, the 15 reference vectors through the Xlib and gtkmm UIs on Xvfb, `check_std`, `check_ui_logic`, `validate_records`, `diff_verdicts`); a separate job for the variants (`verify.py quick --variants`: GTK 3.10 floor, GTK 4, i686 Xlib, Xlib core font) run on a schedule and when their files change; the old Linux distributions run in Docker containers on the self-hosted runner (T131), the build being done inside the container because Linux binaries are built on the target
+- [ ] T123 [P] Add the Windows jobs: cross-build `python tools/build.py windows legacy` on Linux (MinGW-w64 `-win32` thread model, import allowlist check), upload the executables, then on a Windows runner run `tools/run_vectors.py` on the x64 and x86 executables and the clang host build; the Windows 2000, XP, Vista, 7, 8.1 and 10 ladders run in VirtualBox virtual machines of the self-hosted runner (T131) with the guest-control launcher of `tools/run_vectors.py`
+- [ ] T124 [P] Add the Android job: install the NDK r15c (Legacy) and r30 (Modern) with a verified checksum, build both UIs, and run the vectors on an emulator (API 16 x86 for the Legacy UI, API 24 for the Modern UI) on a hosted runner with KVM or on the self-hosted runner (T131); no emulator exists below API 16, so the lower levels are built only and reported `not_tested` (needs T080–T082 and T053–T055)
+- [ ] T125 [P] Add the Web job: Emscripten and Node, build `loomora.wasm` and the JavaScript build, run the vectors in headless Chrome and Firefox (needs T038–T040 and T085–T086); old browsers run in virtual machines of the self-hosted runner (T131)
+- [ ] T126 [P] Add the Apple job on a macOS runner: build the Modern macOS and iOS (simulator) UIs and run the vectors on macOS; Legacy macOS 10.6 and iOS 5 need Apple hardware or an image supplied by the owner (T131); without one the job reports them `not_tested` (needs T047–T052)
+- [ ] T127 [P] Add the WinUI 3 job on Windows runners: build x64 and ARM64 for each .NET target, run the vectors on x64 (needs T041–T046)
+- [ ] T128 Add the quality gates and the artifacts: `validate_records.py`, `report.py --check` and `diff_verdicts.py` against the target branch of a pull request as required checks; upload the executables, the probe lines and the vector logs as artifacts. a CI run replays the procedures (FR-016, FR-018); a log is stored as evidence only when it proves something new (ADR 0014)
+- [ ] T129 Workflow hygiene: actions pinned by commit SHA, `permissions: contents: read`, concurrency that cancels outdated runs, path filters so a documentation change does not build every UI, `verify.py quick` as the default and `full` only on request or when graphics files change, no secret, self-hosted jobs only on branches of this repository, and the branch protection that requires these jobs and allows merge commits only (the `master` rule of `CLAUDE.md`)
+- [ ] T130 Document the continuous integration: a section in `docs/building/README.md` (what runs where, how to run the same checks locally with `verify.py quick`), a status badge in `README.md`, and a line per job in the quickstart
+- [ ] T131 Set up the self-hosted runner: a runner service on the build machine with labels per capability (virtualbox, docker, wsl); VirtualBox virtual machines restored to a clean snapshot before each job and driven without a window (`VBoxManage`, generalizing the Windows 2000 launcher of `tools/run_vectors.py`); Docker images built from `ci/docker/<distro>/Dockerfile` for the old Linux distributions; a registry `ci/images.json` (id, kind, source, checksum, snapshot name) for images kept outside the repository, supplied by the owner and described in `docs/implementation/validation/procedures/` (offline route, T095); and the rules that keep a public repository safe (no job from a fork, no secret)
+
+---
+
 ## Dependencies & Execution Order
 
 - **Setup (Phase 1)** → **Foundational (Phase 2)** → user stories. Phase 2 blocks everything.
@@ -287,6 +305,7 @@ T069 (spike S4, the manylinux2010 build) was removed on 2026-11-14: Linux binari
 - **US3** (report) needs the verdicts of US1 and US2 for its final content; its tools (T098–T101) can be written earlier.
 - **US4** needs built UIs from US1/US2; **US5** needs the trials of US2.
 - Inside a story: tests/spikes first, then code, then trials.
+- **CI (Phase 9)**: the spike S10 (T121) gives the real limits of the runners. The hosted Linux and Windows jobs (T122, T123) need nothing else and can start now; the self-hosted runner (T131) needs the images the owner supplies; each other job is added when its UI exists (Android T124, Web T125, Apple T126, WinUI T127).
 
 ### Spike gates
 
@@ -298,6 +317,7 @@ T069 (spike S4, the manylinux2010 build) was removed on 2026-11-14: Linux binari
 | S3 (T068) | T080–T082, T091 |
 | S5 (T070) | T085–T086, T093 |
 | S7 (T065) | every trial that needs an old image, SDK or device |
+| S10 (T121) | T122–T131 |
 | S8 (T064) | Android Modern floor (API 21 or 24) in the report |
 
 ## Parallel Examples
