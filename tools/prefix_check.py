@@ -14,7 +14,8 @@ What it does, without ever editing the repository working tree:
      listed (expected: core/src/greet.cpp only; none under ui/ or bridge/) with the diff, before and
      after the builds, and the repository's own core/, ui/, bridge/, cmake/ are hashed before and
      after the run to show nothing was touched.
-  3. builds every platform and variant this machine can build, from the copy, with the project's own
+  3. builds every platform and variant this machine can build, from scratch (the build directories of
+     the previous run are removed), from the copy, with the project's own
      tools (tools/build.py of the copy; the Windows host build with clang + Ninja as verify.py does;
      WSL builds go under $HOME/loomora-build/prefix-check/build):
          windows-host        clang + Ninja Win32 UI           (Windows host only)
@@ -244,6 +245,16 @@ class Machine(object):
         return rc
 
 
+def clean_builds(ctx):
+    """Every run builds from scratch: remove the build directories of the previous run (Windows side
+    and the Linux side under $HOME/loomora-build/prefix-check/build), so that no object file is reused."""
+    shutil.rmtree(str(ctx.work / "build-windows-host"), ignore_errors=True)
+    root = ctx.linux_env()["LOOMORA_BUILD_DIR"]
+    if not root.endswith("/loomora-build/prefix-check/build"):
+        raise RuntimeError("refusing to clean %r" % root)
+    ctx.machine.run_linux(["rm", "-rf", root], ctx.work, {}, ctx.log("clean"))
+
+
 def log_tail(log, lines=6):
     try:
         text = Path(log).read_text(encoding="utf-8", errors="replace").splitlines()
@@ -468,6 +479,7 @@ def main(argv=None):
     say("host: %s %s, repository %s" % (platform.system(), platform.release(), repo))
     before = files_under(repo, WATCHED)
     make_copy(repo, ctx.copy)
+    clean_builds(ctx)
     diff = change_prefix(ctx.copy, args.prefix)
     say("copy: %s" % ctx.copy)
     say("change in the copy:")
