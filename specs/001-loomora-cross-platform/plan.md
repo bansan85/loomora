@@ -12,9 +12,9 @@ Approach ([research.md](research.md)): **a single C++11 backend** built as a **s
 
 ## Technical Context
 
-**Language/Version**: backend **C++11** (ISO/IEC 14882:2011), checked with GCC and Clang `-std=c++11 -pedantic-errors`; compilers per floor: MinGW-w64 GCC (Windows 2000 → 11), Clang 16+ with osxcross and the 10.6 SDK (macOS 10.6), Apple Clang 5.1 in Xcode 5.1.1 (iOS 5), Clang 5 in NDK r16b (Android 2.3), GCC 8 in manylinux2010 (Linux glibc 2.12), Emscripten (current, plus 1.39.20 fastcomp if needed). Legacy UIs: C++ (plain Win32 API, built with MinGW-w64), Objective-C (macOS, iOS), Java (Android), C++ (Xlib, built with CMake), ES5 JavaScript (Web). Modern UIs: C#/WinUI 3 (.NET 7+), Swift/SwiftUI, Kotlin/Jetpack Compose, C/GTK 3, TypeScript. Host tools: Python 3.8+.
+**Language/Version**: backend **C++11** (ISO/IEC 14882:2011), checked with GCC and Clang `-std=c++11 -pedantic-errors`; compilers per floor: MinGW-w64 GCC (Windows 2000 → 11), Clang 16+ with osxcross and the 10.6 SDK (macOS 10.6), Apple Clang 5.1 in Xcode 5.1.1 (iOS 5), Clang 5 in NDK r16b (Android 2.3), GCC 8 in manylinux2010 (Linux glibc 2.12), Emscripten (current, plus 1.39.20 fastcomp if needed). Legacy UIs: C++ (plain Win32 API, built with MinGW-w64), Objective-C (macOS, iOS), Java (Android), C++ (Xlib, built with CMake), ES5 JavaScript (Web). Modern UIs (up to C++17 where they are C++): C#/WinUI 3 (.NET 7+), Swift/SwiftUI, Kotlin/Jetpack Compose, C++/gtkmm-3.0 for GTK 3 (C++11; C++17 with gtkmm-4.0 for GTK 4), TypeScript; the backend stays C++11 whatever the UI standard. Host tools: Python 3.8+.
 
-**Primary Dependencies**: backend with no dependency (not even the C++ standard library at run time); CMake ≥ 3.13 and one toolchain file per cross target; Catch2 v2.13.10 (tests only, git submodule); Python 3 + `jsonschema` (host tools); Emscripten (Web); JNI (Android); Modern UIs: Windows App SDK, SwiftUI, Jetpack Compose (AGP 9, `compileSdk` 37), GTK 3 (distribution packages)
+**Primary Dependencies**: backend with no dependency (not even the C++ standard library at run time); CMake ≥ 3.13 and one toolchain file per cross target; Catch2 v2.13.10 (tests only, git submodule); Python 3 + `jsonschema` (host tools); Emscripten (Web); JNI (Android); Modern UIs: Windows App SDK, SwiftUI, Jetpack Compose (AGP 9, `compileSdk` 37), GTK 3 with gtkmm-3.0 (distribution packages `libgtkmm-3.0-dev`; `libgtkmm-4.0-dev` for the GTK 4 build) built with CMake and `pkg-config`
 
 **Storage**: N/A (versioned validation files; the application stores nothing)
 
@@ -81,7 +81,7 @@ ui/                           # two thin native UIs per platform
     ├── macos-swiftui/        # Swift
     ├── ios-swiftui/          # Swift
     ├── android-compose/      # Kotlin
-    ├── linux-gtk3/           # C (GTK 3), plain executable (no Flatpak)
+    ├── linux-gtk3/           # C++ (gtkmm-3.0, GTK 3; gtkmm-4.0 as an option), CMake, plain executable (no Flatpak)
     └── web-ts/               # TypeScript (shares loomora.wasm with web-es5)
 tools/                        # Python host tools: check-std, gen-vectors, build, run-vectors, measure-sharing, check-probe, report
 docs/requirements-specification.md  # the requirements document (English)

@@ -12,7 +12,11 @@ For every GCC and Clang found on the host (g++, clang++, clang++-NN), it:
      C functions of the header, or if one of them is missing (ELF and Mach-O hosts; also
      checked with the C++ runtime linked statically, as on the platforms where it is needed);
   4. builds and runs core/tests/boundary_check.cpp, which makes every allocation fail in turn
-     and checks that no exception escapes any loomora_* function.
+     and checks that no exception escapes any loomora_* function;
+  5. once, for no compiler: checks that the sources of every UI under ui/ reach the backend only
+     through the public C API (they include loomora.h and no header of core/src), so the backend
+     stays C++11 whatever the standard of a UI (C++11 for the Legacy ones, up to C++17 for the
+     Modern ones) and no C++ type or exception crosses the boundary.
 
 A compiler that is absent is skipped with a message; the tool fails if neither GCC nor Clang
 exists, and also if no strict C++11 check could be run at all. A compiler whose standard
@@ -106,6 +110,38 @@ def find_compilers():
     if clang:
         found.append(("clang", clang, cc))
     return found
+
+
+UI_DIR = common.ROOT / "ui"
+UI_SOURCE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx")
+INCLUDE_RE = re.compile(r'^\s*#\s*include\s*([<"])([^>"]+)[>"]', re.MULTILINE)
+
+
+def check_ui_uses_c_api_only(res):
+    """Step 5: no source under ui/ includes a backend-internal header (core/src, including its
+    internal/ folder): the public header core/include/loomora.h is the only way in."""
+    internal = set()
+    for folder in (common.CORE / "src", common.CORE / "src" / "internal"):
+        if folder.is_dir():
+            internal.update(p.name for p in folder.iterdir() if p.suffix in UI_SOURCE_SUFFIXES)
+    checked, bad = [], []
+    for path in sorted(UI_DIR.rglob("*")):
+        if path.suffix not in UI_SOURCE_SUFFIXES or not path.is_file():
+            continue
+        checked.append(path)
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for quote, name in INCLUDE_RE.findall(text):
+            norm = name.replace("\\", "/")
+            if norm == "loomora.h" or (path.parent / norm).is_file():
+                continue  # the public header, or a header of the UI itself
+            if "core/src" in norm or "core/internal" in norm or Path(norm).name in internal:
+                bad.append("%s includes %s, a backend-internal header"
+                           % (path.relative_to(common.ROOT).as_posix(), name))
+    if bad:
+        res.fail("ui", "UI sources reach into the backend internals", "\n".join(bad))
+    else:
+        res.ok("ui", "%d UI source files include no backend-internal header (only the C API of "
+                     "loomora.h)" % len(checked))
 
 
 def exported_functions():
@@ -291,6 +327,8 @@ def main():
 
     base = Path(args.build_dir) if args.build_dir else Path(tempfile.mkdtemp(prefix="loomora_std_"))
     res = Result()
+    print("\nui: the C API is the only way into the backend")
+    check_ui_uses_c_api_only(res)
     try:
         for family, cxx, cc in compilers:
             check_compiler(family, cxx, cc, base / family, res, args.verbose)
