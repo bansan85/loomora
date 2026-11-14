@@ -2,6 +2,7 @@
 #
 #   make                       x86_64 executable   ->  $(BUILD)/loomora-xlib
 #   make ARCH=i686             32-bit executable (gcc -m32; needs the i386 libX11, see below)
+#   make STATIC_CXX=1          libstdc++ and libgcc linked statically (manylinux2010 build only)
 #   make report                needed shared libraries and the highest GLIBC symbol version
 #
 # The C++11 backend of core/ is compiled here into the static library libloomora.a (same sources
@@ -9,10 +10,12 @@
 # besides libc (and libdl, where dlopen lives before glibc 2.34) is libX11 (-lX11): libXft and
 # fontconfig, which draw the text, are opened at run time with dlopen (xftdl.c), so neither their
 # development files nor the libraries themselves are needed to build or to start the program.
-# The C++ runtime (libstdc++, libgcc) is linked
-# statically (STATIC_CXX=1, the default: the backend is C++11 and the floor of this UI is a
-# distribution with an old or no libstdc++; STATIC_CXX=0 uses the distribution's own, see the
-# fallback "static-cxx-runtime-xlib" of validation/fallbacks.json).
+#
+# The C++ runtime (libstdc++, libgcc) is linked DYNAMICALLY by default (STATIC_CXX=0: the
+# distribution's own, the modern path). STATIC_CXX=1 links it statically: only the manylinux2010
+# container build, the old-glibc baseline target, sets it (tools/build.py linux legacy), because
+# CentOS 6 has no libstdc++ new enough for a C++11 backend (fallback "static-cxx-runtime-xlib" of
+# validation/fallbacks.json).
 #
 # The build goes in $(BUILD), by default a subfolder of $HOME (never /tmp, never the source tree).
 #
@@ -27,7 +30,7 @@ ARCH        ?= x86_64
 CC          ?= gcc
 CXX         ?= g++
 AR          ?= ar
-STATIC_CXX  ?= 1
+STATIC_CXX  ?= 0
 BUILD       ?= $(HOME)/loomora-build/linux-legacy-$(ARCH)
 X11_CFLAGS  ?=
 X11_LIBS    ?= -lX11
