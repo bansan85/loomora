@@ -193,6 +193,7 @@ Any team member can redo the trials on a platform (even an old one) from the doc
 - **FR-027**: Both variants of a platform MUST show the same greeting for the same input, provided by the same backend, and MUST be tested against the same reference test cases.
 - **FR-028**: The backend MUST provide a greeting function that takes a string and returns exactly `"Bonjour "` followed by that string, for any valid UTF-8 input (including the empty string) up to 4,096 bytes; larger inputs MUST be rejected with a defined error, never a crash.
 - **FR-029**: Every UI, in both variants, MUST obtain each displayed greeting by calling the backend greeting function; no UI may build the greeting itself.
+- **FR-030**: The repository MUST have a continuous integration on GitHub that builds every UI a hosted runner can build, runs the unit tests and the reference vectors through each UI it can launch, and runs the validation checks (records, C++ standard, UI logic). What a hosted runner cannot do (very old systems, virtual machines, Apple hardware floors) MUST stay in the manual procedures and MUST NOT be reported as covered by the continuous integration.
 
 ### Key Entities
 

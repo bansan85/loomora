@@ -280,6 +280,23 @@ T069 (spike S4, the manylinux2010 build) was removed on 2026-11-14: Linux binari
 
 ---
 
+## Phase 9: Continuous integration (GitHub Actions)
+
+**Purpose**: build and test on GitHub everything a hosted runner can build and run, so that a regression shows before a merge (FR-030). What a hosted runner cannot do (Windows 2000 and XP in virtual machines, macOS 10.6, iOS 5, Android below API 16, old browsers) stays in the manual procedures; the continuous integration never claims to cover it.
+
+- [ ] T121 Spike S10, find how to run the build and the tests on GitHub-hosted runners and record the answer as an ADR (next free number in `docs/implementation/adr/`) and as spike S10 in `docs/implementation/validation/spikes.json`: which runner image gives each family (Linux 22.04 and 24.04 with the packages of `docs/building/README.md` and Xvfb, the i686 Xlib build through multiarch, MinGW-w64 cross builds on Linux and their runs on a Windows runner, the Android SDK with NDK r15c and r30 and whether an API 16 x86 and an API 24 emulator boot with KVM on a hosted runner, Emscripten with headless Chrome and Firefox, macOS and the iOS simulator with the Xcode versions offered, WinUI 3 on x64 and ARM64 Windows runners); what cannot run there; how the docs repository (`../loomora-docs`, a sibling repository) is checked out on GitHub (same owner and relative submodule URL, or a token if the repository is private); the cost in minutes (public or private repository) and the caching of toolchains. Every statement is tried on a real workflow run, not assumed. Needs the GitHub repository to exist (the owner decides its visibility).
+- [ ] T122 [P] Write `.github/workflows/ci.yml`, Linux job: matrix Ubuntu 22.04 and 24.04, install the packages, run `python tools/verify.py quick` (backend build, ctest, the 15 reference vectors through the Xlib and gtkmm UIs on Xvfb, `check_std`, `check_ui_logic`, `validate_records`, `diff_verdicts`); a separate job for the variants (`verify.py quick --variants`: GTK 3.10 floor, GTK 4, i686 Xlib, Xlib core font) run on a schedule and when their files change
+- [ ] T123 [P] Add the Windows jobs: cross-build `python tools/build.py windows legacy` on Linux (MinGW-w64 `-win32` thread model, import allowlist check), upload the executables, then on a Windows runner run `tools/run_vectors.py` on the x64 and x86 executables and the clang host build; Windows 2000 itself cannot run on a hosted runner, so only `check_imports` stands for it and the job says so
+- [ ] T124 [P] Add the Android job: install the NDK r15c (Legacy) and r30 (Modern) with a verified checksum, build both UIs, and run the vectors on an emulator (API 16 x86 for the Legacy UI, API 24 for the Modern UI) only if S10 shows the emulator boots on a hosted runner; otherwise build only, and state it (needs T080–T082 and T053–T055)
+- [ ] T125 [P] Add the Web job: Emscripten and Node, build `loomora.wasm` and the JavaScript build, run the vectors in headless Chrome and Firefox (needs T038–T040 and T085–T086); old browsers stay manual
+- [ ] T126 [P] Add the Apple job on a macOS runner: build the Modern macOS and iOS (simulator) UIs and run the vectors on macOS; Legacy macOS 10.6 and iOS 5 stay manual (needs T047–T052)
+- [ ] T127 [P] Add the WinUI 3 job on Windows runners: build x64 and ARM64 for each .NET target, run the vectors on x64 (needs T041–T046)
+- [ ] T128 Add the quality gates and the artifacts: `validate_records.py`, `report.py --check` and `diff_verdicts.py` against the target branch of a pull request as required checks; upload the executables, the probe lines and the vector logs as artifacts. CI logs are not evidence (ADR 0014): a verdict still comes from a manual trial
+- [ ] T129 Workflow hygiene: actions pinned by commit SHA, `permissions: contents: read`, concurrency that cancels outdated runs, path filters so a documentation change does not build every UI, `verify.py quick` as the default and `full` only on request or when graphics files change, no secret, and the branch protection that requires these jobs and allows merge commits only (the `master` rule of `CLAUDE.md`)
+- [ ] T130 Document the continuous integration: a section in `docs/building/README.md` (what runs, what does not, how to run the same checks locally with `verify.py quick`), a status badge in `README.md`, and a line per job in the quickstart
+
+---
+
 ## Dependencies & Execution Order
 
 - **Setup (Phase 1)** → **Foundational (Phase 2)** → user stories. Phase 2 blocks everything.
@@ -287,6 +304,7 @@ T069 (spike S4, the manylinux2010 build) was removed on 2026-11-14: Linux binari
 - **US3** (report) needs the verdicts of US1 and US2 for its final content; its tools (T098–T101) can be written earlier.
 - **US4** needs built UIs from US1/US2; **US5** needs the trials of US2.
 - Inside a story: tests/spikes first, then code, then trials.
+- **CI (Phase 9)**: the spike S10 (T121) gives the real limits of the runners. The Linux and Windows jobs (T122, T123) need nothing else and can start now; each other job is added when its UI exists (Android T124, Web T125, Apple T126, WinUI T127).
 
 ### Spike gates
 
@@ -298,6 +316,7 @@ T069 (spike S4, the manylinux2010 build) was removed on 2026-11-14: Linux binari
 | S3 (T068) | T080–T082, T091 |
 | S5 (T070) | T085–T086, T093 |
 | S7 (T065) | every trial that needs an old image, SDK or device |
+| S10 (T121) | T122–T129 |
 | S8 (T064) | Android Modern floor (API 21 or 24) in the report |
 
 ## Parallel Examples
