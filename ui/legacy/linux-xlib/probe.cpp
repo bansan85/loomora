@@ -1,9 +1,9 @@
 // Probe mode of the Linux Legacy UI: see probe.hpp.
 #include "probe.hpp"
 
-#include <sys/time.h>
 #include <sys/utsname.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -19,16 +19,17 @@ namespace {
 
 const long kExitDelayMs = 2000L;
 
-timeval g_launch;
-timeval g_displayed;
+typedef std::chrono::steady_clock Clock;
+
+Clock::time_point g_launch;
+Clock::time_point g_displayed;
 bool g_displayedSet = false;
-timeval g_deadline;
+Clock::time_point g_deadline;
 bool g_armed = false;
 
 // a - b in milliseconds.
-long DiffMs(const timeval &a, const timeval &b) {
-    return static_cast<long>(a.tv_sec - b.tv_sec) * 1000L +
-           static_cast<long>(a.tv_usec - b.tv_usec) / 1000L;
+long DiffMs(const Clock::time_point &a, const Clock::time_point &b) {
+    return static_cast<long>(std::chrono::duration_cast<std::chrono::milliseconds>(a - b).count());
 }
 
 // Appends `s` to `id` as a platform-id component: lowercase, anything outside [a-z0-9._-]
@@ -78,17 +79,10 @@ long PeakRssKb() {
         return -1;
     while (std::fgets(line, sizeof(line), f) != nullptr) {
         if (std::strncmp(line, "VmHWM:", 6) == 0) {
-            // Digits by hand: strtol is linked to __isoc23_strtol (GLIBC_2.38) with the headers
-            // of glibc 2.38 and later, which would stop the program on an older glibc.
-            const char *p = line + 6;
-            while (*p == ' ' || *p == '	')
-                p++;
-            if (*p >= '0' && *p <= '9') {
-                value = 0;
-                for (; *p >= '0' && *p <= '9'; p++)
-                    if (value < 1000000000L)
-                        value = value * 10 + (*p - '0');
-            }
+            char *end = nullptr;
+            const long kb = std::strtol(line + 6, &end, 10);
+            if (end != line + 6)
+                value = kb;
             break;
         }
     }
@@ -116,32 +110,24 @@ Options ParseArgs(int argc, char **argv) {
     return options;
 }
 
-void Start() { gettimeofday(&g_launch, nullptr); }
+void Start() { g_launch = Clock::now(); }
 
 void MarkDisplayed() {
     if (!g_displayedSet) {
-        gettimeofday(&g_displayed, nullptr);
+        g_displayed = Clock::now();
         g_displayedSet = true;
     }
 }
 
 void Arm() {
-    gettimeofday(&g_deadline, nullptr);
-    g_deadline.tv_sec += kExitDelayMs / 1000L;
-    g_deadline.tv_usec += (kExitDelayMs % 1000L) * 1000L;
-    if (g_deadline.tv_usec >= 1000000L) {
-        g_deadline.tv_sec += 1;
-        g_deadline.tv_usec -= 1000000L;
-    }
+    g_deadline = Clock::now() + std::chrono::milliseconds(kExitDelayMs);
     g_armed = true;
 }
 
 long MsLeft() {
     if (!g_armed)
         return -1;
-    timeval now;
-    gettimeofday(&now, nullptr);
-    const long left = DiffMs(g_deadline, now);
+    const long left = DiffMs(g_deadline, Clock::now());
     return left > 0 ? left : 0;
 }
 

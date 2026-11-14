@@ -1,7 +1,6 @@
 // Probe mode of the Linux Legacy UI (ui-contract.md): --probe, --probe-input <utf8>.
 // Only converts and measures: the JSON line itself comes from loomora_probe_record().
-// C++11; no function newer than glibc 2.12 (gettimeofday, not std::chrono::steady_clock or
-// clock_gettime, which live in librt before glibc 2.17).
+// C++11.
 #ifndef LOOMORA_XLIB_PROBE_HPP
 #define LOOMORA_XLIB_PROBE_HPP
 

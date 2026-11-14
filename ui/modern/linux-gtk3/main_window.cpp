@@ -26,8 +26,6 @@ bool kernel_version(int& major, int& minor) {
     struct utsname un;
     if (uname(&un) != 0)
         return false;
-    // Not sscanf: with glibc 2.38 and GCC 13 it binds to __isoc23_sscanf (GLIBC_2.38), which
-    // would raise the glibc version the executable asks for for no reason.
     std::istringstream release(un.release);
     char dot = '\0';
     return static_cast<bool>(release >> major >> dot >> minor) && dot == '.';

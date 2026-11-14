@@ -91,8 +91,6 @@ std::int64_t peak_rss_kb() {
     std::string::size_type at = contents.find(key);
     if (at == std::string::npos)
         return -1;
-    // Not strtoll: with glibc 2.38 and GCC 13 it binds to __isoc23_strtoll (GLIBC_2.38), which
-    // would raise the glibc version the executable asks for for no reason.
     std::istringstream value(contents.substr(at + key.size()));
     std::int64_t kb = -1;
     if (!(value >> kb))

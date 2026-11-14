@@ -56,7 +56,7 @@ Rows V1–V20 of the requirements document (§15.1.4): `id`, `title`, `criterion
 
 ## Spike (`docs/implementation/validation/spikes.json`)
 
-`id` (S1–S9 of research.md), `question`, `status` (`open` \| `confirmed` \| `refuted`), `result`, `adr` (path of the decision it triggered, if any). A refuted spike must name the chosen fallback.
+`id` (S1–S9 of research.md, S4 removed), `question`, `status` (`open` \| `confirmed` \| `refuted`), `result`, `adr` (path of the decision it triggered, if any). A refuted spike must name the chosen fallback.
 
 ## Web: two paths
 
