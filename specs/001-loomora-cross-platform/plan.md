@@ -12,7 +12,7 @@ Approach ([research.md](research.md)): **a single C++11 backend** built as a **s
 
 ## Technical Context
 
-**Language/Version**: backend **C++11** (ISO/IEC 14882:2011), checked with GCC and Clang `-std=c++11 -pedantic-errors`; compilers per floor: MinGW-w64 GCC (Windows 2000 → 11), Clang 16+ with osxcross and the 10.6 SDK (macOS 10.6), Apple Clang 5.1 in Xcode 5.1.1 (iOS 5), Clang 5 in NDK r16b (Android 2.3), GCC 8 in manylinux2010 (Linux glibc 2.12), Emscripten (current, plus 1.39.20 fastcomp if needed). Legacy UIs: C++ (plain Win32 API, built with MinGW-w64), Objective-C (macOS, iOS), Java (Android), C (Xlib), ES5 JavaScript (Web). Modern UIs: C#/WinUI 3 (.NET 7+), Swift/SwiftUI, Kotlin/Jetpack Compose, C/GTK 3, TypeScript. Host tools: Python 3.8+.
+**Language/Version**: backend **C++11** (ISO/IEC 14882:2011), checked with GCC and Clang `-std=c++11 -pedantic-errors`; compilers per floor: MinGW-w64 GCC (Windows 2000 → 11), Clang 16+ with osxcross and the 10.6 SDK (macOS 10.6), Apple Clang 5.1 in Xcode 5.1.1 (iOS 5), Clang 5 in NDK r16b (Android 2.3), GCC 8 in manylinux2010 (Linux glibc 2.12), Emscripten (current, plus 1.39.20 fastcomp if needed). Legacy UIs: C++ (plain Win32 API, built with MinGW-w64), Objective-C (macOS, iOS), Java (Android), C++ (Xlib, built with CMake), ES5 JavaScript (Web). Modern UIs: C#/WinUI 3 (.NET 7+), Swift/SwiftUI, Kotlin/Jetpack Compose, C/GTK 3, TypeScript. Host tools: Python 3.8+.
 
 **Primary Dependencies**: backend with no dependency (not even the C++ standard library at run time); CMake ≥ 3.13 and one toolchain file per cross target; Catch2 v2.13.10 (tests only, git submodule); Python 3 + `jsonschema` (host tools); Emscripten (Web); JNI (Android); Modern UIs: Windows App SDK, SwiftUI, Jetpack Compose (AGP 9, `compileSdk` 37), GTK 3 (distribution packages)
 
@@ -74,7 +74,7 @@ ui/                           # two thin native UIs per platform
 │   ├── macos-appkit/         # Objective-C
 │   ├── ios-uikit/            # Objective-C
 │   ├── android-views/        # Java (scripted APK build, no Gradle)
-│   ├── linux-xlib/           # C
+│   ├── linux-xlib/           # C++ (Xlib, CMake)
 │   └── web-es5/              # HTML + ES5 JavaScript (wasm / js loader)
 └── modern/
     ├── windows-winui3/       # C#

@@ -1,5 +1,2 @@
 # Shell scripts run inside WSL: keep LF whatever core.autocrlf says on the Windows host.
 *.sh text eol=lf
-
-# GNU make does not accept CRLF in a Makefile built inside WSL: keep LF.
-Makefile text eol=lf

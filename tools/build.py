@@ -21,13 +21,15 @@ Implemented targets:
                  Ubuntu-24.04): the tool re-runs itself there. Needs meson, ninja, a C and a C++
                  compiler and the gtk+-3.0 development files.
 
-  linux legacy   make on ui/legacy/linux-xlib (T084): plain C and Xlib, the C++11 backend as a
+  linux legacy   CMake on ui/legacy/linux-xlib (T084): C++11 and Xlib, the C++11 backend as a
                  static libloomora.a, libX11 the only library linked besides libc (libXft and
                  fontconfig, which draw the text, are opened with dlopen at run time). Two
                  executables per toolchain, x86_64 and i686 (--arch x86_64|i686|all, default
                  all), and two toolchains (--toolchain, default all):
                    native         the host gcc (inside WSL when started on Windows), the C++
-                                  runtime of the distribution linked dynamically (STATIC_CXX=0).
+                                  runtime of the distribution linked dynamically
+                                  (LOOMORA_STATIC_CXX=OFF); i686 is gcc -m32 through
+                                  cmake/toolchains/linux-gcc-i686.cmake.
                                   Records <host platform id>-legacy.json (x86_64) and
                                   linux-i686-legacy.json. It records the highest GLIBC symbol
                                   version and says that the glibc 2.12 baseline is NOT verified;
@@ -36,8 +38,9 @@ Implemented targets:
                    manylinux2010  the images quay.io/pypa/manylinux2010_x86_64 and _i686 run
                                   with Docker (docker.exe of Windows when started on Windows),
                                   the sources mounted read-only, the build in the container's own
-                                  file system with libstdc++ and libgcc linked statically
-                                  (STATIC_CXX=1, fallback static-cxx-runtime-xlib); the CentOS 6
+                                  file system with the CMake of the image (3.23.3, nothing is
+                                  installed) and libstdc++ and libgcc linked statically
+                                  (LOOMORA_STATIC_CXX=ON, fallback static-cxx-runtime-xlib); the CentOS 6
                                   repositories moved to vault.centos.org, which the container
                                   script switches to when libX11-devel does not install as is.
                                   The tool fails if the executable needs a GLIBC symbol version
@@ -249,8 +252,8 @@ LINUX_LEGACY_ARCHS = ("x86_64", "i686")
 LINUX_LEGACY_TOOLCHAINS = ("native", "manylinux2010", "all")
 
 # Shared libraries the Xlib executable may name: libX11 and the C library of the system (with its
-# loader), plus the C++ runtime of the distribution in a native build (the default of the
-# Makefile, STATIC_CXX=0). libXft and fontconfig are never named: they are opened with dlopen.
+# loader), plus the C++ runtime of the distribution in a native build (the default of
+# CMakeLists.txt, LOOMORA_STATIC_CXX=OFF). libXft and fontconfig are never named: they are opened with dlopen.
 LINUX_LEGACY_ALLOWED_NEEDED = re.compile(
     r"^(libX11\.so\.6|libc\.so\.6|libm\.so\.6|libdl\.so\.2|libpthread\.so\.0|librt\.so\.1|"
     r"ld-linux[-a-z0-9_.]*\.so\.[0-9]+)$")
@@ -346,12 +349,28 @@ def version_tuple(text):
     return tuple(int(x) for x in text.split("."))
 
 
+# CMake options shared by the native and the container build of the Linux Legacy UI: -O2 as the
+# Makefile this CMake project replaced, no backend tests (they need the Catch2 submodule), and a
+# missing libX11 is an error, not a silently skipped target.
+LINUX_LEGACY_CMAKE_ARGS = [
+    "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_C_FLAGS_RELEASE=-O2", "-DCMAKE_CXX_FLAGS_RELEASE=-O2",
+    "-DCMAKE_C_COMPILER=gcc", "-DCMAKE_CXX_COMPILER=g++", "-DLOOMORA_BUILD_TESTS=OFF",
+    "-DLOOMORA_XLIB_REQUIRED=ON",
+]
+
+
 def build_linux_legacy_arch(arch, build_root):
-    """Native build of ui/legacy/linux-xlib for one architecture with make (the C++ runtime of the
-    distribution, dynamically); returns (record, artifact)."""
-    src = common.ROOT / "ui" / "legacy" / "linux-xlib"
+    """Native build of ui/legacy/linux-xlib for one architecture with CMake (the C++ runtime of
+    the distribution, dynamically); returns (record, artifact)."""
     build_dir = build_root / ("linux-legacy-" + arch)
-    common.run(["make", "-C", src, "ARCH=" + arch, "BUILD=" + str(build_dir)])
+    generator = ["-G", "Ninja"] if shutil.which("ninja") else []
+    toolchain = []
+    if arch == "i686":
+        toolchain = ["-DCMAKE_TOOLCHAIN_FILE=" + str(
+            common.ROOT / "cmake" / "toolchains" / "linux-gcc-i686.cmake")]
+    common.run(["cmake", "-S", common.ROOT, "-B", build_dir] + generator + LINUX_LEGACY_CMAKE_ARGS
+               + ["-DLOOMORA_STATIC_CXX=OFF"] + toolchain)
+    common.run(["cmake", "--build", build_dir, "--target", "loomora_xlib"])
     exe = build_dir / "loomora-xlib"
     if not exe.is_file():
         sys.exit("build finished but %s is missing" % exe)
@@ -377,6 +396,7 @@ def build_linux_legacy_arch(arch, build_root):
         platform_id = "linux-i686"  # no platform record yet (T087)
         target = "i686-linux-gnu (gcc -m32 on %s)" % host_triple
     glibc_max = highest.get("GLIBC")
+    cmake_version = capture(["cmake", "--version"]).split()[2]
     record = {
         "platform_id": platform_id,
         "ui_variant": "legacy",
@@ -384,13 +404,15 @@ def build_linux_legacy_arch(arch, build_root):
         "compiler": "gcc-%s" % gxx_version,
         "target": target,
         "output": "native",
-        "ui_language": "c",
+        "ui_language": "c++",
         "ui_toolkit": LINUX_LEGACY_TOOLKIT,
         "ui_compiler": "gcc-%s" % gcc_version,
         "artifact": {"name": artifact.name, "size": artifact.stat().st_size},
         "disabled_features": [],
         "fallbacks": fallbacks_of(platform_id, LINUX_LEGACY_EXTRA_FALLBACKS.get(platform_id, ())),
-        "notes": "make (ui/legacy/linux-xlib/Makefile, ARCH=%s, STATIC_CXX=0) on %s (%s); static "
+        "notes": "cmake %s (ui/legacy/linux-xlib/CMakeLists.txt, %s, Release with -O2, "
+                 "LOOMORA_STATIC_CXX=OFF) on %s (%s); the UI is C++11 (-std=c++11, "
+                 "-Wall -Wextra -pedantic); static "
                  "libloomora.a built from core/src with -std=c++11; the C++ runtime of the "
                  "distribution (libstdc++, libgcc_s) linked dynamically; libXft and fontconfig "
                  "opened at run time with dlopen, not linked; shared libraries needed: %s; "
@@ -400,7 +422,9 @@ def build_linux_legacy_arch(arch, build_root):
                  "linux-manylinux2010-x86_64 and linux-manylinux2010-i686 are the ones built "
                  "for it, with the static C++ runtime). Artifact copied to out/linux-legacy/%s/, "
                  "sha256 %s."
-                 % (arch, host_id, glibc, ", ".join(needed),
+                 % (cmake_version, "x86_64" if arch == "x86_64" else
+                    "i686 through cmake/toolchains/linux-gcc-i686.cmake (gcc -m32)", host_id,
+                    glibc, ", ".join(needed),
                     ", ".join("%s_%s" % item for item in sorted(highest.items())) or "none",
                     "GLIBC_" + glibc_max if glibc_max else "no GLIBC symbol version", arch,
                     common.sha256(artifact)),
@@ -410,13 +434,14 @@ def build_linux_legacy_arch(arch, build_root):
 
 LINUX_LEGACY_TOOLKIT = ("Xlib (libX11, no toolkit); text drawn with libXft and fontconfig opened "
                         "at run time with dlopen (core X11 font fixed when libXft cannot be "
-                        "loaded); C89 (gnu89) with POSIX")
+                        "loaded); C++11 with RAII classes for the Xlib and Xft handles, POSIX")
 
 # What runs inside the container (fed to `bash -s`): the manylinux2010 images already hold
 # libX11-devel (no network is needed then: yum would fetch repository metadata even to say so, and
 # vault.centos.org answers 403 at times); when it is missing the CentOS 6 repositories, which have
-# moved to vault.centos.org, are pointed there and yum installs it; then the sources are copied from the read-only mount and built with the container's GCC
-# (devtoolset) and the static C++ runtime. Markers on stdout let the tool find each part.
+# moved to vault.centos.org, are pointed there and yum installs it; then the sources are copied from the read-only mount and built with the CMake of the image
+# (/usr/local/bin/cmake, 3.23.3: nothing is installed for it), the container's GCC (devtoolset)
+# and the static C++ runtime. Markers on stdout let the tool find each part.
 MANYLINUX_SCRIPT = r"""
 set -e
 echo "@@yum-begin"
@@ -434,13 +459,14 @@ elif ! yum -y -q install libX11-devel; then
 fi
 rpm -q libX11-devel
 echo "@@yum-end"
-mkdir -p /build/ui/legacy
-cp -r /src/core /build/core
-cp -r /src/ui/legacy/linux-xlib /build/ui/legacy/linux-xlib
-cd /build/ui/legacy/linux-xlib
-echo "@@make-begin"
-make ARCH=@ARCH@ STATIC_CXX=1 BUILD=/build/out
-echo "@@make-end"
+mkdir -p /build/src/ui/legacy
+cp -r /src/CMakeLists.txt /src/core /src/cmake /build/src/
+cp -r /src/ui/legacy/linux-xlib /build/src/ui/legacy/linux-xlib
+echo "@@cmake-begin"
+which cmake; cmake --version | head -n 1
+cmake -S /build/src -B /build/out -G "Unix Makefiles" @CMAKE_ARGS@ -DLOOMORA_STATIC_CXX=ON
+cmake --build /build/out --target loomora_xlib
+echo "@@cmake-end"
 echo "@@gcc"; gcc -dumpfullversion; g++ -dumpfullversion; g++ -dumpmachine
 echo "@@glibc"; ldd --version | head -n 1
 echo "@@sha256"; sha256sum /build/out/loomora-xlib
@@ -462,7 +488,7 @@ def section(text, name):
 
 
 def build_manylinux2010_arch(docker, arch):
-    """Builds ui/legacy/linux-xlib for one architecture inside the manylinux2010 image: the sources
+    """Builds ui/legacy/linux-xlib with CMake for one architecture inside the manylinux2010 image: the sources
     come from a read-only mount, the build happens in the container's own file system (/build),
     only the executable is copied out. Returns (record, artifact)."""
     image = MANYLINUX2010_IMAGES[arch]
@@ -474,7 +500,7 @@ def build_manylinux2010_arch(docker, arch):
     digest = capture([docker, "image", "inspect", "--format", "{{index .RepoDigests 0}}", image])
     image_id = capture([docker, "image", "inspect", "--format", "{{.Id}}", image])
     name = "loomora-xlib-%s-%d" % (arch, os.getpid())
-    script = MANYLINUX_SCRIPT.replace("@ARCH@", arch)
+    script = MANYLINUX_SCRIPT.replace("@CMAKE_ARGS@", " ".join(LINUX_LEGACY_CMAKE_ARGS))
     print("manylinux2010 %s: building in the container (%s)" % (arch, digest))
     res = subprocess.run(
         [docker, "run", "-i", "--name", name, "-v", "%s:/src:ro" % common.ROOT, image,
@@ -502,6 +528,9 @@ def build_manylinux2010_arch(docker, arch):
         sys.exit("linux legacy manylinux2010 %s: the executable needs GLIBC_%s, above the "
                  "baseline glibc %d.%d; see %s" % (arch, glibc_max, MANYLINUX2010_GLIBC_MAX[0],
                                                    MANYLINUX2010_GLIBC_MAX[1], out_dir))
+    cmake_lines = section(log, "cmake-begin").splitlines()
+    cmake_path = cmake_lines[0].strip() if cmake_lines else "cmake"
+    cmake_version = cmake_lines[1].split()[2] if len(cmake_lines) > 1 else "unknown"
     gcc_lines = section(log, "gcc").split()
     gcc_version, gxx_version, triple = gcc_lines[0], gcc_lines[1], gcc_lines[2]
     glibc = "glibc " + section(log, "glibc").split()[-1]
@@ -525,15 +554,17 @@ def build_manylinux2010_arch(docker, arch):
         "compiler": "gcc-%s" % gxx_version,
         "target": triple,
         "output": "native",
-        "ui_language": "c",
+        "ui_language": "c++",
         "ui_toolkit": LINUX_LEGACY_TOOLKIT,
         "ui_compiler": "gcc-%s" % gcc_version,
         "artifact": {"name": artifact.name, "size": artifact.stat().st_size},
         "disabled_features": [],
         "fallbacks": fallbacks_of(platform_id, LINUX_LEGACY_EXTRA_FALLBACKS.get(platform_id, ())),
         "notes": "BUILT IN THE manylinux2010 CONTAINER (spike S4 / T069): image %s, digest %s, "
-                 "image id %s; the container's GCC %s with its %s; make (ui/legacy/linux-xlib/"
-                 "Makefile, ARCH=%s, STATIC_CXX=1) in the container's own file system, the sources "
+                 "image id %s; the container's GCC %s with its %s; the CMake of the image (%s "
+                 "%s, nothing installed for it; generator Unix Makefiles, Release with -O2, "
+                 "ui/legacy/linux-xlib/CMakeLists.txt, %s, LOOMORA_STATIC_CXX=ON) in the "
+                 "container's own file system, the sources "
                  "mounted read-only; %s (%s), headers only: libXft and fontconfig are opened at "
                  "run time with dlopen and their development files are not installed; libstdc++ "
                  "and libgcc linked statically; shared libraries needed (objdump -p): %s; highest "
@@ -542,7 +573,8 @@ def build_manylinux2010_arch(docker, arch):
                  "GLIBCXX / CXXABI / GCC version node: the C++ runtime is static); this is a "
                  "link-level check, not a run on a glibc 2.12 system. Artifact copied to "
                  "out/linux-legacy-manylinux2010/%s/, sha256 %s, container build log next to it."
-                 % (image, digest, image_id, gcc_version, glibc, arch, yum_note,
+                 % (image, digest, image_id, gcc_version, glibc, cmake_path, cmake_version, arch,
+                    yum_note,
                     rpm[0] if rpm else "rpm version not read", ", ".join(needed),
                     ", ".join("%s_%s" % item for item in sorted(highest.items())) or "none",
                     glibc_max, MANYLINUX2010_GLIBC_MAX[0], MANYLINUX2010_GLIBC_MAX[1], arch,
@@ -552,7 +584,7 @@ def build_manylinux2010_arch(docker, arch):
 
 
 def run_linux_legacy_native(args):
-    require_tools(["make", "gcc", "g++", "ar", "objdump", "ldd"])
+    require_tools(["cmake", "gcc", "g++", "objdump", "ldd"])
     if platform.machine() != "x86_64":
         sys.exit("linux legacy: this tool builds both architectures on an x86_64 host (gcc -m32 "
                  "for i686); this machine is %s" % platform.machine())
