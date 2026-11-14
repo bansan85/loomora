@@ -46,6 +46,10 @@ is left without a verdict"), because trials are not done yet:
     before T059/T087 write the platform records);
   * a verdict with no "reproduction" path (SC-004 wants a procedure) unless not_tested.
 
+A variant that was not attempted is justified by a verdict of status "not_tested" with a "reason": it
+needs no evidence and no reproduction, and it counts as covered (no "no <variant> verdict" finding);
+tools/report.py shows it as a justified absent variant (SC-010).
+
 Other WARN: ok / ok_restricted verdict without a deliverable of that platform and variant; ko
 verdict with fewer than two attempts (SC-003); in-scope floor inconsistencies; spikes S1-S9 (S4
 excepted) not all present. INFO: optional fields that data-model.md does not name (for example the `verified`
@@ -998,6 +1002,20 @@ def self_test():
             failures += 1
             print("FAIL completeness rule (%s): warned=%s no_error=%s errored=%s"
                   % (name, warned, no_error, errored))
+
+    # A justified absent variant: a not_tested verdict with a reason, no evidence, no reproduction.
+    tree = _copy_tree(good)
+    tree["validation/verdicts/lin-1-legacy.json"] = OrderedDict([
+        ("platform_id", "lin-1"), ("ui_variant", "legacy"), ("status", "not_tested"),
+        ("reason", "no 32-bit toolkit is installed on the machine")])
+    report = _run_case(tree, require_complete=True)
+    if report.count("ERROR") or report.count("WARN"):
+        failures += 1
+        print("FAIL a not_tested verdict with a reason is not accepted as covered:")
+        print_report(report)
+    else:
+        print("ok   not_tested verdict with a reason accepted without evidence or reproduction, "
+              "and the variant counts as covered")
 
     print("self-test %s" % ("FAILED" if failures else "passed"))
     return 1 if failures else 0
