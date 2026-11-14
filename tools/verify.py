@@ -6,7 +6,8 @@ Usage:
                          [--build-dir DIR] [--jobs N] [--wsl-distro NAME]
 
 quick (default)  builds what exists for this host, then runs ctest, tools/run_vectors.py for
-                 the UIs built here, tools/check_std.py and tools/validate_records.py.
+                 the UIs built here, tools/check_std.py, tools/validate_records.py and the self-test
+                 of tools/diff_verdicts.py.
                  Linux / WSL: core + the Linux UIs the top-level CMake offers, default variant
                  only (the UIs run on a private Xvfb display when Xvfb is installed, else on the
                  inherited display). Windows host: the clang + Ninja build of core and the Win32
@@ -27,7 +28,7 @@ Screenshots are written under the build directory and are CANDIDATES, not commit
 them into the repository; asking the owner first is required before any image goes into
 docs/implementation (see CLAUDE.md).
 
---only NAME,...  limit the checks; a NAME is a kind (build, ctest, vectors, std, records,
+--only NAME,...  limit the checks; a NAME is a kind (build, ctest, vectors, std, records, diff,
                  screenshots, sanitizer, variants, wsl) or a UI (legacy, modern) or a variant id
                  (gtk-floor, gtk4, i686, xlib-corefont); the checks matching any NAME run.
 --variants       also build / run the non-default variants (Linux: GTK 3.10 floor, GTK 4, i686
@@ -67,7 +68,7 @@ import common
 ROOT = common.ROOT
 IS_WINDOWS = sys.platform == "win32"
 UIS = ("legacy", "modern")
-KINDS = ("build", "ctest", "vectors", "std", "records", "screenshots", "sanitizer", "variants", "wsl")
+KINDS = ("build", "ctest", "vectors", "std", "records", "diff", "screenshots", "sanitizer", "variants", "wsl")
 UI_EXE = {"legacy": "loomora-xlib", "modern": "loomora-gtk3"}  # product names of the Linux UIs
 # Texts of the graphical scenarios: mixed Unicode, and a long text that is cut at 1,000 characters.
 SCENARIOS = (
@@ -344,6 +345,12 @@ def step_records(ctx):
     ctx.ok("records") if rc == 0 else ctx.fail("records", "validate_records status %d" % rc, log)
 
 
+def step_diff(ctx):
+    log = ctx.log("diff_verdicts")
+    rc, _ = run_logged(log, [sys.executable, ROOT / "tools" / "diff_verdicts.py", "--self-test"])
+    ctx.ok("diff_verdicts") if rc == 0 else ctx.fail("diff_verdicts", "self-test status %d" % rc, log)
+
+
 def host_platform_id():
     if IS_WINDOWS:
         rel = "11" if sys.getwindowsversion().build >= 22000 else platform.release()
@@ -494,6 +501,7 @@ def make_plan(ctx):
             S.append(("run_vectors linux " + ui, {"vectors", ui}, "tools/run_vectors.py on the Linux %s UI" % ui, (lambda u: lambda c: step_vectors(c, u))(ui), True))
     S.append(("std", {"std"}, "tools/check_std.py (strict C++11 backend, clean C API)", step_std, False))
     S.append(("records", {"records"}, "tools/validate_records.py (fetches the docs submodule when missing)", step_records, False))
+    S.append(("diff_verdicts", {"diff"}, "tools/diff_verdicts.py --self-test", step_diff, False))
     if ctx.variants or (ctx.only and ctx.only & ({"variants", "xlib-corefont"} | set(v[0] for v in VARIANTS))):
         if not IS_WINDOWS:
             for vid, ui, extra, hint in VARIANTS:
