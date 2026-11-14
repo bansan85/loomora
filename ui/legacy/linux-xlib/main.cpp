@@ -487,13 +487,33 @@ unsigned long AllocColour(Display *dpy, int screen, const char *name, unsigned l
     return fallback;
 }
 
+// Reads a non-negative decimal number at *p and advances *p past it; false when there is none.
+// (Not sscanf or strtol: with the headers of glibc 2.38 and later a C++ program that calls them
+// is linked to __isoc23_sscanf / __isoc23_strtol, GLIBC_2.38, and would not start on an older
+// glibc for nothing.)
+bool ParseNumber(const char **p, int *value) {
+    const char *s = *p;
+    if (*s < '0' || *s > '9')
+        return false;
+    int v = 0;
+    while (*s >= '0' && *s <= '9') {
+        if (v < 100000)
+            v = v * 10 + (*s - '0');
+        s++;
+    }
+    *value = v;
+    *p = s;
+    return true;
+}
+
 // Major and minor kernel version, the version the backend's Linux end-of-life rule is expressed
-// in. Returns false when it cannot be read.
+// in ("6.18.58..." gives 6 and 18). Returns false when it cannot be read.
 bool KernelVersion(int *major, int *minor) {
     utsname un;
     if (uname(&un) != 0)
         return false;
-    return std::sscanf(un.release, "%d.%d", major, minor) == 2;
+    const char *p = un.release;
+    return ParseNumber(&p, major) && *p++ == '.' && ParseNumber(&p, minor);
 }
 
 // ---- the window ----------------------------------------------------------------------------

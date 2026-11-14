@@ -78,7 +78,17 @@ long PeakRssKb() {
         return -1;
     while (std::fgets(line, sizeof(line), f) != nullptr) {
         if (std::strncmp(line, "VmHWM:", 6) == 0) {
-            value = std::strtol(line + 6, nullptr, 10);
+            // Digits by hand: strtol is linked to __isoc23_strtol (GLIBC_2.38) with the headers
+            // of glibc 2.38 and later, which would stop the program on an older glibc.
+            const char *p = line + 6;
+            while (*p == ' ' || *p == '	')
+                p++;
+            if (*p >= '0' && *p <= '9') {
+                value = 0;
+                for (; *p >= '0' && *p <= '9'; p++)
+                    if (value < 1000000000L)
+                        value = value * 10 + (*p - '0');
+            }
             break;
         }
     }
