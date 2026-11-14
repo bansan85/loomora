@@ -1,20 +1,29 @@
 #!/usr/bin/env python
 """Generate the validation report docs/implementation/validation/report.md from the records
 (git submodule ../loomora-docs): platforms/, verdicts/, deliverables/, fallbacks.json,
-spikes.json, hypotheses.json, sources.json (tasks T098 to T103; the shared-code table of T107 is
-added by another tool).
+spikes.json, hypotheses.json, sources.json (tasks T098 to T103, the shared-code table of T107 and the
+verdict comparison of T112).
 
 Usage:
   python tools/report.py                 write validation/report.md
   python tools/report.py --stdout        print the report instead of writing it
-  python tools/report.py --check         print the checks (SC-002, SC-003, SC-004, SC-005, SC-009,
-                                         SC-010) and verify that report.md is up to date with the
+  python tools/report.py --baseline REV  also compare the verdicts with the baseline REV (section 14)
+  python tools/report.py --check         print the checks (SC-002, SC-003, SC-004, SC-005, SC-007,
+                                         SC-009, SC-010) and verify that report.md is up to date with the
                                          records; exit 1 if it is missing or stale
   python tools/report.py --self-test     run the self-test on synthetic records (no submodule)
-  options: --validation-dir DIR, --output FILE
+  options: --validation-dir DIR, --output FILE, --baseline SET, --baseline-repo DIR
+
+--baseline SET names the verdicts to compare with: a git revision of the docs submodule (a commit, a
+branch, a tag, HEAD~1) or a folder, as tools/diff_verdicts.py reads it ("dir:PATH" and "git:REV" force
+one reading). The section "Verdict changes since a baseline" then holds the output of
+diff_verdicts.compare_sets() (every status change, every other difference per platform and variant).
+Without it the section says that no baseline was given, so report.md stays the same bytes for the same
+records; pass the same --baseline to --check to verify a report generated with one.
 
 Exit status: 0 = done / up to date, 1 = report missing or stale (--check) or a self-test failure,
-2 = the docs submodule is not checked out (nothing to report; the product build never needs it).
+2 = the docs submodule is not checked out (nothing to report; the product build never needs it) or the
+--baseline cannot be read.
 
 Everything the report states about a trial comes from the records. Where no verdict record exists
 (macOS, iOS, Android, Web, Windows XP, Windows 11 Modern, ...) the report says "not tested". The
@@ -33,8 +42,11 @@ from collections import OrderedDict
 from pathlib import Path
 
 import common
+import diff_verdicts
+import measure_sharing
 
 EXIT_NO_DOCS = 2
+SHARING_MIN = 0.8  # SC-007: at least 80% of the application code is shared
 VARIANTS = ("legacy", "modern")
 FAMILIES = ("windows", "macos", "linux", "android", "ios", "web")
 FAMILY_NAME = {"windows": "Windows", "macos": "macOS", "linux": "Linux", "android": "Android",
@@ -191,11 +203,40 @@ def _read_list(path):
     return [r for r in data if isinstance(r, dict)] if isinstance(data, list) else []
 
 
+CODE_FILE = re.compile(r"^\s+((?:core|ui/(?:legacy|modern)/[^/\s]+)/\S+)\s+(\d+)\s*$")
+
+
+def _read_code_sharing(directory):
+    """Line counts per file stored with the code-sharing evidence (the --verbose listing of
+    tools/measure_sharing.py in evidence/code-sharing/<platform>/measure-sharing.txt):
+    {"core": {file: lines}, "ui": {"<variant>/<ui directory>": {file: lines}}}."""
+    core, uis = OrderedDict(), OrderedDict()
+    directory = Path(directory)
+    paths = sorted(directory.glob("*/measure-sharing.txt")) if directory.is_dir() else []
+    for path in paths:
+        try:
+            with open(str(path), encoding="utf-8") as f:
+                text = f.read()
+        except (OSError, ValueError):
+            continue
+        for line in text.splitlines():
+            m = CODE_FILE.match(line)
+            if not m:
+                continue
+            parts = m.group(1).split("/")
+            if parts[0] == "core":
+                core[m.group(1)] = int(m.group(2))
+            else:
+                uis.setdefault("/".join(parts[1:3]), OrderedDict())["/".join(parts[3:])] = int(
+                    m.group(2))
+    return {"core": core, "ui": uis}
+
+
 class Records(object):
     """The validation records, in memory."""
 
     def __init__(self, platforms, verdicts, deliverables, fallbacks, spikes, hypotheses, sources,
-                 docs_root=None):
+                 docs_root=None, code_files=None):
         order = dict((f, i) for i, f in enumerate(FAMILIES))
         plist = sorted(platforms, key=lambda p: (order.get(p.get("family"), 99),
                                                  str(p.get("release_date")), str(p.get("id"))))
@@ -210,6 +251,7 @@ class Records(object):
         self.hypotheses = sorted(hypotheses, key=lambda h: int(str(h.get("id", "V0"))[1:] or 0))
         self.sources = dict((s.get("id"), s) for s in sources)
         self.docs_root = Path(docs_root) if docs_root else None
+        self.code_files = code_files or {"core": OrderedDict(), "ui": OrderedDict()}
 
     @classmethod
     def load(cls, validation_dir):
@@ -217,7 +259,8 @@ class Records(object):
         return cls(_read_dir(v / "platforms"), _read_dir(v / "verdicts"),
                    _read_dir(v / "deliverables"), _read_list(v / "fallbacks.json"),
                    _read_list(v / "spikes.json"), _read_list(v / "hypotheses.json"),
-                   _read_list(v / "sources.json"), v.parent)
+                   _read_list(v / "sources.json"), v.parent,
+                   _read_code_sharing(v / "evidence" / "code-sharing"))
 
     def verdicts_of(self, pid, variant):
         return [v for v in self.verdicts
@@ -230,11 +273,13 @@ class Records(object):
         return None
 
     def attempted(self):
-        """(platform id, variant) with a verdict or a deliverable record: the attempted ones."""
+        """(platform id, variant) with a result verdict or a deliverable record: the attempted ones.
+        A `not_tested` verdict is the recorded justification of a variant that was not attempted."""
         keys = []
         for pid in self.platforms:
             for variant in VARIANTS:
-                if self.verdicts_of(pid, variant) or (pid, variant) in self.deliverables:
+                tried = [v for v in self.verdicts_of(pid, variant) if v.get("status") != "not_tested"]
+                if tried or (pid, variant) in self.deliverables:
                     keys.append((pid, variant))
         return keys
 
@@ -359,9 +404,28 @@ def oldest_validated(rec, family, variant, web_path=None):
             continue
         if v.get("status") not in VALIDATED or (web_path and v.get("web_path") != web_path):
             continue
-        if best is None or str(p.get("release_date")) < str(best[0].get("release_date")):
-            best = (p, v)
+        if best is None or str(p.get("release_date")) < str(best[0].get("release_date")) or (
+                str(p.get("release_date")) == str(best[0].get("release_date"))
+                and len(v.get("evidence") or []) > len(best[1].get("evidence") or [])):
+            best = (p, v)  # on the same release date, the verdict with the most evidence
     return best
+
+
+def oldest_ids(rec, family, variant, web_path=None):
+    """Ids of the validated platforms released the same day as the oldest one (a platform record
+    can describe another build on the same system, so the oldest is not always unique), or None."""
+    best = oldest_validated(rec, family, variant, web_path)
+    if best is None:
+        return None
+    ids = set()
+    for v in rec.verdicts:
+        p = rec.platforms.get(v.get("platform_id"))
+        if p is None or p.get("family") != family or v.get("ui_variant") != variant:
+            continue
+        if v.get("status") in VALIDATED and (not web_path or v.get("web_path") == web_path) \
+                and str(p.get("release_date")) == str(best[0].get("release_date")):
+            ids.add(p["id"])
+    return ", ".join(sorted(ids))
 
 
 def variant_reason(rec, platform, variant):
@@ -399,6 +463,26 @@ def conclusion(rec, name_pattern):
     return pats, vs, best[0] if best else "NOT CONCLUDED: no trial"
 
 
+def sharing_rows(rec):
+    """One row per deliverable record: the shared-code numbers written by tools/measure_sharing.py
+    (shared_loc, glue_loc, ui_loc, sharing_ratio) and the UI directory the record maps to."""
+    rows = []
+    for (pid, variant), d in rec.deliverables.items():
+        family = (rec.platforms.get(pid) or {}).get("family") or str(pid).split("-")[0]
+        numbers = [d.get(k) for k in ("shared_loc", "glue_loc", "ui_loc", "sharing_ratio")]
+        measured = all(_is_num(n) for n in numbers)
+        rows.append({"pid": pid, "variant": variant, "record": d,
+                     "ui": "%s/%s" % (variant, measure_sharing.UI_DIR.get((family, variant), "?")),
+                     "shared": d.get("shared_loc"), "glue": d.get("glue_loc"),
+                     "uiloc": d.get("ui_loc"), "ratio": d.get("sharing_ratio") if measured else None,
+                     "measured": measured})
+    return rows
+
+
+def pct(ratio):
+    return "%.1f%%" % (ratio * 100)
+
+
 class Check(object):
     def __init__(self, ident, result, summary, details=None):
         self.ident = ident
@@ -424,8 +508,8 @@ def run_checks(rec):
         p, v = found
         age = p.get("age_years")
         per_family.append("%s: %s, %s, %s years old, %s, evidence: %s" % (
-            FAMILY_NAME[fam], p["id"], p.get("release_date"), age, label(v["status"]),
-            evidence_summary(v)))
+            FAMILY_NAME[fam], (oldest_ids(rec, fam, "legacy") if fam != "web" else p["id"]),
+            p.get("release_date"), age, label(v["status"]), evidence_summary(v)))
         if _is_num(age) and age >= 10:
             ge10.append(FAMILY_NAME[fam])
         if _is_num(age) and age >= 15:
@@ -508,6 +592,34 @@ def run_checks(rec):
         open_count += lab.startswith("NOT CONCLUDED")
     checks.append(Check("SC-009", "MET" if not open_count else "INCOMPLETE",
                         "go / no-go concluded for %d of 2 systems" % (2 - open_count), lines))
+
+    # SC-007: at least 80% of the application code shared, the share published, each gap justified
+    rows = sharing_rows(rec)
+    measured = [r for r in rows if r["measured"]]
+    below = [r for r in measured if r["ratio"] < SHARING_MIN]
+    details = ["%s %s: %s (%s shared, %s glue, %s platform-specific lines)" % (
+        r["pid"], r["variant"], pct(r["ratio"]), num(r["shared"]), num(r["glue"]), num(r["uiloc"]))
+        for r in below]
+    details += ["%s %s: not measured (the record has no shared_loc, glue_loc, ui_loc and "
+                "sharing_ratio: run tools/measure_sharing.py --write)" % (r["pid"], r["variant"])
+                for r in rows if not r["measured"]]
+    for r in measured:
+        whole = r["shared"] + r["glue"] + r["uiloc"]
+        if whole and abs(float(r["shared"]) / whole - r["ratio"]) > 0.00006:
+            details.append("%s %s: stored sharing_ratio %s differs from shared_loc / (shared_loc + "
+                           "glue_loc + ui_loc)" % (r["pid"], r["variant"], r["ratio"]))
+    if not rows:
+        checks.append(Check("SC-007", "INCOMPLETE", "no deliverable record, so no shared-code share "
+                            "is published"))
+    else:
+        result = "MET" if measured and not below and len(measured) == len(rows) and not details \
+            else ("NOT MET" if below else "INCOMPLETE")
+        checks.append(Check(
+            "SC-007", result,
+            "%d of %d measured platform/variant rows reach %d%% shared code; %d below, each one "
+            "explained in section 13 from the records (the explanation does not remove the gap)"
+            % (len(measured) - len(below), len(measured), round(SHARING_MIN * 100), len(below)),
+            details))
     return checks
 
 
@@ -679,6 +791,11 @@ def sec_matrix(rec):
             if vs:
                 for v in vs:
                     wp = v.get("web_path")
+                    if v.get("status") == "not_tested":
+                        rows.append((p["id"], system, variant, label(v.get("status")), "-", "-", "-",
+                                     "not attempted, justified: " + clip(v.get("reason", ""), 330)
+                                     + " (full text in section 12)"))
+                        continue
                     rows.append((p["id"], system, variant + (" (%s)" % wp if wp else ""),
                                  label(v.get("status")), v.get("decision", "-"),
                                  evidence_summary(v),
@@ -725,10 +842,15 @@ def sec_oldest(rec):
                     rows.append((name, variant, NOT_TESTED, "-", "-", "-", "-"))
                 else:
                     p, v = found
-                    rows.append((name, variant, p["id"], p.get("release_date"), p.get("age_years"),
+                    rows.append((name, variant, oldest_ids(rec, fam, variant, wp),
+                                 p.get("release_date"), p.get("age_years"),
                                  label(v["status"]), evidence_summary(v)))
     out += table(["Family", "Variant", "Oldest platform that works", "Released", "Age (years)",
                   "Verdict", "Evidence"], rows)
+    out.append("")
+    out.append("Several ids in one cell are platform records of the same release date (for example "
+               "the 32-bit build run on a 64-bit system of the same distribution): none is older than "
+               "the other, and the verdict and evidence shown are those with the most evidence.")
     out.append("")
     return out
 
@@ -744,7 +866,7 @@ def sec_measurements(rec):
     for p in rec.platforms.values():
         for variant in VARIANTS:
             d = rec.deliverables.get((p["id"], variant))
-            vs = rec.verdicts_of(p["id"], variant)
+            vs = [v for v in rec.verdicts_of(p["id"], variant) if v.get("status") != "not_tested"]
             if not d and not vs:
                 continue
             art = (d or {}).get("artifact") or {}
@@ -782,6 +904,8 @@ def sec_fallbacks(rec):
     out.append("")
     rows = []
     for v in rec.verdicts:
+        if v.get("status") == "not_tested":
+            continue
         feats = list(v.get("disabled_features") or [])
         d = rec.deliverables.get((v.get("platform_id"), v.get("ui_variant")), {})
         for f in d.get("disabled_features") or []:
@@ -848,7 +972,8 @@ def sec_recommendations(rec):
                 rec, fam, variant, "wasm")
         tried = ["%s %s: %s" % (p["id"], v["ui_variant"], label(v["status"]))
                  for v in rec.verdicts for p in [rec.platforms.get(v.get("platform_id"), {})]
-                 if p.get("family") == fam and v.get("ui_variant") == variant]
+                 if p.get("family") == fam and v.get("ui_variant") == variant
+                 and v.get("status") != "not_tested"]
         if not tried:
             rows.append((FAMILY_NAME[fam] + " " + variant, req, decided, NOT_TESTED,
                          "neither confirmed nor contradicted",
@@ -856,11 +981,13 @@ def sec_recommendations(rec):
             continue
         p, v = found if found else (None, None)
         if p is not None and int(str(p.get("release_date"))[:4]) < year:
-            reading = "contradicted: %s works (%s)" % (p["id"], label(v["status"]))
+            reading = "contradicted: %s works (%s)" % (
+                oldest_ids(rec, fam, variant) or p["id"], label(v["status"]))
             change = "lower the floor of the requirements document to %s, as decided (%s); "                      "the verdict is %s: read its restrictions (section 12) before G0" % (
                          p.get("os_name"), decided, label(v["status"]))
         elif p is not None:
-            reading = "not contradicted: only newer systems tried (oldest working: %s)" % p["id"]
+            reading = "not contradicted: only newer systems tried (oldest working: %s)" % (
+                oldest_ids(rec, fam, variant) or p["id"])
             change = "reword the floor as decided (%s); older systems are not tried" % decided
         else:
             reading = "no validated platform"
@@ -892,9 +1019,11 @@ def sec_recommendations(rec):
                       ("Windows x86 (%s): %s; " % (w2k[0]["id"], ", ".join(
                           label(v["status"]) for v in rec.verdicts if v["platform_id"] == w2k[0]["id"]))
                        if w2k else "Windows x86: not tested; ") +
-                      ("Linux i686 built and run as a 32-bit program on a 64-bit kernel, %s"
-                       % ("no verdict" if not any(v["platform_id"] == "linux-i686"
-                                                  for v in rec.verdicts) else "see its verdict")
+                      ("Linux i686 built and run as a 32-bit program on a 64-bit kernel (not a "
+                       "native 32-bit system), %s" % (
+                           ", ".join("%s %s" % (v["ui_variant"], label(v["status"]))
+                                     for v in rec.verdicts if v["platform_id"] == "linux-i686")
+                           or "no verdict")
                        if any(p["id"] == "linux-i686" for p in lin) else "Linux i686: not tested")
                       + "; ARM 32-bit, RISC-V, PowerPC: out of scope or not tested",
                       "Windows x86 is reachable by the Legacy UI down to Windows 2000; the tier "
@@ -938,6 +1067,13 @@ def sec_deviations(rec):
 def sec_restrictions(rec):
     out = ["## 12. Restrictions and causes as recorded (US3 scenario 2)", ""]
     for v in rec.verdicts:
+        if v.get("status") == "not_tested":
+            out.append("### %s %s: %s (not attempted)" % (v.get("platform_id"), v.get("ui_variant"),
+                                                         label(v.get("status"))))
+            out.append("")
+            out.append("Justification recorded in the verdict: %s" % v.get("reason", "MISSING"))
+            out.append("")
+            continue
         out.append("### %s %s: %s (decision: %s)" % (v.get("platform_id"), v.get("ui_variant"),
                                                       label(v.get("status")),
                                                       v.get("decision", "none recorded")))
@@ -953,7 +1089,212 @@ def sec_restrictions(rec):
     return out
 
 
-def build(rec):
+def _fallback_mentions(rec, ui, name):
+    """Ids of the fallback records whose text names the file ui/<ui>/<name>, either with its whole
+    path or in a list after the directory ("ui/legacy/linux-xlib/main.cpp, xftfonts.cpp")."""
+    pattern = re.compile(re.escape("ui/%s/" % ui) + r"([\w.\-]+)((?:,\s*[\w\-]+\.(?:cpp|hpp|cc|c|h))*)")
+    ids = []
+    for f in rec.fallbacks:
+        text = " ".join(str(f.get(k, "")) for k in ("description", "reason", "min_compiler"))
+        for m in pattern.finditer(text):
+            names = [m.group(1).rstrip(".")] + [x.strip() for x in m.group(2).split(",")
+                                                if x.strip()]
+            if name in names and f.get("id") not in ids:
+                ids.append(f.get("id"))
+    return ids
+
+
+def sec_sharing(rec):
+    out = ["## 13. Shared code per platform and variant (FR-011, FR-012, SC-007)", ""]
+    rows = sharing_rows(rec)
+    out.append("Shared code is the backend `core/` (the C++11 library and its C API), glue is the code "
+               "between the C API and a UI language (`bridge/jni`, `bridge/wasm`: none exists yet), "
+               "platform-specific code is the native UI of the platform and variant "
+               "(`ui/<variant>/<platform>/`). Counted: non-empty, non-comment source lines, without "
+               "tests, generated code, build and packaging files. Share = shared / (shared + glue + "
+               "platform-specific). The numbers are the fields `shared_loc`, `glue_loc`, `ui_loc` and "
+               "`sharing_ratio` of the deliverable records, written by "
+               "`python tools/measure_sharing.py --write`; SC-007 asks for at least %d%%." % round(
+                   SHARING_MIN * 100))
+    out.append("")
+    table_rows = []
+    for r in rows:
+        d = r["record"]
+        if r["measured"]:
+            table_rows.append((r["pid"], r["variant"], r["ui"], clip(d.get("ui_toolkit", ""), 60),
+                               num(r["shared"]), num(r["glue"]), num(r["uiloc"]), pct(r["ratio"]),
+                               "met" if r["ratio"] >= SHARING_MIN else "BELOW %d%%" % round(
+                                   SHARING_MIN * 100)))
+        else:
+            table_rows.append((r["pid"], r["variant"], r["ui"], clip(d.get("ui_toolkit", ""), 60),
+                               "-", "-", "-", "not measured", "not measured"))
+    out += table(["Platform", "Variant", "UI directory", "UI toolkit", "Shared lines", "Glue lines",
+                  "Platform-specific lines", "Share", "SC-007"], table_rows)
+    out.append("")
+    groups = OrderedDict()
+    for r in rows:
+        groups.setdefault(r["ui"], []).append(r["pid"])
+    same = ["`ui/%s/`: %s" % (ui, ", ".join(pids)) for ui, pids in groups.items() if len(pids) > 1]
+    if same:
+        out.append("Records that run the same UI sources have the same numbers, the code is counted once "
+                   "per record: " + "; ".join(same) + ".")
+        out.append("")
+    absent = [FAMILY_NAME[f] for f in FAMILIES if not any(p.get("family") == f
+                                                          for p in rec.platforms.values())]
+    unmeasured = sorted(set("%s %s" % (p, v) for p in rec.platforms for v in VARIANTS
+                            if (p, v) not in rec.deliverables))
+    out.append("Not measured: %s have no platform record and no UI code; the variants without a "
+               "deliverable record (%s) have no row." % (", ".join(absent) or "no family",
+                                                          ", ".join(unmeasured) or "none"))
+    out.append("")
+
+    uis = []
+    for r in rows:
+        if r["measured"] and r["ui"] not in uis:
+            uis.append(r["ui"])
+    out.append("### Platform-specific code and why it is platform-specific")
+    out.append("")
+    out.append("Every file counted as platform-specific, with its line count from the stored listing "
+               "of the code-sharing evidence (`validation/evidence/code-sharing/`). Reason: the UI of a "
+               "platform is native (FR-001, FR-020) and limited to system integration, without "
+               "application logic (FR-010); a file that a fallback record names also holds the code of "
+               "that fallback (FR-012: the cost of an old or optional platform case in non-shared "
+               "code), next to the rest of the native UI.")
+    out.append("")
+    file_rows = []
+    for ui in uis:
+        files = rec.code_files["ui"].get(ui)
+        if not files:
+            file_rows.append(("ui/%s/" % ui, "no file listing stored", "-", "-"))
+            continue
+        for name, n in files.items():
+            ids = _fallback_mentions(rec, ui, name)
+            why = ("named by fallback record(s) %s, besides the native UI code" % ", ".join(
+                "`%s`" % i for i in ids)) if ids else (
+                "native UI of the platform (FR-001, FR-010, FR-020); the text of no fallback record names "
+                "this file")
+            file_rows.append(("ui/%s/%s" % (ui, name), num(n), why,
+                              ", ".join(sorted(set(r["pid"] for r in rows if r["ui"] == ui)))))
+    out += table(["File", "Lines", "Why platform-specific", "Used by"], file_rows)
+    out.append("")
+
+    exceptions = [r for r in rows if r["measured"] and r["ratio"] < SHARING_MIN]
+    out.append("### Exceptions: shares below %d%% (SC-007)" % round(SHARING_MIN * 100))
+    out.append("")
+    if not exceptions:
+        out.append("No measured row is below %d%%." % round(SHARING_MIN * 100))
+        out.append("")
+        return out
+    out.append("%d of %d measured rows are below %d%%. Each reason below is taken from the numbers, the "
+               "file listing and the fallback records above; none is a claim about code that was not "
+               "measured." % (len(exceptions), len([r for r in rows if r["measured"]]),
+                              round(SHARING_MIN * 100)))
+    out.append("")
+    core = rec.code_files["core"]
+    if core:
+        biggest = sorted(core.items(), key=lambda kv: (-kv[1], kv[0]))[:3]
+        out.append("Common to every row: the shared part is the whole backend, %s lines in %d file(s) "
+                   "(largest: %s). The application of this project is the probe, a text field and "
+                   "the greeting (`Hello Loomora` reduced on purpose: section 11, spec assumptions, "
+                   "FR-001), so there is little shared logic to count, and every platform pays its own "
+                   "native UI on top." % (num(sum(core.values())), len(core), ", ".join(
+                       "`%s` %s" % (k, num(v)) for k, v in biggest)))
+        out.append("")
+    for r in exceptions:
+        specific = r["glue"] + r["uiloc"]
+        percent = int(round(SHARING_MIN * 100))
+        limit = r["shared"] * (100 - percent) // percent
+        out.append("- **%s %s** (`ui/%s/`): %s shared. %s shared lines, %s platform-specific." % (
+            r["pid"], r["variant"], r["ui"], pct(r["ratio"]), num(r["shared"]), num(specific)))
+        out.append("  - Arithmetic: for %d%% the platform-specific code could not exceed a quarter of "
+                   "the shared code, %s lines; it is %s, %s times that." % (
+                       round(SHARING_MIN * 100), num(limit), num(specific),
+                       ("%.1f" % (float(specific) / limit)) if limit else "many"))
+        files = rec.code_files["ui"].get(r["ui"])
+        if files:
+            top = sorted(files.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+            out.append("  - Platform-specific code: %d files, %s lines; the largest is `%s` with %s "
+                       "lines (%d%% of it)." % (len(files), num(sum(files.values())), top[0],
+                                                num(top[1]), round(100.0 * top[1] / sum(files.values()))))
+            named = [(name, n, _fallback_mentions(rec, r["ui"], name)) for name, n in files.items()]
+            named = [x for x in named if x[2]]
+            if named:
+                total = sum(n for _, n, _ in named)
+                out.append("  - Files that a fallback record names (%s): %s lines, %d%% of the "
+                           "platform-specific code; these files hold the code of fallbacks (FR-012, "
+                           "the old or optional platform cases) and also ordinary UI code, so this "
+                           "is not the cost of the fallbacks alone." % (
+                               ", ".join("`%s` %s" % (name, num(n)) for name, n, _ in named),
+                               num(total), round(100.0 * total / sum(files.values()))))
+        same_ui = [o["pid"] for o in rows if o["ui"] == r["ui"] and o is not r]
+        if same_ui:
+            out.append("  - The same sources as %s: one code base, counted again in this record." %
+                       ", ".join(same_ui))
+        fb = r["record"].get("fallbacks") or []
+        out.append("  - Fallbacks listed by the deliverable record: %s." % (
+            ", ".join("`%s`" % f for f in fb) or "none"))
+    out.append("")
+    out.append("Reading, not measured: the platform-specific part is a native window with its text "
+               "display and input, which every platform needs whatever the application does, against "
+               "a shared part that is only the probe logic. The records do not say what the share "
+               "would be for a larger application, so the report does not claim that %d%% would be "
+               "reached: SC-007 is not met by this probe, and the gap is explained here, not closed."
+               % round(SHARING_MIN * 100))
+    out.append("")
+    return out
+
+
+def sec_changes(rec, comparison):
+    out = ["## 14. Verdict changes since a baseline (FR-018)", ""]
+    if comparison is None:
+        out.append("No baseline was given, so no comparison is made. Generate the report with "
+                   "`python tools/report.py --baseline REV` (REV: a git revision of the docs "
+                   "submodule, or a folder of verdicts) to list every change of `status` and every "
+                   "other difference of the verdicts and deliverable records since REV "
+                   "(`tools/diff_verdicts.py`). The committed report is generated without a baseline "
+                   "so that it is reproducible; the baseline is not recorded in it.")
+        out.append("")
+        return out
+    out.append("Baseline (old): `%s`. Compared with: %s. Source: `tools/diff_verdicts.py`." % (
+        comparison.old.label, comparison.new.label))
+    out.append("")
+    out.append("`%s`" % comparison.summary())
+    out.append("")
+    if comparison.status_changes:
+        rows = []
+        for key, old, new in comparison.status_changes:
+            record = comparison.new.verdicts.get(key) or comparison.old.verdicts.get(key) or {}
+            rows.append((diff_verdicts._title(key, record), label(old), label(new),
+                         diff_verdicts.status_hint(old, new).strip("()") or "-"))
+        out += table(["Platform / variant", "Status before", "Status now", "Direction"], rows)
+    else:
+        out.append("No `status` changed between the baseline and these records.")
+    out.append("")
+    if comparison.added:
+        out.append("Verdicts added: %s." % ", ".join("`%s`" % k for k in comparison.added))
+        out.append("")
+    if comparison.removed:
+        out.append("Verdicts removed: %s." % ", ".join("`%s`" % k for k in comparison.removed))
+        out.append("")
+    out.append("### Differences, per platform and variant")
+    out.append("")
+    out.append("```text")
+    out += comparison.lines
+    out.append("```")
+    out.append("")
+    return out
+
+
+def load_comparison(baseline, validation_dir, repo=None):
+    """The diff_verdicts Comparison of the baseline (a git revision or a folder) with the records of
+    `validation_dir`. Raises diff_verdicts.SetError when a set cannot be read."""
+    old = diff_verdicts.load_set(baseline, repo)
+    new = diff_verdicts.load_set("dir:" + str(validation_dir))
+    new.label = "the records of this report"  # no path in the output: the report stays reproducible
+    return diff_verdicts.compare_sets(old, new)
+
+
+def build(rec, comparison=None):
     checks = run_checks(rec)
     out = ["# Loomora validation report", "",
            "Generated by `python tools/report.py` from the records of "
@@ -963,7 +1304,8 @@ def build(rec):
     for part in (sec_checks(rec, checks), sec_conclusion(rec), sec_platforms(rec),
                  sec_matrix(rec), sec_oldest(rec), sec_measurements(rec), sec_fallbacks(rec),
                  sec_spikes(rec), sec_hypotheses(rec), sec_recommendations(rec),
-                 sec_deviations(rec), sec_restrictions(rec)):
+                 sec_deviations(rec), sec_restrictions(rec), sec_sharing(rec),
+                 sec_changes(rec, comparison)):
         out += part
     return "\n".join(out).rstrip("\n") + "\n"
 
@@ -986,7 +1328,7 @@ def report_path(validation_dir):
     return Path(validation_dir) / "report.md"
 
 
-def check(validation_dir, output=None):
+def check(validation_dir, output=None, comparison=None):
     rec = Records.load(validation_dir)
     status = 0
     for c in run_checks(rec):
@@ -1001,16 +1343,16 @@ def check(validation_dir, output=None):
         return 1
     with open(str(path), encoding="utf-8", newline="") as f:
         current = f.read()
-    if current.replace("\r\n", "\n") != build(rec):
+    if current.replace("\r\n", "\n") != build(rec, comparison):
         print("report.md is stale: run python tools/report.py")
         return 1
     print("report.md is up to date")
     return status
 
 
-def generate(validation_dir, output=None, to_stdout=False):
+def generate(validation_dir, output=None, to_stdout=False, comparison=None):
     rec = Records.load(validation_dir)
-    text = build(rec)
+    text = build(rec, comparison)
     if to_stdout:
         sys.stdout.write(text)
         return 0
@@ -1141,6 +1483,96 @@ def self_test():
         {"platform_id": "p", "ui_variant": "legacy", "measurements": {"history": {
             "display_ms": {"min": 1, "max": 2}}}}, "display_ms") is None)
 
+    # a not_tested verdict is the recorded justification of a variant that was not attempted
+    rec = _records([new], [_v("new-1", "legacy", "ok"),
+                           _v("new-1", "modern", "not_tested", reason="no 32-bit toolkit installed",
+                              evidence=[], reproduction=None)])
+    expect("a not_tested verdict is not an attempt", rec.attempted() == [("new-1", "legacy")])
+    expect("SC-004 and SC-010 accept a not_tested variant with a reason",
+           result(rec, "SC-004").result == "MET" and result(rec, "SC-010").result == "MET")
+    text = build(rec)
+    expect("the matrix shows the justification of a not_tested variant",
+           "not attempted, justified: no 32-bit toolkit installed" in text
+           and "Justification recorded in the verdict: no 32-bit toolkit installed" in text)
+    expect("a not_tested variant has no row in the measurements",
+           "| new-1 | modern |" not in "\n".join(sec_measurements(rec)))
+    rec = _records([new], [_v("new-1", "legacy", "ok"), _v("new-1", "modern", "not_tested")])
+    expect("SC-010 flags a not_tested variant without a reason",
+           result(rec, "SC-010").result == "INCOMPLETE")
+
+    # platforms of the same release date are all named as the oldest
+    twin = _p("lin-twin", "linux", "2024-01-01", 2.5)
+    rec = _records([new, twin], [_v("new-1", "legacy", "ok"), _v("lin-twin", "legacy", "ok")])
+    expect("oldest platform: a tie on the release date names both",
+           oldest_ids(rec, "linux", "legacy") == "lin-twin, new-1")
+    rec = _records([new, twin], [_v("new-1", "legacy", "ok"), _v("lin-twin", "legacy", "ok", evidence=[
+        {"path": "a", "sha256": "0" * 64}, {"path": "b", "sha256": "0" * 64}])])
+    expect("oldest platform: a tie keeps the verdict with the most evidence",
+           oldest_validated(rec, "linux", "legacy")[0]["id"] == "lin-twin")
+    rec = _records([new, twin], [_v("lin-twin", "legacy", "ok"), _v("new-1", "legacy", "ok", evidence=[
+        {"path": "a", "sha256": "0" * 64}, {"path": "b", "sha256": "0" * 64}])])
+    expect("oldest platform: the choice does not depend on the order of the records",
+           oldest_validated(rec, "linux", "legacy")[0]["id"] == "new-1")
+
+    # shared code (T107): table, SC-007 check, exceptions
+    def deliv(pid, variant, shared, glue, ui, ratio):
+        return OrderedDict([("platform_id", pid), ("ui_variant", variant), ("ui_toolkit", "toolkit"),
+                            ("fallbacks", ["fb-x"]), ("shared_loc", shared), ("glue_loc", glue),
+                            ("ui_loc", ui), ("sharing_ratio", ratio)])
+
+    fb = [{"id": "fb-x", "description": "code in ui/legacy/linux-xlib/main.cpp, extra.cpp. See "
+           "ui/legacy/linux-xlib/last.cpp.", "reason": "r",
+           "min_compiler": "m", "platform_ids": []}]
+    rec = _records([new], [_v("new-1", "legacy", "ok")], fallbacks=fb,
+                   deliverables=[deliv("new-1", "legacy", 80, 0, 20, 0.8)])
+    expect("SC-007 met at exactly 80%", result(rec, "SC-007").result == "MET")
+    rec = _records([new], [_v("new-1", "legacy", "ok")], fallbacks=fb,
+                   deliverables=[deliv("new-1", "legacy", 40, 0, 60, 0.4)])
+    c = result(rec, "SC-007")
+    expect("SC-007 not met below 80% and the row is listed",
+           c.result == "NOT MET" and "new-1 legacy: 40.0%" in c.details[0])
+    rec.code_files = {"core": OrderedDict([("core/src/a.cpp", 40)]),
+                      "ui": OrderedDict([("legacy/linux-xlib", OrderedDict([("main.cpp", 50),
+                                                                           ("extra.cpp", 6),
+                                                                           ("last.cpp", 3),
+                                                                           ("other.cpp", 4)]))])}
+    text = build(rec)
+    expect("exceptions: the shortfall is computed from the numbers",
+           "a quarter of the shared code, 10 lines; it is 60, 6.0 times that" in text)
+    expect("exceptions: files named by a fallback record are listed (whole path or list)",
+           "(`main.cpp` 50, `extra.cpp` 6, `last.cpp` 3): 59 lines, 94% of the platform-specific code" in text
+           and "| ui/legacy/linux-xlib/other.cpp | 4 | native UI of the platform" in text)
+    expect("exceptions: no claim beyond the data", "none is a claim about code that was not measured" in text)
+    rec = _records([new], [_v("new-1", "legacy", "ok")],
+                   deliverables=[OrderedDict([("platform_id", "new-1"), ("ui_variant", "legacy")])])
+    c = result(rec, "SC-007")
+    expect("SC-007 incomplete when a record has no measured numbers",
+           c.result == "INCOMPLETE" and "not measured" in c.details[0])
+    rec = _records([new], [_v("new-1", "legacy", "ok")],
+                   deliverables=[deliv("new-1", "legacy", 90, 0, 10, 0.5)])
+    expect("SC-007 flags a stored ratio that does not match the line counts",
+           any("differs" in d for d in result(rec, "SC-007").details))
+    tmp_cs = Path(tempfile.mkdtemp(prefix="loomora-report-cs-"))
+    try:
+        d = tmp_cs / "code-sharing" / "p"
+        d.mkdir(parents=True)
+        (d / "measure-sharing.txt").write_text(
+            "backend core/   5 lines in 1 file(s)\n  core/src/a.cpp      5\n"
+            "  ui/modern/linux-gtk3/m/n.cpp    7\n  ui/legacy/x-y/z.h   3\n", encoding="utf-8")
+        got = _read_code_sharing(tmp_cs / "code-sharing")
+        expect("the file listing of the code-sharing evidence is parsed",
+               got["core"] == {"core/src/a.cpp": 5}
+               and got["ui"]["modern/linux-gtk3"] == {"m/n.cpp": 7}
+               and got["ui"]["legacy/x-y"] == {"z.h": 3})
+    finally:
+        shutil.rmtree(str(tmp_cs), ignore_errors=True)
+    expect("the shared-code section is part of the report", "## 13. Shared code" in build(rec))
+
+    # verdict changes since a baseline (T112)
+    rec = _records([new], [_v("new-1", "legacy", "ok")])
+    expect("no baseline: the section says so",
+           "No baseline was given" in build(rec) and "## 14. Verdict changes" in build(rec))
+
     tmp = Path(tempfile.mkdtemp(prefix="loomora-report-"))
     try:
         common.write_json(tmp / "validation" / "platforms" / "n.json", new)
@@ -1154,6 +1586,38 @@ def self_test():
                           _v("new-1", "legacy", "ko", cause="c", attempts=["a", "b"]))
         expect("--check fails when a record changed", check(str(tmp / "validation")) == 1)
         expect("the report file is written", out.is_file())
+
+        # --baseline: the section holds the output of diff_verdicts.compare_sets()
+        old = tmp / "old"
+        common.write_json(old / "validation" / "verdicts" / "n-legacy.json",
+                          _v("new-1", "legacy", "ok"))
+        common.write_json(old / "validation" / "verdicts" / "gone-legacy.json",
+                          _v("gone-1", "legacy", "ok"))
+        try:
+            cmp_ = load_comparison("dir:" + str(old), str(tmp / "validation"))
+        except diff_verdicts.SetError as e:
+            cmp_ = None
+            print("load_comparison failed: %s" % e)
+        expect("--baseline: a comparison is built", cmp_ is not None)
+        if cmp_ is not None:
+            text = build(Records.load(str(tmp / "validation")), cmp_)
+            expect("--baseline: the status change is listed with its direction",
+                   "| new-1 / legacy | OK | KO | worse |" in text)
+            expect("--baseline: a removed verdict is listed", "Verdicts removed: `gone-legacy`" in text)
+            expect("--baseline: the differences of diff_verdicts follow",
+                   "STATUS CHANGE ok -> ko (worse)" in text and "```text" in text)
+            expect("--baseline: the records of the report are not named by a path",
+                   "Compared with: the records of this report" in text)
+            expect("--baseline: the report is deterministic", text == build(
+                Records.load(str(tmp / "validation")), cmp_))
+            generate(str(tmp / "validation"), None, False, cmp_)
+            expect("--check with the same baseline passes", check(str(tmp / "validation"), None, cmp_) == 0)
+            expect("--check without the baseline notices the difference",
+                   check(str(tmp / "validation")) == 1)
+            generate(str(tmp / "validation"))
+        expect("an unreadable baseline stops with status 2", main(
+            ["--validation-dir", str(tmp / "validation"), "--baseline", "dir:" + str(tmp / "nothing")])
+               == EXIT_NO_DOCS)
     finally:
         shutil.rmtree(str(tmp), ignore_errors=True)
 
@@ -1169,15 +1633,27 @@ def main(argv=None):
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--validation-dir", default=str(common.VALIDATION))
     ap.add_argument("--output", help="report file (default: <validation-dir>/report.md)")
+    ap.add_argument("--baseline", help="compare the verdicts with this git revision of the docs "
+                    "submodule or this folder (section 14); without it the section says that no "
+                    "baseline was given")
+    ap.add_argument("--baseline-repo", help="git repository of the revisions (default "
+                    "docs/implementation)")
     args = ap.parse_args(argv)
     if args.self_test:
         return self_test()
     if not Path(args.validation_dir).is_dir():
         print(common.docs_missing_message("no report to generate"))
         return EXIT_NO_DOCS
+    comparison = None
+    if args.baseline:
+        try:
+            comparison = load_comparison(args.baseline, args.validation_dir, args.baseline_repo)
+        except diff_verdicts.SetError as e:
+            print("report: cannot read the baseline: %s" % e, file=sys.stderr)
+            return EXIT_NO_DOCS
     if args.check:
-        return check(args.validation_dir, args.output)
-    return generate(args.validation_dir, args.output, args.stdout)
+        return check(args.validation_dir, args.output, comparison)
+    return generate(args.validation_dir, args.output, args.stdout, comparison)
 
 
 if __name__ == "__main__":
