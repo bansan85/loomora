@@ -4,14 +4,14 @@ Detailed per-family procedures will be in `docs/implementation/validation/proced
 
 ## Prerequisites (build machine)
 
-- Host: CMake ≥ 3.13, GCC and Clang (current), Python 3.8+ with `jsonschema`, Docker (manylinux2010 image).
+- Host: CMake ≥ 3.13, GCC and Clang (current), Python 3.8+ with `jsonschema`. A Linux machine builds its own binaries (C++11 compiler, CMake, libX11 development files).
 - Cross toolchains per floor: MinGW-w64 GCC (Windows 2000 → 11, backend and Win32 UI); Clang + osxcross and the 10.6 SDK, and Xcode 5.1.1, on Apple hardware; Android NDK **r16b**, JDK 8, build-tools 28.0.3 or older; Emscripten (current, plus 1.39.20 fastcomp if spike S5 requires it).
 - Modern UIs: Visual Studio 2022 with .NET 7+ and the Windows App SDK; a current Xcode; Android Studio with AGP 9 and `compileSdk` 37; gtkmm 3 development files (`libgtkmm-3.0-dev`, which pulls `libgtk-3-dev`; `libgtkmm-4.0-dev` for the GTK 4 build) and CMake on the Linux build machine (no Flatpak); Node.js + TypeScript compiler.
 - An image or device of the platform to test, described in `docs/implementation/validation/platforms/<id>.json`.
 
 ## Scenario 0 — spikes
 
-Run spikes S1–S9 of [research.md](research.md) first, in order of risk (S1 Windows 2000, S2 macOS 10.6 and iOS 5, S3 Android 2.3, S5 old browsers). Record each result in `docs/implementation/validation/spikes.json`; a refuted spike produces an ADR in `docs/implementation/adr/` naming the fallback.
+Run spikes S1–S9 (S4 removed on 2026-11-14) of [research.md](research.md) first, in order of risk (S1 Windows 2000, S2 macOS 10.6 and iOS 5, S3 Android 2.3, S5 old browsers). Record each result in `docs/implementation/validation/spikes.json`; a refuted spike produces an ADR in `docs/implementation/adr/` naming the fallback.
 
 ## Scenario 1 — backend and vectors
 
