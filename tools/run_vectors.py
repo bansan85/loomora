@@ -45,6 +45,12 @@ Platform launchers (registry LAUNCHERS, keyed by family and variant; select_laun
 VirtualBox launcher for the guest platforms of VBOX_PLATFORMS). Implemented: linux modern, linux
 legacy (the Xlib UI, same way; executable from $HOME/loomora-build/linux-legacy-x86_64, then out/,
 or --exe), windows legacy on the local Windows host and windows legacy in a VirtualBox guest (windows-2000-x86).
+Android legacy (platform id android-<release>-<abi>, for example android-4.1.2-x86): see
+AndroidLegacyLauncher. The APK out/android-legacy/loomora.apk (or --exe) is installed on the one
+emulator or device adb sees (--serial / $ANDROID_SERIAL to choose); the launcher never starts or
+stops the emulator. Each run starts the activity with the intent extras of the UI contract and
+reads the probe line from logcat (tag LOOMORA_PROBE; a long line is logged in numbered parts
+"#i/n <text>" and joined here). Runs are serial.
 Every other family exits with status 1 and "launcher not implemented yet" until the tasks that
 add the UIs (T060-T093) add theirs: they only have to implement Launcher.run().
 Linux modern: the executable built by `python tools/build.py linux modern`
@@ -80,6 +86,7 @@ tools/guest/runw.c passes the exact UTF-16 command line to CreateProcessW).
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -750,9 +757,168 @@ class WindowsVirtualBoxLauncher(Launcher):
         return self.run_exe(["--probe", "--probe-input", text], timeout)
 
 
+# ---- Android Legacy UI on an emulator or device through adb -----------------------------------
+
+ANDROID_PACKAGE = "fr.loomora.probe"
+ANDROID_ACTIVITY = ANDROID_PACKAGE + "/.MainActivity"
+ANDROID_TAG = "LOOMORA_PROBE"
+ANDROID_INPUT_FILE = "/data/local/tmp/loomora-probe-input.txt"
+ANDROID_MAX_EXTRA_BYTES = 1500  # longest text given as the plain probe_input extra
+
+
+def adb_executable(args):
+    """adb: --adb, $LOOMORA_ADB, platform-tools of the SDK ($LOOMORA_ANDROID_SDK / $ANDROID_HOME /
+    $ANDROID_SDK_ROOT), then PATH."""
+    if args.adb:
+        return args.adb
+    if os.environ.get("LOOMORA_ADB"):
+        return os.environ["LOOMORA_ADB"]
+    for name in ("LOOMORA_ANDROID_SDK", "ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        sdk = os.environ.get(name)
+        if sdk:
+            for exe in ("adb.exe", "adb"):
+                path = Path(sdk) / "platform-tools" / exe
+                if path.is_file():
+                    return str(path)
+    found = shutil.which("adb")
+    if found:
+        return found
+    raise RuntimeError("adb not found: set LOOMORA_ANDROID_SDK (or ANDROID_HOME), LOOMORA_ADB or "
+                       "use --adb")
+
+
+def shell_quote(text):
+    """The text as one POSIX shell word (single quotes; every character, newlines included, kept)."""
+    return "'" + text.replace("'", "'\\''") + "'"
+
+
+class AndroidLegacyLauncher(Launcher):
+    """The Android Legacy UI (an APK) on ONE running emulator or device, driven with adb.
+
+    The APK (out/android-legacy/loomora.apk from `python tools/build.py android legacy`, or --exe)
+    is installed in prepare(). A run force-stops the application, clears logcat, starts
+    fr.loomora.probe/.MainActivity with `am start -W --ez probe true --es probe_input '<text>'`
+    (the text is one single-quoted shell word, so quotes, newlines, backslashes and the empty
+    string reach the extra unchanged; a text with a character outside the BMP or of more than
+    ANDROID_MAX_EXTRA_BYTES bytes is pushed to a file and given as `probe_input_file`, because the
+    `am` of Android 4.1 crashes on the first and adb refuses a 4,096-byte command for the second) and polls `logcat -d -v raw -s LOOMORA_PROBE:I` for the
+    probe line. The UI logs a long line as numbered parts "#i/n <text>" (a logcat entry holds
+    about 4,000 bytes): they are joined here. The run is a failure when the line does not come, the
+    process crashed (a FATAL EXCEPTION in logcat) or the activity is still resumed 6 s after the
+    line (the UI finishes by itself). Runs are serial (one device). The emulator is started and
+    stopped by the person running this tool, never here."""
+
+    length_unit = "utf16"  # the field limit counts Java chars (UTF-16 units)
+    max_jobs = 1
+
+    def __init__(self, args):
+        Launcher.__init__(self, args)
+        self.apk = Path(args.exe) if args.exe else common.ROOT / "out" / "android-legacy" / "loomora.apk"
+        self.serial = args.serial or os.environ.get("ANDROID_SERIAL")
+        self.adb = adb_executable(args)
+
+    def _adb(self, *cmd, **kwargs):
+        full = [self.adb] + (["-s", self.serial] if self.serial else []) + [str(c) for c in cmd]
+        timeout = kwargs.pop("timeout", 60)
+        res = subprocess.run(full, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        return res.returncode, res.stdout.decode("utf-8", "replace"), res.stderr.decode("utf-8", "replace")
+
+    def _prop(self, name):
+        return self._adb("shell", "getprop " + name)[1].strip()
+
+    def prepare(self):
+        if not self.apk.is_file():
+            raise RuntimeError("APK not found: %s (run 'python tools/build.py android legacy')"
+                               % self.apk)
+        code, out, err = self._adb("get-state")
+        if code != 0 or out.strip() != "device":
+            raise RuntimeError("no Android device or emulator ready (adb get-state: %r %s); start "
+                               "one first, this tool never does" % (out.strip(), err.strip()))
+        if self._prop("sys.boot_completed") != "1":
+            raise RuntimeError("the device has not finished booting (sys.boot_completed)")
+        code, out, err = self._adb("install", "-r", self.apk, timeout=300)
+        if "INCONSISTENT_CERTIFICATES" in out:  # an APK signed with another debug key is installed
+            self._adb("uninstall", ANDROID_PACKAGE)
+            code, out, err = self._adb("install", self.apk, timeout=300)
+        if code != 0 or "Success" not in out:
+            raise RuntimeError("adb install failed: %s %s" % (out.strip(), err.strip()))
+        return "Android Legacy %s (release %s, API %s, abi %s): %s (%d bytes, sha256 %s)" % (
+            self._prop("ro.product.model") or "device", self._prop("ro.build.version.release"),
+            self._prop("ro.build.version.sdk"), self._prop("ro.product.cpu.abi"),
+            self.apk.name, self.apk.stat().st_size, common.sha256(self.apk))
+
+    def _probe_line(self):
+        """The probe line currently in logcat ("" when none), parts joined."""
+        out = self._adb("logcat", "-d", "-v", "raw", "-s", ANDROID_TAG + ":I", timeout=30)[1]
+        entries = [l.strip("\r") for l in out.split("\n") if l.strip("\r") and not l.startswith("-----")]
+        parts = {}
+        total = None
+        whole = []
+        for entry in entries:
+            m = re.match(r"^#(\d+)/(\d+) (.*)$", entry)
+            if m:
+                parts[int(m.group(1))] = m.group(3)
+                total = int(m.group(2))
+            else:
+                whole.append(entry)
+        if whole:
+            return whole[-1]
+        if total and len(parts) == total:
+            return "".join(parts[i] for i in range(1, total + 1))
+        return ""
+
+    def run(self, text, timeout):
+        start = time.time()
+        self._adb("shell", "am force-stop " + ANDROID_PACKAGE)
+        self._adb("logcat", "-c")
+        data = text.encode("utf-8")
+        if len(data) <= ANDROID_MAX_EXTRA_BYTES and all(ord(c) < 0x10000 for c in text):
+            extra = "--es probe_input " + shell_quote(text)
+        else:  # the `am` of Android 4.1 crashes on a non-BMP character; adb limits the command
+            self._adb("shell", "rm -f " + ANDROID_INPUT_FILE)
+            with tempfile.TemporaryDirectory() as scratch:
+                local = os.path.join(scratch, "input.txt")
+                with open(local, "wb") as f:
+                    f.write(data)
+                self._adb("push", local, ANDROID_INPUT_FILE)
+            self._adb("shell", "chmod 644 " + ANDROID_INPUT_FILE)
+            extra = "--es probe_input_file " + ANDROID_INPUT_FILE
+        cmd = "am start -W -n %s --ez probe true %s" % (ANDROID_ACTIVITY, extra)
+        code, out, err = self._adb("shell", cmd, timeout=60)
+        if code != 0 or "Error" in out:
+            return RunResult(None, "", err, time.time() - start,
+                             "am start failed: %s %s" % (out.strip()[:300], err.strip()[:300]))
+        line = ""
+        while time.time() - start < timeout:
+            line = self._probe_line()
+            if line:
+                break
+            time.sleep(0.5)
+        crashed = "FATAL EXCEPTION" in self._adb("logcat", "-d", "-s", "AndroidRuntime:E")[1]
+        if not line:
+            return RunResult(1 if crashed else None, "", "", time.time() - start,
+                             "no probe line in logcat after %s s%s"
+                             % (timeout, " (the application crashed)" if crashed else ""))
+        status = 1 if crashed else 0
+        stderr = "FATAL EXCEPTION in logcat" if crashed else ""
+        # the UI finishes by itself: the activity must not stay resumed
+        deadline = time.time() + 6
+        while status == 0:
+            top = self._adb("shell", "dumpsys activity activities")[1]
+            resumed = [l for l in top.splitlines() if "esumed" in l and ANDROID_PACKAGE in l]
+            if not resumed:
+                break
+            if time.time() > deadline:
+                status, stderr = 1, "the activity is still resumed 6 s after the probe line"
+                break
+            time.sleep(0.5)
+        return RunResult(status, line + "\n", stderr, time.time() - start)
+
+
 LAUNCHERS = {("linux", "modern"): LinuxModernLauncher,
              ("linux", "legacy"): LinuxLegacyLauncher,
-             ("windows", "legacy"): WindowsLegacyLauncher}
+             ("windows", "legacy"): WindowsLegacyLauncher,
+             ("android", "legacy"): AndroidLegacyLauncher}
 
 
 def select_launcher(family, variant, platform_id):
@@ -827,6 +993,10 @@ def main(argv=None):
     ap.add_argument("--exe", help="the executable to run instead of the one that tools/build.py "
                     "left (Linux: a path on the Linux side, in $HOME/loomora-build or out/; "
                     "Windows legacy: a loomora.exe, default out/windows-legacy/<arch>/)")
+    ap.add_argument("--adb", help="Android only: the adb executable (default $LOOMORA_ADB, the "
+                    "platform-tools of $LOOMORA_ANDROID_SDK / $ANDROID_HOME, then PATH)")
+    ap.add_argument("--serial", help="Android only: adb serial of the device (default "
+                    "$ANDROID_SERIAL, or the only device)")
     ap.add_argument("--inner-variant", choices=("legacy", "modern"), help=argparse.SUPPRESS)
     ap.add_argument("--inner-run", help=argparse.SUPPRESS)    # Linux side, see the docstring
     ap.add_argument("--inner-where", action="store_true", help=argparse.SUPPRESS)

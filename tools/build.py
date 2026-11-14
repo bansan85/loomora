@@ -59,6 +59,21 @@ Implemented targets:
                  instead, which tools/validate_records.py reports as a deliverable without
                  platform until the platform record exists.
 
+  android legacy CMake + Ninja with cmake/toolchains/android-ndk-r15c.cmake (T029, T081, T082) for
+                 the JNI glue bridge/jni/loomora_jni.cpp and the C++11 backend, once per ABI
+                 (armeabi, armeabi-v7a, x86: API 9 sysroot; arm64-v8a: API 21 sysroot), plus
+                 loomora_selftest per ABI (spike S3), then ui/legacy/android-views/build_apk.py
+                 (javac, d8 --min-api 9, aapt, zipalign, apksigner v1) writes ONE APK holding
+                 the four libraries: out/android-legacy/loomora.apk (selftests in
+                 out/android-legacy/selftest/<abi>/). Runs on the Windows host, not in WSL; needs
+                 the Android SDK (LOOMORA_ANDROID_SDK or ANDROID_HOME: platforms/android-9,
+                 build-tools with d8, aapt, zipalign, apksigner), the NDK r15c
+                 (LOOMORA_ANDROID_NDK) and a JDK (JAVA_HOME). It checks each library: DT_NEEDED
+                 limited to the libraries of Android 2.3 (libc, libm, libdl, liblog, libstdc++),
+                 only Java_* exported, no undefined symbol (the link uses --no-undefined against
+                 the API 9 libraries), -std=c++11 for the backend. Writes one record per Android
+                 platform of docs/implementation/validation/platforms/ (the same APK for all).
+
 Platform id of a Linux deliverable: "linux-<os-release ID>-<VERSION_ID>-<machine>" such as
 "linux-ubuntu-24.04-x86_64", the same rule as ui/modern/linux-gtk3/probe.cpp and
 ui/legacy/linux-xlib/probe.c use for the probe record's platform_id (keep them in step). The
@@ -97,7 +112,6 @@ PENDING = {
     ("android", "modern"): "T055",
     ("macos", "legacy"): "T077",
     ("ios", "legacy"): "T079",
-    ("android", "legacy"): "T082",
     ("web", "legacy"): "T086",
 }
 
@@ -742,7 +756,211 @@ def write_deliverable(record, artifact):
     print("deliverable record: %s" % path.relative_to(common.ROOT).as_posix())
 
 
+# ---- android legacy (T029, T081, T082) -----------------------------------------------------
+
+ANDROID_LEGACY_ABIS = ("armeabi", "armeabi-v7a", "x86", "arm64-v8a")
+# Libraries a library of the APK may need: the ones every Android has since 2.3.
+ANDROID_ALLOWED_NEEDED = ("libc.so", "libm.so", "libdl.so", "liblog.so", "libstdc++.so")
+# ABI -> (GCC toolchain directory of the NDK, tool prefix); the same table as the toolchain file.
+ANDROID_GCC = {
+    "armeabi": ("arm-linux-androideabi-4.9", "arm-linux-androideabi-"),
+    "armeabi-v7a": ("arm-linux-androideabi-4.9", "arm-linux-androideabi-"),
+    "x86": ("x86-4.9", "i686-linux-android-"),
+    "arm64-v8a": ("aarch64-linux-android-4.9", "aarch64-linux-android-"),
+}
+
+ANDROID_INSTALL_HELP = """\
+android legacy needs, on the Windows host (no WSL):
+  LOOMORA_ANDROID_NDK   the Android NDK r15c directory (r16b starts at android-14 and ndk-build
+                        raises API 9 to 14: only r15c has platforms/android-9, see ADR 0016)
+  LOOMORA_ANDROID_SDK   (or ANDROID_HOME) the Android SDK with platforms/android-9 and build-tools
+                        that have d8, aapt, zipalign and apksigner (sdkmanager "build-tools/36.0.0"
+                        "platforms/android-9")
+  JAVA_HOME             a JDK 8 or later (javac, keytool)
+  cmake and ninja on PATH"""
+
+
+def android_ndk_dir():
+    ndk = os.environ.get("LOOMORA_ANDROID_NDK")
+    if not ndk or not Path(ndk).is_dir():
+        sys.exit("android legacy: LOOMORA_ANDROID_NDK is not set to an existing directory\n\n%s"
+                 % ANDROID_INSTALL_HELP)
+    props = Path(ndk) / "source.properties"
+    revision = ""
+    if props.is_file():
+        m = re.search(r"Pkg\.Revision\s*=\s*(\S+)", props.read_text())
+        revision = m.group(1) if m else ""
+    if not revision.startswith("15."):
+        sys.exit("android legacy: %s is NDK %s, not r15c (15.2.x)\n\n%s"
+                 % (ndk, revision or "of unknown version", ANDROID_INSTALL_HELP))
+    return Path(ndk), revision
+
+
+def android_host_tag():
+    return "windows-x86_64" if sys.platform == "win32" else "linux-x86_64"
+
+
+def android_tool(ndk, abi, name):
+    gcc_dir, prefix = ANDROID_GCC[abi]
+    exe = ".exe" if sys.platform == "win32" else ""
+    return str(ndk / "toolchains" / gcc_dir / "prebuilt" / android_host_tag() / "bin"
+               / (prefix + name + exe))
+
+
+def nm_symbols(ndk, abi, lib, flag):
+    """Names of the dynamic symbols of a library listed by `nm -D <flag>`, with their type letter."""
+    out = []
+    for line in capture([android_tool(ndk, abi, "nm"), "-D", flag, lib]).splitlines():
+        fields = line.split()
+        if len(fields) >= 2:
+            out.append((fields[-2], fields[-1]))
+    return out
+
+
+def android_check_library(ndk, abi, lib):
+    """Facts about a built libloomora_jni.so; stops on a library or symbol it must not have."""
+    needed = re.findall(r"Shared library: \[([^\]]+)\]",
+                        capture([android_tool(ndk, abi, "readelf"), "-d", lib]))
+    bad = [n for n in needed if n not in ANDROID_ALLOWED_NEEDED]
+    if bad:
+        sys.exit("%s: needs %s, which Android 2.3 does not provide (allowed: %s)"
+                 % (lib, ", ".join(bad), ", ".join(ANDROID_ALLOWED_NEEDED)))
+    exported = [name for kind, name in nm_symbols(ndk, abi, lib, "--defined-only") if kind == "T"]
+    other = [e for e in exported if not e.startswith("Java_fr_loomora_probe_Native_")]
+    if other:
+        sys.exit("%s: exports %s besides the JNI functions" % (lib, ", ".join(other)))
+    undefined = [name for kind, name in nm_symbols(ndk, abi, lib, "--undefined-only")
+                 if kind in ("U", "w")]
+    return needed, exported, undefined
+
+
+def check_android_standards(build_dir):
+    """The backend and the glue are compiled with -std=c++11 (compile_commands.json)."""
+    commands = common.read_json(build_dir / "compile_commands.json")
+    seen = 0
+    for entry in commands:
+        file = entry["file"].replace("\\", "/")
+        if "/core/src/" in file or file.endswith("/bridge/jni/loomora_jni.cpp"):
+            seen += 1
+            if "-std=c++11" not in entry["command"]:
+                sys.exit("%s is not compiled with -std=c++11" % file)
+    if seen == 0:
+        sys.exit("no backend source found in compile_commands.json")
+
+
+def run_android_legacy(args):
+    missing = [t for t in ("cmake", "ninja") if shutil.which(t) is None]
+    if missing:
+        sys.exit("android legacy: missing tool(s): %s\n\n%s"
+                 % (", ".join(missing), ANDROID_INSTALL_HELP))
+    ndk, revision = android_ndk_dir()
+    sdk = os.environ.get("LOOMORA_ANDROID_SDK") or os.environ.get("ANDROID_HOME") or ""
+    env_sdk = dict(os.environ, LOOMORA_ANDROID_SDK=sdk) if sdk else os.environ
+    build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (common.ROOT / "build"))
+    toolchain_file = common.ROOT / "cmake" / "toolchains" / "android-ndk-r15c.cmake"
+    out_dir = common.ROOT / "out" / "android-legacy"
+    libs = {}
+    facts = {}
+    for abi in ANDROID_LEGACY_ABIS:
+        build_dir = build_root / ("android-legacy-" + abi)
+        common.run(["cmake", "-S", common.ROOT, "-B", build_dir, "-G", "Ninja",
+                    "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+                    "-DCMAKE_TOOLCHAIN_FILE=" + str(toolchain_file),
+                    "-DLOOMORA_ANDROID_NDK=" + str(ndk), "-DANDROID_ABI=" + abi,
+                    "-DLOOMORA_BUILD_TESTS=ON", "-DLOOMORA_BUILD_CATCH2_TESTS=OFF"])
+        common.run(["cmake", "--build", build_dir])
+        check_android_standards(build_dir)
+        lib = build_dir / "ui" / "legacy" / "android-views" / "libloomora_jni.so"
+        selftest = build_dir / "core" / "tests" / "loomora_selftest"
+        for path in (lib, selftest):
+            if not path.is_file():
+                sys.exit("build finished but %s is missing" % path)
+        facts[abi] = android_check_library(ndk, abi, lib)
+        libs[abi] = lib
+        target_dir = out_dir / "selftest" / abi
+        target_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(str(selftest), str(target_dir / "loomora_selftest"))
+        print("%s: needs %s; exports %d JNI function(s); %d undefined symbol(s), none missing "
+              "from the API %d libraries (linked with --no-undefined)"
+              % (abi, ", ".join(facts[abi][0]), len(facts[abi][1]), len(facts[abi][2]),
+                 21 if abi == "arm64-v8a" else 9))
+    apk = out_dir / "loomora.apk"
+    cmd = [sys.executable, common.ROOT / "ui" / "legacy" / "android-views" / "build_apk.py",
+           "--out", apk, "--workdir", build_root / "android-legacy-apk",
+           "--keystore", build_root / "android-legacy-debug.keystore"]
+    for abi in ANDROID_LEGACY_ABIS:
+        cmd += ["--lib", "%s=%s" % (abi, libs[abi]), "--strip",
+                "%s=%s" % (abi, android_tool(ndk, abi, "strip"))]
+    res = subprocess.run([str(c) for c in cmd], env=env_sdk)
+    if res.returncode != 0:
+        sys.exit("build_apk.py failed (%d)" % res.returncode)
+    clang = ndk / "toolchains" / "llvm" / "prebuilt" / android_host_tag() / "bin" / (
+        "clang++.exe" if sys.platform == "win32" else "clang++")
+    first_line = capture([clang, "--version"]).splitlines()[0]
+    m = re.search(r"clang version (\S+)", first_line)
+    clang_version = m.group(1) if m else first_line
+    for record in android_legacy_records(apk, revision, clang_version, facts):
+        write_deliverable(record, apk)
+
+
+# Platform record arch -> the ABIs of the APK that run on it, and the target text.
+ANDROID_PLATFORM_ABIS = {
+    "x86": ("x86", "x86 (i686-none-linux-android, API 9 sysroot)"),
+    "arm": ("armeabi, armeabi-v7a", "armeabi (armv5te-none-linux-androideabi) and armeabi-v7a "
+            "(armv7-none-linux-androideabi), API 9 sysroot"),
+    "arm64": ("arm64-v8a", "arm64-v8a (aarch64-none-linux-android, API 21 sysroot)"),
+}
+
+
+def android_platforms():
+    """{platform id: record} of the Android platforms of docs/implementation/validation/platforms/."""
+    found = {}
+    if not common.docs_present():
+        return found
+    for path in sorted((common.VALIDATION / "platforms").glob("*.json")):
+        rec = common.read_json(path)
+        if isinstance(rec, dict) and rec.get("family") == "android" and rec.get("id"):
+            found[rec["id"]] = rec
+    return found
+
+
+def android_legacy_records(apk, revision, clang_version, facts):
+    """One Deliverable record per Android platform record: the same APK, named by each."""
+    sha = common.sha256(apk)
+    libs = "; ".join("%s: needs %s, %d JNI export(s)" % (abi, ", ".join(f[0]), len(f[1]))
+                     for abi, f in sorted(facts.items()))
+    for platform_id, platform_rec in sorted(android_platforms().items()):
+        abis, target = ANDROID_PLATFORM_ABIS.get(platform_rec.get("arch"), (None, None))
+        if abis is None:
+            continue
+        yield {
+            "platform_id": platform_id,
+            "ui_variant": "legacy",
+            "cpp_std": "c++11",
+            "compiler": "clang-%s-ndk-r15c" % clang_version,
+            "target": target,
+            "output": "native",
+            "ui_language": "java",
+            "ui_toolkit": "Android framework views (Activity, EditText, TextView, TextWatcher), "
+                          "no AndroidX, built in code without resources; minSdkVersion 9, "
+                          "targetSdkVersion 23; JNI glue bridge/jni/loomora_jni.cpp",
+            "ui_compiler": "javac -source 8 -target 8 against android-9/android.jar, d8 --min-api 9 "
+                           "(dex 035), aapt, zipalign, apksigner v1 only",
+            "artifact": {"name": apk.name, "size": apk.stat().st_size},
+            "disabled_features": [],
+            "fallbacks": fallbacks_of(platform_id),
+            "notes": "cmake + ninja with cmake/toolchains/android-ndk-r15c.cmake (NDK %s, Clang %s, "
+                     "unified headers, --sysroot platforms/android-9, gnustl linked statically, no "
+                     "ndk-build); static libloomora.a built from core/src with -std=c++11 and "
+                     "libloomora_jni.so per ABI (%s); ONE universal APK holding libraries of the "
+                     "four ABIs, named by every Android platform record; the ABIs of this "
+                     "platform: %s; artifact sha256 %s; artifact copied to out/android-legacy/."
+                     % (revision, clang_version, libs, abis, sha),
+        }
+
+
 TARGETS = {
+    ("android", "legacy"): run_android_legacy,
     ("linux", "modern"): run_linux_modern,
     ("linux", "legacy"): run_linux_legacy,
     ("windows", "legacy"): run_windows_legacy,
