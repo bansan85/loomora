@@ -97,7 +97,7 @@ FALLBACK_FIELDS = ("id", "description", "macro", "min_compiler", "platform_ids",
 SOURCE_FIELDS = ("id", "url", "title", "accessed", "claim")
 SPIKE_FIELDS = ("id", "question", "status", "result", "adr", "fallback", "sources")
 HYPOTHESIS_FIELDS = ("id", "title", "criterion", "fallback", "covered_by_probe", "platform_ids",
-                     "status", "sources")
+                     "status", "sources", "old_targets", "records", "note")
 EVIDENCE_FIELDS = ("path", "sha256", "kind", "description")
 
 
@@ -343,7 +343,7 @@ def check_spikes(path, root, source_ids, report):
     report_unknown(unknown, path, report, "spikes")
 
 
-def check_hypotheses(path, platform_ids, source_ids, report):
+def check_hypotheses(path, platform_ids, source_ids, report, root=None):
     if not path.is_file():
         report.info(path, "not present yet (validation/hypotheses.json is created later)")
         return
@@ -375,6 +375,19 @@ def check_hypotheses(path, platform_ids, source_ids, report):
                 if pid not in platform_ids:
                     report.error(path, "%s: platform %r has no record in platforms/" % (label, pid))
         check_source_refs(rec, source_ids, path, report, label)
+        # "records" (optional): the records the status rests on, paths relative to the docs root.
+        records = rec.get("records")
+        if records is not None:
+            if not is_text_list(records):
+                report.error(path, "%s: 'records' must be a list of paths" % label)
+            elif root is not None:
+                for rel in records:
+                    if not (Path(root) / rel).exists():
+                        report.error(path, "%s: record %r does not exist (path relative to the "
+                                     "docs root)" % (label, rel))
+        if rec.get("status") not in (None, "not_covered") and rec.get("covered_by_probe") is False:
+            report.error(path, "%s: status %r needs covered_by_probe = true (only 'not_covered' "
+                         "is allowed otherwise)" % (label, rec.get("status")))
     report_unknown(unknown, path, report, "hypotheses")
 
 
@@ -680,7 +693,7 @@ def validate(validation_dir, root, require_complete=False):
                                       source_ids, report)
     verdicts = check_verdicts(validation_dir / "verdicts", root, platforms, deliverables,
                               source_ids, report)
-    check_hypotheses(validation_dir / "hypotheses.json", platforms, source_ids, report)
+    check_hypotheses(validation_dir / "hypotheses.json", platforms, source_ids, report, root)
 
     for fid, fb in fallback_ids.items():
         for pid in fb.get("platform_ids") or []:
@@ -744,6 +757,14 @@ def _good_tree():
                      ("adr", "")]) for i in range(1, 10) if i != 4]
     tree["validation/spikes.json"][0].update(status="confirmed", result="done")
     tree["validation/spikes.json"][1].update(status="refuted", result="no", adr="adr/0002-x.md")
+    tree["validation/hypotheses.json"] = [
+        OrderedDict([("id", "V1"), ("title", "t"), ("criterion", "c"), ("fallback", "f"),
+                     ("covered_by_probe", True), ("platform_ids", ["lin-1"]),
+                     ("status", "ok_restricted"), ("records", ["validation/procedures/p.md"]),
+                     ("note", "n")]),
+        OrderedDict([("id", "V2"), ("title", "t"), ("criterion", "c"), ("fallback", "f"),
+                     ("covered_by_probe", False), ("platform_ids", []),
+                     ("status", "not_covered"), ("records", [])])]
     tree["validation/platforms/lin-1.json"] = platform("lin-1", "linux", "x86_64")
     tree["validation/platforms/web-1.json"] = platform("web-1", "web", "wasm")
     tree["validation/platforms/old-1.json"] = platform("old-1", "windows", "x86", in_scope=False)
@@ -875,6 +896,11 @@ def _mutations():
          lambda t: t["validation/spikes.json"][1].update(adr="")),
         ("spike adr path missing", "adr 'adr/9999.md' does not exist",
          lambda t: t["validation/spikes.json"][1].update(adr="adr/9999.md")),
+        ("hypothesis record missing", "record 'validation/procedures/none.md' does not exist",
+         lambda t: t["validation/hypotheses.json"][0].update(
+             records=["validation/procedures/none.md"])),
+        ("hypothesis verdict without coverage", "needs covered_by_probe = true",
+         lambda t: t["validation/hypotheses.json"][0].update(covered_by_probe=False)),
         ("invalid JSON", "not valid JSON",
          lambda t: t.__setitem__("validation/verdicts/broken.json", b"{not json")),
     ]
@@ -893,6 +919,7 @@ def _completeness_cases():
         for name in [n for n in tree if n.startswith("validation/verdicts/lin-1")]:
             del tree[name]
         tree["validation/fallbacks.json"][0]["platform_ids"] = []
+        tree["validation/hypotheses.json"][0]["platform_ids"] = []
 
     def drop_repro(tree):
         tree["validation/verdicts/lin-1-modern.json"].pop("reproduction")
