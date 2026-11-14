@@ -8,7 +8,8 @@
 ## Git workflow
 
 - `master` contains **only merge commits** (`git merge --no-ff`), except the empty root commit (`chore: start the project`), the only commit on `master` that is not a merge. Nothing is ever committed directly on `master`. The same holds for the documentation repository `../loomora-docs`.
-- Every change, whoever makes it (Claude or an agent), is committed on a dedicated branch and merged into `master` afterwards, so the content of each change can be reviewed as one merge. An agent works in a separate git worktree created outside the repository (for example `../loomora-<topic>`) on its own branch and does not merge: Claude merges it.
+- Every change, whoever makes it (Claude or an agent), is committed on a dedicated branch and merged into `master` afterwards, so the content of each change can be reviewed as one merge. An agent works in a separate git worktree created outside the repository (for example `../loomora-<topic>`) on its own branch and does not merge: Claude merges it, and only after the project owner has explicitly validated the branch.
+- A branch is never merged on its own initiative. When it is finished, report it (branch, commits, what was verified and what was not) and wait for the owner's explicit approval before merging, moving the docs submodule pointer or deleting the worktree and the branch. A sub-agent's report is not an approval.
 - The tag `dont-move-me` points to the old `master` tip (the full history before it was rewritten to this standard); it is kept for reference and never moved.
 
 ## Implementation documentation
