@@ -259,6 +259,10 @@ jobs:
         with:
           name: android-${{ matrix.ui }}-apk
           path: ${{ runner.temp }}/apk
+      - name: Install python3-jsonschema (tools/check_probe.py)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-jsonschema
       - name: Give the runner user access to KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -288,6 +292,7 @@ jobs:
           {
             echo "LOOMORA_ANDROID_SDK=$sdk"
             echo "ANDROID_SDK_ROOT=$sdk"
+            echo "ANDROID_HOME=$sdk"
             echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME"
           } >> "$GITHUB_ENV"
       # One step for the boot and the run: the emulator is a child of this shell and ends with it.
