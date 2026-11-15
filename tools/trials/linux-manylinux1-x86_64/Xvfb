@@ -1,0 +1,5 @@
+#!/bin/sh
+# Wrapper of the Xvfb of this image (see the Dockerfile): the same server with an explicit font
+# path. The default one ends with the font server unix/:7100, which does not exist here, and the
+# server then spends 2 to 5 seconds on it at the first font a client opens.
+exec /usr/bin/Xvfb -fp /usr/share/X11/fonts/misc/,/usr/share/X11/fonts/Type1/ "$@"
