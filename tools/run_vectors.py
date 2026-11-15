@@ -16,6 +16,7 @@ Usage:
                device it runs as a 32-bit process (x86 on android-7.0-x86_64) and its probe line
                says android-7.0-x86. Only the 32-bit companion of the device's ABI is accepted
                (see android_probe_platform_id); the device must list it in ro.product.cpu.abilist
+               (ro.product.cpu.abi and abi2 before API 21)
 
 For each valid vector the UI is launched in probe mode with the input override of
 contracts/ui-contract.md (`--probe-input <utf8>` on Windows, macOS and Linux; the intent extra
@@ -1117,6 +1118,10 @@ class AndroidLegacyLauncher(Launcher):
             raise RuntimeError("the device has not finished booting (sys.boot_completed)")
         if self.ui_abi:
             abilist = self._prop("ro.product.cpu.abilist").split(",")
+            if abilist == [""]:
+                # before API 21 there is no abilist: the ABIs are in ro.product.cpu.abi and abi2
+                abilist = [self._prop("ro.product.cpu.abi"), self._prop("ro.product.cpu.abi2")]
+                abilist = [abi for abi in abilist if abi]
             if self.ui_abi not in abilist:
                 raise RuntimeError("--ui-abi %s: the device lists %s in ro.product.cpu.abilist"
                                    % (self.ui_abi, ",".join(abilist)))
