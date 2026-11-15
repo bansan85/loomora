@@ -1,0 +1,245 @@
+# Continuous integration, Web jobs (T125). See ADR 0017 for the two build paths and ADR 0018 for the
+# GitHub-hosted runners; the conventions are the ones of ci.yml (T129): third-party actions pinned
+# by full commit SHA with the tag in a comment, a read-only token, `persist-credentials: false`,
+# cancelled outdated runs, a timeout on every job, a `changes` job that skips the build for a change
+# that cannot affect it, and one `gate` job to require in the branch protection rule.
+#
+# What it runs:
+#   - `python3 tools/build.py web legacy` (WebAssembly path with Emscripten 7.0.0 and JavaScript path
+#     with Emscripten 1.39.20 fastcomp, both self-tests under node, ECMAScript 3 check of app.js and
+#     loomora.js) and `python3 tools/build.py web modern` (TypeScript page, WebAssembly only);
+#   - the reference vectors through the pages under node (`web-node-js legacy`, `web-node-wasm legacy`,
+#     `web-node-wasm modern`: 15 of 15 each);
+#   - the Modern page in the headless Chrome that is preinstalled on the Windows image, through the
+#     repo's own Chrome launcher (`web-chrome-<major>-windows-11-x64`). The launcher needs a Windows
+#     host, so this is the natural variant; the page is built on Linux and handed over as an artifact.
+#
+# LOCAL run, not CI: Firefox 10 on Windows 2000 (the Web Legacy floor, ADR 0017) needs the VirtualBox
+# virtual machine of the owner. A hosted runner cannot run it, so the Legacy page is checked here only
+# under node (ADR 0018). Never replace that run by a job that would only look like it.
+
+name: Web
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  schedule:
+    # Mondays 03:47 UTC, on the default branch: catches the drift of the runner images, of the node
+    # and of the pinned emsdk downloads.
+    - cron: "47 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-${{ github.event_name == 'schedule' && 'schedule' || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Emscripten 7.0.0 (WebAssembly path): the emsdk commit of ADR 0017 (`7.0.0-1-g708dcbc`).
+  EMSDK_SHA: 708dcbcc9ee23bc7d2dad44fc90db377e38b771c
+  EMSCRIPTEN_VERSION: 7.0.0
+  # Emscripten 1.39.20 fastcomp (JavaScript path): the emsdk tag 3.1.29 (the last one that still
+  # installs fastcomp), pinned by commit.
+  EMSDK_FASTCOMP_SHA: 0b2084f40444818e4478a93009e2dd4426e14762
+  EMSCRIPTEN_FASTCOMP_VERSION: 1.39.20-fastcomp
+  # The node of the host (the node launchers, es-level.js, npm and tsc). The two emsdks bring their
+  # own node (24.19.0 and 14.18.2) for emcc only.
+  NODE_VERSION: 24.19.0
+
+jobs:
+  # Decides whether the Web jobs run. Pull requests from this repository are already built by the
+  # `push` event of their branch, so only pull requests from forks run here.
+  changes:
+    name: changes
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - name: Check out (history, no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: false
+          persist-credentials: false
+      - name: List the changed files
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          base="$BEFORE"
+          if [ "$EVENT" = pull_request ]; then base="$PR_BASE"; fi
+          code=true
+          # Unknown base (new branch, scheduled run, forced push): run everything.
+          if [ "$EVENT" != schedule ] && [ -n "$base" ] && [ "${base#0000000}" = "$base" ] \
+              && git cat-file -e "$base^{commit}" 2>/dev/null; then
+            files="$(git diff --name-only "$base" "$HEAD_SHA")"
+            printf 'changed files:\n%s\n' "$files"
+            # What the Web build and its runs read: the backend, the wasm bridge, both pages, the
+            # CMake files and toolchains, the tools of the build and of the launchers, the probe
+            # schema and the vectors (under core/ and specs/), and this file.
+            if ! printf '%s\n' "$files" | grep -Eq '^(core/|bridge/wasm/|ui/legacy/web/|ui/modern/web-ts/|cmake/|CMakeLists\.txt|third_party/|specs/.*\.json$|tools/(build|run_vectors|common|check_probe)\.py$|tools/trials/web-node/|\.github/workflows/web\.yml$)'; then
+              code=false
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+  # Both Web builds and the node runs of the reference vectors, on Linux (what `tools/build.py web`
+  # supports: Linux or WSL).
+  build:
+    name: build and node runs
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Choose the build folder
+        run: echo "LOOMORA_BUILD_DIR=$RUNNER_TEMP/loomora-build" >> "$GITHUB_ENV"
+      - name: Check out (no submodule, building never needs the docs)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: Install the node of the host
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install python3-jsonschema (tools/check_probe.py)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-jsonschema
+      # The two emsdk clones live in $HOME/emsdk and $HOME/emsdk-fastcomp, where tools/build.py looks
+      # for them. They are cached: the downloads of the SDK are about 1.8 GB and 0.6 GB. The key holds
+      # the pinned commits and versions, so changing a pin makes a new cache.
+      - name: Restore the emsdk clones
+        id: emsdk-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/emsdk
+            ~/emsdk-fastcomp
+          key: emsdk-${{ runner.os }}-${{ runner.arch }}-${{ env.EMSDK_SHA }}-${{ env.EMSCRIPTEN_VERSION }}-${{ env.EMSDK_FASTCOMP_SHA }}-${{ env.EMSCRIPTEN_FASTCOMP_VERSION }}
+      - name: Install the emsdk clones
+        if: steps.emsdk-cache.outputs.cache-hit != 'true'
+        run: |
+          clone_at() { # directory, commit
+            rm -rf "$1"
+            mkdir -p "$1"
+            git -C "$1" init -q
+            git -C "$1" fetch -q --depth 1 https://github.com/emscripten-core/emsdk.git "$2"
+            git -C "$1" checkout -q FETCH_HEAD
+            test "$(git -C "$1" rev-parse HEAD)" = "$2"
+          }
+          clone_at "$HOME/emsdk" "$EMSDK_SHA"
+          (cd "$HOME/emsdk" && ./emsdk install "$EMSCRIPTEN_VERSION" && ./emsdk activate "$EMSCRIPTEN_VERSION")
+          clone_at "$HOME/emsdk-fastcomp" "$EMSDK_FASTCOMP_SHA"
+          (cd "$HOME/emsdk-fastcomp" && ./emsdk install "$EMSCRIPTEN_FASTCOMP_VERSION" && ./emsdk activate "$EMSCRIPTEN_FASTCOMP_VERSION")
+      - name: Show the toolchains
+        run: |
+          node --version
+          cat "$HOME/emsdk/upstream/emscripten/emscripten-version.txt"
+          test -f "$HOME/emsdk-fastcomp/.emscripten"
+          EM_CONFIG="$HOME/emsdk-fastcomp/.emscripten" "$HOME/emsdk-fastcomp/fastcomp/emscripten/emcc" --version | head -n 1
+      - name: Build the Web Legacy UI (both paths)
+        run: python3 tools/build.py web legacy 2>&1 | tee "$RUNNER_TEMP/build-web-legacy.log"
+      - name: Build the Web Modern UI
+        run: python3 tools/build.py web modern 2>&1 | tee "$RUNNER_TEMP/build-web-modern.log"
+      # 15 vectors each; run_vectors.py exits with a non-zero status when one fails.
+      - name: Vectors, Legacy page, JavaScript path, under node
+        run: python3 tools/run_vectors.py web-node-js legacy --exe "$LOOMORA_BUILD_DIR/web-legacy/dist" 2>&1 | tee "$RUNNER_TEMP/vectors-web-node-js-legacy.log"
+      - name: Vectors, Legacy page, WebAssembly path, under node
+        run: python3 tools/run_vectors.py web-node-wasm legacy --exe "$LOOMORA_BUILD_DIR/web-legacy/dist" 2>&1 | tee "$RUNNER_TEMP/vectors-web-node-wasm-legacy.log"
+      - name: Vectors, Modern page, WebAssembly path, under node
+        run: python3 tools/run_vectors.py web-node-wasm modern --exe "$LOOMORA_BUILD_DIR/web-modern/dist" 2>&1 | tee "$RUNNER_TEMP/vectors-web-node-wasm-modern.log"
+      - name: Upload the Modern page (for the Chrome job)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-modern-dist
+          path: ${{ runner.temp }}/loomora-build/web-modern/dist
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload the Legacy page
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-legacy-dist
+          path: ${{ runner.temp }}/loomora-build/web-legacy/dist
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-logs
+          path: |
+            ${{ runner.temp }}/loomora-build/web-legacy/*.log
+            ${{ runner.temp }}/loomora-build/web-modern/*.log
+            ${{ runner.temp }}/*.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  # The Modern page in the headless Chrome of the Windows image, with the Chrome launcher of
+  # tools/run_vectors.py (it starts chrome.exe --headless=new --dump-dom on a new profile per vector
+  # and reads the probe record from the dumped DOM). The platform id carries the major version of
+  # the Chrome that is installed, read here, because the image updates Chrome on its own schedule.
+  # The system of the runner is Windows Server 2025, not Windows 11: the id is only the name the
+  # launcher asks for, and nothing here is a verdict of the validation records.
+  chrome:
+    name: Modern page in Chrome (windows-2025)
+    needs: [changes, build]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - name: Check out (no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: Download the Modern page
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: web-modern-dist
+          path: ${{ runner.temp }}/web-modern-dist
+      - name: Install the python packages of the tools
+        run: python -m pip install -r tools/requirements.txt
+      - name: Vectors in headless Chrome
+        run: |
+          major="$(python -c "import sys; sys.path.insert(0, 'tools'); import run_vectors as r; print(r.chrome_version(r.chrome_executable()).split('.')[0])")"
+          echo "Chrome major version on the image: $major"
+          python tools/run_vectors.py "web-chrome-$major-windows-11-x64" modern --exe "$RUNNER_TEMP/web-modern-dist" --timeout 60 2>&1 | tee "$RUNNER_TEMP/vectors-web-chrome-modern.log"
+      - name: Upload the log
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-chrome-logs
+          path: ${{ runner.temp }}/*.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  # The single check to require in the branch protection rule: it passes when every job that had to
+  # run passed (a skipped job is fine, a failed or cancelled one is not).
+  gate:
+    name: gate
+    needs: [changes, build, chrome]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check the results
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          case " $RESULTS " in
+            *" failure "*|*" cancelled "*) exit 1 ;;
+          esac
