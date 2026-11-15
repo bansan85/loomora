@@ -5,8 +5,9 @@
 # GitHub-hosted runners only. Never add a self-hosted runner: both repositories are public, so a
 # self-hosted runner would run the code of pull requests from forks on the owner's machine.
 # What a hosted runner cannot do stays a LOCAL run, recorded in the validation records and not a CI
-# job: the VirtualBox virtual machines (Windows 2000, Firefox 10), the manylinux1 CentOS 5.11 image
-# (it needs `vsyscall=emulate` on the host kernel) and the legacy Apple systems.
+# job: the VirtualBox virtual machines (Windows 2000, Firefox 10) and the legacy Apple systems. The
+# manylinux1 CentOS 5.11 image is NOT in that list: it runs on a hosted runner (manylinux1.yml, ADR
+# 0018, findings of the manylinux1 job), whose kernel executes the legacy vsyscall page.
 #
 # Rules kept in every workflow of this repository (T129):
 #   - third-party actions are pinned by full commit SHA, the tag being in a comment;

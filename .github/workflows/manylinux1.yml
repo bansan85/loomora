@@ -1,0 +1,228 @@
+# Continuous integration, the manylinux1 container (CentOS 5.11, glibc 2.5): the Linux Legacy UI
+# built and run inside tools/trials/linux-manylinux1-x86_64/Dockerfile. See ADR 0018 (section
+# "Findings: manylinux1 job") and procedure L.11 of validation/procedures/linux.md.
+#
+# WHY A SEPARATE WORKFLOW: glibc 2.5 reads the time through the vsyscall page (0xffffffffff600000).
+# A container uses the kernel of its host, so the job only works when the kernel of the hosted
+# runner maps that page (vsyscall=emulate or vsyscall=xonly). That was never known for the hosted
+# runners, so the job first prints the kernel and then probes the vsyscall path before building
+# anything. The image is NEVER patched (no change of its libc) and the job never changes the host
+# kernel (no sysctl, no boot parameter); if the page is not mapped the job fails, it is not
+# hidden by `continue-on-error`.
+#
+# RESULT (first run 2026-11-15, https://github.com/bansan85/loomora/actions/runs/43732316641): the
+# hosted `ubuntu-24.04` runner (image ubuntu24/20261111.127.1) runs the kernel 7.0.0-1014-aws, built
+# with CONFIG_LEGACY_VSYSCALL_XONLY=y and started with no `vsyscall=` parameter, so the page is
+# mapped execute-only (`ffffffffff600000-ffffffffff601000 --xp [vsyscall]`) and the unmodified
+# image runs: every probe command exits 0, the UI builds, 15 of 15 vectors pass, the window run
+# passes. The job takes about 1 min 20 s. The kernel of a hosted runner is GitHub's choice: if a
+# future runner image changes the vsyscall mode, the first step shows it and the probe fails
+# loudly. The facts are in ADR 0018.
+#
+# Rules kept in every workflow of this repository (T129), see ci.yml: third-party actions pinned
+# by full commit SHA, a read-only token, `persist-credentials: false`, cancelled outdated runs, a
+# timeout on every job, a `changes` job that skips the build for a change that cannot affect it,
+# and a `gate (manylinux1)` job as the one check to require.
+
+name: manylinux1
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manylinux1-${{ github.event_name == 'workflow_dispatch' && 'dispatch' || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # The name `run_vectors.py --docker` is given, and the Docker volume that is the build folder of
+  # the container ($HOME/loomora-build of its root user), as in L.11.
+  IMAGE: loomora-manylinux1
+  VOLUME: loomora-build-m1
+  PYPA_IMAGE: quay.io/pypa/manylinux1_x86_64
+  # The Python of the image that runs tools/build.py (the system Python of CentOS 5 is 2.4).
+  IMAGE_PYTHON: /opt/python/cp38-cp38/bin/python3
+
+jobs:
+  # Decides whether the job runs. Pull requests from this repository are already built by the
+  # `push` event of their branch, so only pull requests from forks run here.
+  changes:
+    name: changes
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - name: Check out (history, no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: false
+          persist-credentials: false
+      - name: List the changed files
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          base="$BEFORE"
+          if [ "$EVENT" = pull_request ]; then base="$PR_BASE"; fi
+          code=true
+          # Unknown base (new branch, manual run, forced push): run it.
+          if [ "$EVENT" != workflow_dispatch ] && [ -n "$base" ] && [ "${base#0000000}" = "$base" ] \
+              && git cat-file -e "$base^{commit}" 2>/dev/null; then
+            files="$(git diff --name-only "$base" "$HEAD_SHA")"
+            printf 'changed files:\n%s\n' "$files"
+            # What this job reads: the image and its wrappers, the Legacy Linux UI and the backend,
+            # the CMake files, the build tool and the launcher with the files they import, the
+            # window driver, the vectors, and this file.
+            if ! printf '%s\n' "$files" | grep -Eq '^(core/|ui/legacy/linux-xlib/|cmake/|CMakeLists\.txt|third_party/|specs/.*\.json$|tools/(build|run_vectors|common|check_probe)\.py$|tools/trials/(linux-manylinux1-x86_64|linux-ubuntu-24\.04-x86_64)/|\.github/workflows/manylinux1\.yml$)'; then
+              code=false
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+  manylinux1:
+    name: manylinux1 (CentOS 5.11 container)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      # First, before anything else: what the runner kernel is, so that the result documents it
+      # whatever happens next. `[vsyscall]` in the maps of a process means the page is mapped
+      # (emulate or xonly); no such line means vsyscall=none.
+      - name: Runner kernel and vsyscall mode
+        run: |
+          echo "uname -r: $(uname -r)"
+          echo "uname -a: $(uname -a)"
+          echo "/proc/cmdline: $(cat /proc/cmdline)"
+          echo "--- grep -i vsyscall /proc/self/maps"
+          grep -i vsyscall /proc/self/maps || echo "(no vsyscall line: the page is not mapped)"
+          echo "--- kernel configuration"
+          grep -i VSYSCALL "/boot/config-$(uname -r)" 2>/dev/null || echo "(no /boot/config-$(uname -r) or no VSYSCALL line)"
+          zcat /proc/config.gz 2>/dev/null | grep -i VSYSCALL || echo "(no /proc/config.gz or no VSYSCALL line)"
+          echo "--- dmesg (may be refused)"
+          sudo dmesg 2>/dev/null | grep -i vsyscall || echo "(no vsyscall line in dmesg, or dmesg refused)"
+          echo "--- image and docker"
+          cat /etc/image-version 2>/dev/null || true
+          grep -E '^(ImageVersion|Version)' /opt/runner/provisioner/.setup_info 2>/dev/null || true
+          docker version --format 'docker client {{.Client.Version}}, server {{.Server.Version}}'
+      - name: Check out (submodules)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # docs/implementation holds the platform record linux-centos-5.11-x86_64 that
+          # run_vectors.py reads; third_party/catch2 is not needed here.
+          submodules: recursive
+          persist-credentials: false
+      - name: Prepare the log folder
+        run: mkdir -p "$RUNNER_TEMP/manylinux1-logs"
+      - name: Pull the PyPA image
+        run: |
+          start=$SECONDS
+          docker pull "$PYPA_IMAGE" 2>&1 | tee "$RUNNER_TEMP/manylinux1-logs/pull.log"
+          echo "pull duration: $((SECONDS - start)) s"
+          docker image inspect "$PYPA_IMAGE" --format 'image size on disk: {{.Size}} bytes, id {{.Id}}, digests {{.RepoDigests}}'
+          docker system df
+      - name: Build the image of the Dockerfile
+        run: |
+          start=$SECONDS
+          docker build -t "$IMAGE" tools/trials/linux-manylinux1-x86_64 2>&1 | tee "$RUNNER_TEMP/manylinux1-logs/build-image.log"
+          echo "image build duration: $((SECONDS - start)) s"
+          docker image inspect "$IMAGE" --format 'image size on disk: {{.Size}} bytes'
+      # The sanity check of L.11, then the commands that need the vsyscall page (bash, date, the
+      # Python 3.8 of the image, the system Python 2.4, gcc). Every exit code is printed and kept;
+      # exit status 139 is a SIGSEGV on the vsyscall page. All commands run, then the step fails
+      # if one of them failed.
+      - name: Sanity check and vsyscall probe
+        run: |
+          logs="$RUNNER_TEMP/manylinux1-logs"
+          failed=0
+          probe() { # label, then the command to run in the container
+            local label="$1" rc
+            shift
+            set +e
+            docker run --rm "$IMAGE" "$@" > "$logs/probe-$label.out" 2>&1
+            rc=$?
+            set -e
+            echo "== $label (exit $rc): $*"
+            sed 's/^/   | /' "$logs/probe-$label.out"
+            if [ "$rc" -ne 0 ]; then failed=1; fi
+          }
+          probe cmdline cat /proc/cmdline
+          probe cmdline-ok bash -c 'cat /proc/cmdline; echo ok'
+          probe bash bash -c 'echo bash-ok'
+          probe date date
+          probe date-epoch date +%s
+          probe python38 "$IMAGE_PYTHON" -c 'import time; print(time.time())'
+          probe python24 python -c 'import time; print(time.time())'
+          probe gcc gcc --version
+          probe ldd ldd --version
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::at least one command of the container failed (exit 139 is a SIGSEGV on the vsyscall page)"
+            exit 1
+          fi
+      - name: Build the Legacy UI in the container
+        run: |
+          docker volume create "$VOLUME"
+          start=$SECONDS
+          docker run --rm -v "$PWD:/src" -v "$VOLUME:/root/loomora-build" -w /src "$IMAGE" \
+            "$IMAGE_PYTHON" tools/build.py linux legacy --arch x86_64 2>&1 | tee "$RUNNER_TEMP/manylinux1-logs/build-ui.log"
+          echo "UI build duration: $((SECONDS - start)) s"
+      - name: Install python3-jsonschema (tools/check_probe.py)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-jsonschema
+      - name: Reference vectors through the container
+        run: |
+          start=$SECONDS
+          python3 tools/run_vectors.py linux-centos-5.11-x86_64 legacy --docker "$IMAGE" --docker-volume "$VOLUME" 2>&1 | tee "$RUNNER_TEMP/manylinux1-logs/vectors.log"
+          echo "vectors duration: $((SECONDS - start)) s"
+          grep -q '15 passed, 0 failed' "$RUNNER_TEMP/manylinux1-logs/vectors.log"
+      # The window run of L.11 step 5: the UI is opened on a private Xvfb :98, typed into through
+      # the xlib-driver, closed. The script does not stop on an error, so the output is checked.
+      - name: Window run on a private Xvfb
+        run: |
+          docker run --rm -v "$PWD:/src" -v "$VOLUME:/root/loomora-build" -w /src "$IMAGE" \
+            bash /src/tools/trials/linux-manylinux1-x86_64/window-run.sh 2>&1 | tee "$RUNNER_TEMP/manylinux1-logs/window-run.log"
+          test "$(grep -c 'ui exit status: 0' "$RUNNER_TEMP/manylinux1-logs/window-run.log")" -eq 2
+          test "$(grep -c 'typing changed the window): 2$' "$RUNNER_TEMP/manylinux1-logs/window-run.log")" -eq 2
+          test "$(grep -c 'ui stderr bytes: 0$' "$RUNNER_TEMP/manylinux1-logs/window-run.log")" -eq 2
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: manylinux1-logs
+          path: ${{ runner.temp }}/manylinux1-logs
+          if-no-files-found: warn
+          retention-days: 14
+
+  # The single check to require in the branch protection rule for this workflow: it passes when
+  # every job that had to run passed (a skipped job is fine, a failed or cancelled one is not).
+  gate:
+    name: gate (manylinux1)
+    needs: [changes, manylinux1]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check the results
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          case " $RESULTS " in
+            *" failure "*|*" cancelled "*) exit 1 ;;
+          esac
