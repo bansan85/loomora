@@ -303,7 +303,11 @@ def cmd_fetch(args):
     d.mkdir(parents=True, exist_ok=True)
     for s in steps:
         print("+ " + " ".join(shlex.quote(x) for x in s), flush=True)
-        if subprocess.call(s) != 0:
+        # fetch-macOS-v2.py writes to the current folder whatever --outdir says, and its verification calls
+        # os.get_terminal_size(), which fails without a terminal: run it in the VM folder under a pty.
+        if "fetch-macOS-v2.py" in " ".join(s) and shutil.which("script"):
+            s = ["script", "-qec", " ".join(shlex.quote(x) for x in s), "/dev/null"]
+        if subprocess.call(s, cwd=str(d)) != 0:
             return 1
     return 0
 
