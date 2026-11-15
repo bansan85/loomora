@@ -131,6 +131,15 @@ PENDING = {
 }
 
 
+def gcc_full_version(cxx):
+    """Full version of a GCC executable: -dumpfullversion, or -dumpversion for GCC before 7 (4.8 of
+    CentOS 5 has no -dumpfullversion)."""
+    try:
+        return capture([cxx, "-dumpfullversion"])
+    except SystemExit:
+        return capture([cxx, "-dumpversion"])
+
+
 def capture(cmd, cwd=None):
     """Run a command and return its standard output (stripped); fails with a clear message."""
     res = subprocess.run(
@@ -479,8 +488,8 @@ def build_linux_legacy_arch(arch, build_root):
     shutil.copyfile(str(exe), str(artifact))
     os.chmod(str(artifact), 0o755)
 
-    gxx_version = capture(["g++", "-dumpfullversion"])
-    gcc_version = capture(["gcc", "-dumpfullversion"])
+    gxx_version = gcc_full_version("g++")
+    gcc_version = gcc_full_version("gcc")
     glibc = "glibc " + capture(["ldd", "--version"]).splitlines()[0].split()[-1]
     host_id = linux_platform_id()
     host_triple = capture(["g++", "-dumpmachine"])
@@ -545,7 +554,7 @@ def run_linux_legacy(args):
                  "for i686); this machine is %s" % platform.machine())
     print("NOTE: linux legacy builds natively on this machine (gcc %s): the executable is meant to "
           "run here, a Linux binary is always built on the machine that runs it (ADR 0007)."
-          % capture(["gcc", "-dumpfullversion"]))
+          % gcc_full_version("gcc"))
     build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (Path.home() / "loomora-build"))
     wanted = LINUX_LEGACY_ARCHS if args.arch == "all" else (args.arch,)
     failed = []
@@ -604,10 +613,7 @@ def gcc_info(cxx):
     res = subprocess.run([cxx, "-v"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                          universal_newlines=True)
     thread = re.search(r"^Thread model: (\S+)", res.stdout, re.MULTILINE)
-    try:
-        version = capture([cxx, "-dumpfullversion"])
-    except SystemExit:
-        version = capture([cxx, "-dumpversion"])
+    version = gcc_full_version(cxx)
     return version, thread.group(1) if thread else "unknown"
 
 
