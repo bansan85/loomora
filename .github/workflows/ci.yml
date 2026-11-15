@@ -1,0 +1,228 @@
+# Continuous integration, Linux jobs (T122) and the workflow rules of T129. See ADR 0018 in
+# docs/implementation/adr/ for what the GitHub-hosted runners provide and why this file is shaped
+# this way.
+#
+# GitHub-hosted runners only. Never add a self-hosted runner: both repositories are public, so a
+# self-hosted runner would run the code of pull requests from forks on the owner's machine.
+# What a hosted runner cannot do stays a LOCAL run, recorded in the validation records and not a CI
+# job: the VirtualBox virtual machines (Windows 2000, Firefox 10), the manylinux1 CentOS 5.11 image
+# (it needs `vsyscall=emulate` on the host kernel) and the legacy Apple systems.
+#
+# Rules kept in every workflow of this repository (T129):
+#   - third-party actions are pinned by full commit SHA, the tag being in a comment;
+#   - the default token is read-only (`permissions: contents: read`);
+#   - `persist-credentials: false` on every checkout;
+#   - outdated runs of the same ref are cancelled;
+#   - every job has a timeout;
+#   - a change that only touches documentation skips the heavy jobs (see the `changes` job; the
+#     `gate` job is the one check that branch protection should require, because a workflow
+#     skipped by a `paths` filter would leave a required check pending forever).
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  schedule:
+    # Mondays 03:17 UTC, on the default branch: catches the drift of the runner images and runs
+    # the variants.
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name == 'schedule' && 'schedule' || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # The packages of docs/building/README.md for a Linux build host (backend, Xlib and gtkmm 3 UIs),
+  # python3-jsonschema for tools/check_probe.py, xvfb for the private X display of verify.py.
+  LINUX_PACKAGES: >-
+    cmake ninja-build g++ pkg-config python3 python3-jsonschema
+    libx11-dev libxft-dev libfontconfig-dev libgtkmm-3.0-dev xvfb
+
+jobs:
+  # Decides which jobs run. Pull requests from this repository are already built by the `push`
+  # event of their branch, so only pull requests from forks run here.
+  changes:
+    name: changes
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+      variants: ${{ steps.diff.outputs.variants }}
+    steps:
+      - name: Check out (history, no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: false
+          persist-credentials: false
+      - name: List the changed files
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          base="$BEFORE"
+          if [ "$EVENT" = pull_request ]; then base="$PR_BASE"; fi
+          code=true
+          variants=true
+          # Unknown base (new branch, scheduled run, forced push): run everything.
+          if [ "$EVENT" != schedule ] && [ -n "$base" ] && [ "${base#0000000}" = "$base" ] \
+              && git cat-file -e "$base^{commit}" 2>/dev/null; then
+            files="$(git diff --name-only "$base" "$HEAD_SHA")"
+            printf 'changed files:\n%s\n' "$files"
+            # Documentation only: Markdown files and everything under docs/ (this includes the
+            # docs/implementation submodule pointer, which only needs the cheap `docs` job).
+            if ! printf '%s\n' "$files" | grep -Ev '(^docs/|\.md$|^$)' | grep -q .; then
+              code=false
+            fi
+            # The files of the non-default variants (GTK 3.10 floor, GTK 4, i686 Xlib, Xlib
+            # core font) and the files that drive them.
+            if ! printf '%s\n' "$files" | grep -Eq '^(ui/(legacy/linux-xlib|modern/linux-gtk3)/|core/|cmake/|CMakeLists\.txt|tools/(verify|common)\.py|\.github/)'; then
+              variants=false
+            fi
+          fi
+          if [ "$code" = false ]; then variants=false; fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "variants=$variants" >> "$GITHUB_OUTPUT"
+
+  # `python3 tools/verify.py quick` on each Linux image: backend build, ctest (selftest and Catch2),
+  # the 15 reference vectors through the Xlib and gtkmm UIs on a private Xvfb display, check_std,
+  # check_ui_logic, validate_records, and the self-tests of diff_verdicts and run_vectors.
+  linux:
+    name: linux (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu-22.04 is deprecated by GitHub (retirement announced for 2027-04-17, ADR 0018):
+        # drop it from this list then. The Linux UIs are built on the machine that runs them
+        # (CLAUDE.md), so each image builds its own binaries.
+        os: [ubuntu-22.04, ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - name: Check out with the Catch2 and docs submodules
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # `recursive` fetches third_party/catch2 (ctest runs the Catch2 tests only when it is
+          # there) and docs/implementation (../loomora-docs, resolved by git against the URL of
+          # this repository, so it is the sibling repository on GitHub).
+          submodules: recursive
+          persist-credentials: false
+      - name: Install the build packages
+        run: |
+          sudo apt-get update
+          read -r -a packages <<< "$LINUX_PACKAGES"
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+      - name: Check the submodules are there
+        run: |
+          test -f third_party/catch2/single_include/catch2/catch.hpp
+          test -d docs/implementation/validation
+      - name: Verify (quick)
+        run: |
+          python3 tools/verify.py quick --build-dir "$RUNNER_TEMP/loomora-build" --jobs 4 2>&1 | tee "$RUNNER_TEMP/verify.log"
+          # A skipped check is a check that did not run: in CI it is an error.
+          if grep -q '^SKIP' "$RUNNER_TEMP/verify.log"; then
+            echo "::error::a verify.py check was skipped"
+            exit 1
+          fi
+      - name: Upload the logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verify-logs-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/loomora-build/logs
+            ${{ runner.temp }}/verify.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  # Documentation-only change: nothing is built, the records are still validated.
+  docs:
+    name: docs
+    needs: changes
+    if: needs.changes.outputs.code == 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out (submodules)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Install python3-jsonschema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-jsonschema
+      - name: Validate the records
+        run: python3 tools/verify.py quick --only records,diff,vectors-selftest --build-dir "$RUNNER_TEMP/loomora-build"
+
+  # The non-default variants (GTK 3.10 floor, GTK 4, i686 Xlib, Xlib core font), on a schedule and
+  # when their own files change. One image: ubuntu-24.04 (gtkmm 4 and the i386 libraries).
+  variants:
+    name: linux variants
+    needs: changes
+    if: needs.changes.outputs.variants == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out (submodules)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Install the build packages and the variant packages
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          read -r -a packages <<< "$LINUX_PACKAGES"
+          sudo apt-get install -y --no-install-recommends "${packages[@]}" \
+            libgtkmm-4.0-dev gcc-multilib g++-multilib libx11-dev:i386
+      - name: Verify (quick, with the variants)
+        run: |
+          python3 tools/verify.py quick --variants --build-dir "$RUNNER_TEMP/loomora-build" --jobs 4 2>&1 | tee "$RUNNER_TEMP/verify.log"
+          if grep -q '^SKIP' "$RUNNER_TEMP/verify.log"; then
+            echo "::error::a verify.py check was skipped"
+            exit 1
+          fi
+      - name: Upload the logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verify-logs-variants
+          path: |
+            ${{ runner.temp }}/loomora-build/logs
+            ${{ runner.temp }}/verify.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  # The single check to require in the branch protection rule: it passes when every job that had to
+  # run passed (a skipped job is fine, a failed or cancelled one is not).
+  gate:
+    name: gate
+    needs: [changes, linux, docs, variants]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check the results
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          case " $RESULTS " in
+            *" failure "*|*" cancelled "*) exit 1 ;;
+          esac
