@@ -1,5 +1,7 @@
 # Loomora
 
+[![CI](https://github.com/bansan85/loomora/actions/workflows/ci.yml/badge.svg)](https://github.com/bansan85/loomora/actions/workflows/ci.yml) [![Windows](https://github.com/bansan85/loomora/actions/workflows/windows.yml/badge.svg)](https://github.com/bansan85/loomora/actions/workflows/windows.yml) [![WinUI 3](https://github.com/bansan85/loomora/actions/workflows/winui3.yml/badge.svg)](https://github.com/bansan85/loomora/actions/workflows/winui3.yml) [![Web](https://github.com/bansan85/loomora/actions/workflows/web.yml/badge.svg)](https://github.com/bansan85/loomora/actions/workflows/web.yml) [![Android](https://github.com/bansan85/loomora/actions/workflows/android.yml/badge.svg)](https://github.com/bansan85/loomora/actions/workflows/android.yml) [![manylinux1](https://github.com/bansan85/loomora/actions/workflows/manylinux1.yml/badge.svg)](https://github.com/bansan85/loomora/actions/workflows/manylinux1.yml) [![quality](https://github.com/bansan85/loomora/actions/workflows/quality.yml/badge.svg)](https://github.com/bansan85/loomora/actions/workflows/quality.yml)
+
 Loomora is universal String Art software. String Art reproduces an image by stretching a continuous string (or several strings of different colors) between nails driven into a physical support: a circle, a rectangle, a free shape, possibly with nails inside.
 
 ## What Loomora will do
