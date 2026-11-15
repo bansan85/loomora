@@ -146,8 +146,9 @@ jobs:
             runs: "x64:windows-11-x64 x86:windows-11-x64"
           - os: windows-11-arm
             platform: windows-11-arm64
-            # x64 and x86 under the emulation of Windows on ARM; the ids are what the probe says
-            runs: "x64:windows-11-x64 x86:windows-11-arm64"
+            # x64 and x86 under the emulation of Windows on ARM: both report windows-11-x64
+            # (GetNativeSystemInfo shows the emulated architecture), measured on the first run
+            runs: "x64:windows-11-x64 x86:windows-11-x64"
     steps:
       - name: Check out (no submodule)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -236,6 +237,20 @@ jobs:
           fi
       - name: Self-test of the vector runner (platform id rules)
         run: python tools/run_vectors.py --self-test
+      - name: Diagnose a failure (build configuration, manifest, side-by-side log)
+        if: failure()
+        shell: pwsh
+        run: |
+          $build = "$env:RUNNER_TEMP/loomora-build/default"
+          Select-String -Path "$build/CMakeCache.txt" -Pattern '^(CMAKE_(RC_COMPILER|MT|LINKER|CXX_COMPILER_TARGET|CXX_COMPILER_ID)):' | ForEach-Object Line
+          clang -v 2>&1 | Select-String 'Target|clang version'
+          $exe = "$build/ui/legacy/windows-win32/loomora.exe"
+          Get-Command mt.exe -ErrorAction SilentlyContinue | ForEach-Object Source
+          & mt.exe -nologo "-inputresource:$exe;#1" -out:"$env:RUNNER_TEMP/embedded.manifest"
+          Get-Content "$env:RUNNER_TEMP/embedded.manifest"
+          Start-Process -FilePath $exe -ArgumentList '--probe' -Wait -ErrorAction Continue
+          Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='SideBySide'} -MaxEvents 5 -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.TimeCreated; $_.Message }
       - name: Upload the logs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

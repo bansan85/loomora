@@ -26,12 +26,18 @@ Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $archive
 Expand-Archive -Path $archive -DestinationPath (Join-Path $work 'pkg') -Force
 
 $dir = Join-Path $work "pkg\tools\MSIX\win10-$Arch"
-# The framework package first, then the others (they depend on it).
+Write-Host 'installed before:'
+Get-AppxPackage -Name 'Microsoft.WindowsAppRuntime*' |
+    Select-Object Name, Version, Architecture | Format-Table -AutoSize | Out-String | Write-Host
+
+# The framework package first, then the others (they depend on it). A hosted image has a Windows
+# component that uses the framework (the Widgets/WebExperience package): -ForceApplicationShutdown
+# lets the update close it instead of failing with 0x80073D02.
 foreach ($name in 'Microsoft.WindowsAppRuntime.2', 'Microsoft.WindowsAppRuntime.Main.2',
                   'Microsoft.WindowsAppRuntime.Singleton.2', 'Microsoft.WindowsAppRuntime.DDLM.2') {
     $file = Join-Path $dir "$name.msix"
     Write-Host "installing $file"
-    Add-AppxPackage -Path $file
+    Add-AppxPackage -Path $file -ForceApplicationShutdown
 }
 Get-AppxPackage -Name 'Microsoft.WindowsAppRuntime*' |
     Select-Object Name, Version, Architecture | Format-Table -AutoSize | Out-String | Write-Host
