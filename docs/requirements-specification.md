@@ -4,15 +4,16 @@ Universal String Art software (the art of stretched string).
 
 | | |
 |---|---|
-| Version | V6.4 — consolidation of versions V1 to V5 (Gemini export "String Art Requirements Document") + the decisions of §16.1; native interface per platform, themes, non-flat supports (3D, meshes) |
-| Date | 2026-11-11 |
-| Status | Draft to be validated; **all technical choices are provisional until the phase 0 PoC (§15.1)**; points still open in §16.2 |
+| Version | V6.5 — update after the phase 0 probe (changes and sources in Annex B); V6.4 was the consolidation of versions V1 to V5 (Gemini export "String Art Requirements Document") + the decisions of §16.1; native interface per platform, themes, non-flat supports (3D, meshes) |
+| Date | 2026-11-15 (V6.4: 2026-11-11) |
+| Status | Draft to be validated; the phase 0 probe settled only the points listed in Annex B, **every other technical choice stays provisional until the phase 0 PoC (§15.1)**; points still open in §16.2 |
 | Convention | **[P0]** essential · **[P1]** major · **[P2]** optional / V2 of the product. Unmarked: P1. |
 
 Reading notes:
 - The words "must" / "may" are normative: *must* = requirement, *may* = option.
 - Items marked **[Proposal]** were not explicitly requested; they fill a gap noticed during the consolidation and are to be validated.
-- Annex A traces each user request to its section.
+- Annex A traces each user request to its section; Annex B is the revision history.
+- **Backend language (since 2026-11-12, ADR 0001)**: the backend is one C++11 code base behind a handwritten C API; Rust, Cargo, `cbindgen` and UniFFI are abandoned. Where this document still names a Rust crate or tool (`rayon`, `wgpu`, `axum`, `tokio`, `btleplug`, `rusqlite`, `fluent-rs`, `gtk-rs`, `wasm-bindgen`, `parry3d`, the `loomora-*` crate names…), read the role it plays (parallel CPU engine, GPU compute, embedded server, BLE, persistence, translation, geometry); the C++ library for each role is chosen when the feature is built, and the phase 0 probe tried none of them.
 
 ---
 
@@ -38,83 +39,96 @@ Loomora automatically turns a digital image (photo, logo, illustration, silhouet
 
 ### 2.1 Target matrix **[P0]**
 
-| Platform | Architecture | Rust target | Minimum / constraints |
+| Platform | Architecture | Backend toolchain | Minimum / constraints |
 |---|---|---|---|
-| Windows | x86_64 | `x86_64-pc-windows-msvc` | Windows 10+; WinUI 3 UI |
-| Windows | **ARM64** | `aarch64-pc-windows-msvc` | Full native support (Surface, Copilot+, Snapdragon X); WinUI 3 UI |
-| Windows **legacy** | x86 (x64 optional) | `i686-pc-windows-msvc` or `-gnu`, XP-adapted toolchain (unofficial, §2.1.2) | **Windows XP SP3 minimum**; **MFC** UI; restricted features (§2.1.2) |
-| macOS | ARM64 + x86_64 | `aarch64-apple-darwin`, `x86_64-apple-darwin` | macOS 11+, Universal 2 binary |
-| Linux | x86_64 + AArch64 | `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` | Ubuntu 20.04+ / Debian 11+; AppImage and Flatpak, no exotic dynamic dependency |
-| Android | ARMv7, ARM64, x86, x86_64 | `armv7-linux-androideabi`, `aarch64-linux-android`, `i686-linux-android`, `x86_64-linux-android` | **minSdk = API 21 (Android 5.0)**; targetSdk according to the Google Play requirement at the time of publication; native Kotlin UI (§2.2) |
-| iOS / iPadOS | ARM64 | `aarch64-apple-ios` | **iOS 15.0 minimum**, with functional restrictions if an API is missing; native SwiftUI UI (§2.2) |
-| Web (PWA) **[P2, in scope]** | WebAssembly | `wasm32-unknown-unknown` | Chrome, Safari, Firefox; dedicated TypeScript web UI, bound to the WebAssembly engine; WebGPU if available, otherwise CPU engine; engine in Web Workers; OPFS / IndexedDB storage; no embedded server and no BLE on Safari (the browser is a client of a Loomora server) |
+| Windows | x86_64 | MSVC (`loomora.dll` called from C#, spike S8) | **Windows 10 version 1809+** (build 17763, the minimum of WinUI 3 on the Windows App SDK); WinUI 3 UI, framework-dependent (the .NET Desktop Runtime and the Windows App Runtime must be installed) |
+| Windows | **ARM64** | MSVC (ARM64 `loomora.dll`) | Full native support (Surface, Copilot+, Snapdragon X); WinUI 3 UI |
+| Windows **legacy** | x86 (Windows 2000 and later), x86_64 (XP x64 and later) | MinGW-w64 GCC, cross-compiled from WSL (ADR 0012) | **Windows 2000 minimum** (validated on build 2195 without service pack, §2.1.2); plain **Win32** UI, no MFC (ADR 0009); restricted features (§2.1.2) |
+| macOS | ARM64 + x86_64 | To be chosen (spikes S2 and S7 open) | macOS 11+, Universal 2 binary |
+| Linux | x86_64 + AArch64 | The C++11 compiler and CMake of the target machine: binaries are built on the machine that runs them (ADR 0007) | **Legacy UI (Xlib)**: any distribution with a C++11 compiler, CMake and the libX11 development files; the lowest userland tried is CentOS 5.11 (manylinux1 image, glibc 2.5). **Modern UI (gtkmm)**: GTK 3.10 API as the floor (§2.2.1). Plain executables: no AppImage, no Flatpak |
+| Android | armeabi (ARMv5TE), ARMv7, ARM64, x86, x86_64 | Legacy UI: NDK r15c driven by a CMake toolchain file (ADR 0016); Modern UI: a current NDK with the Android Gradle plugin | **Legacy UI: minSdk = API 9 (Android 2.3)**, built for API 9 and run on API 16 (ADR 0016); **Modern UI: minSdk = API 24 (Android 7.0)**, native Kotlin UI (the pinned Compose and AndroidX libraries need API 23, spike S8); targetSdk according to the Google Play requirement at the time of publication (§2.2) |
+| iOS / iPadOS | ARM64 | To be chosen (spikes S2 and S7 open) | **iOS 15.0 minimum**, with functional restrictions if an API is missing; native SwiftUI UI (§2.2) |
+| Web (PWA) **[P2, in scope]** | WebAssembly; JavaScript for the browsers without WebAssembly | Emscripten 7.0.0 (WebAssembly path); Emscripten 1.39.20 fastcomp (JavaScript path, ADR 0017) | Chrome, Safari, Firefox with WebAssembly: dedicated TypeScript web UI (Modern), bound to the WebAssembly engine; Legacy page in ECMAScript 3 JavaScript, down to Firefox 10.0 on Windows 2000 through the JavaScript path; Internet Explorer up to 9 is dropped; Safari is covered by inference (ADR 0017); WebGPU if available, otherwise CPU engine; engine in Web Workers; OPFS / IndexedDB storage; no embedded server and no BLE on Safari (the browser is a client of a Loomora server) |
 
 Guiding principle: target the oldest devices accepted by the stores. **It is acceptable to disable features** on those devices (§2.3) rather than raise the floor.
 
 #### 2.1.1 Extended architectures ("as many architectures as possible")
-Support is organized in tiers, according to the availability of the Rust toolchain (tier 2 minimum) and of the platform's native UI toolkit. The list must be revalidated with each Rust release.
+Support is organized in tiers, according to the availability of a C++11 compiler and of the platform libraries (the backend no longer depends on a Rust toolchain) and of the platform's native UI toolkit. The list must be revalidated when a target is added.
 
 | Tier | Deliverable | Architectures |
 |---|---|---|
 | **A** | Complete packaged application (native UI) | The table in §2.1 |
-| **B** | Complete application if the UI toolkit exists on the target (WinUI 3, GTK 4), otherwise tier C | Windows x86 32-bit (`i686-pc-windows-msvc`; WinUI 3 or MFC UI); Linux x86 32-bit (`i686-unknown-linux-gnu`); **Linux ARM 32-bit** (`armv7-unknown-linux-gnueabihf`, `arm-unknown-linux-gnueabihf` for ARMv6); Linux RISC-V 64 (`riscv64gc-unknown-linux-gnu`); **Linux PowerPC 64 little-endian** (`powerpc64le-unknown-linux-gnu`) |
-| **C** | CPU engine + CLI + embedded server; the UI is the PWA served to a local or remote browser (§9.2) | **Linux PowerPC 32-bit and 64-bit big-endian** (`powerpc-unknown-linux-gnu`, `powerpc64-unknown-linux-gnu`); s390x; LoongArch64; FreeBSD; other Rust tier 2 targets |
+| **B** | Complete application if the UI toolkit exists on the target (WinUI 3, GTK), otherwise tier C | Windows x86 32-bit (WinUI 3 or Win32 Legacy UI); Linux x86 32-bit; **Linux ARM 32-bit** (ARMv7, ARMv6); Linux RISC-V 64; **Linux PowerPC 64 little-endian** |
+| **C** | CPU engine + CLI + embedded server; the UI is the PWA served to a local or remote browser (§9.2) | **Linux PowerPC 32-bit and 64-bit big-endian**; s390x; LoongArch64; FreeBSD; other targets with a C++11 compiler |
 
 Cross-cutting constraints:
-- **32-bit**: never assume `usize` = 64 bits; addressable memory budget of 2 to 4 GB; 64-bit atomics through a portable layer.
+- **32-bit**: never assume `size_t` or `long` = 64 bits; addressable memory budget of 2 to 4 GB; 64-bit atomics through a portable layer.
 - **Big-endian**: all serialization (files, BLE, database) is explicitly little-endian; CI tests under emulation (QEMU).
 - **SIMD**: a portable scalar path is mandatory; NEON, SSE / AVX, AltiVec / VSX are optional optimizations.
 - **GPU**: absent or unsupported on these targets → CPU engine.
-- "Best-effort" support outside tier A, with CI building and testing the engine on every declared target.
+- "Best-effort" support outside tier A, with CI building and testing the engine on every declared target that a GitHub-hosted runner can run; the other targets (old systems, virtual machines, emulators) are local runs recorded in the validation records (ADR 0018).
 
-#### 2.1.2 Windows legacy (Windows XP) — MFC UI
+#### 2.1.2 Windows legacy (Windows 2000 and later) — Win32 UI
 
-Windows has **two UIs**: **WinUI 3** (modern) and **MFC** (Windows XP-compatible). They rely on the same core and the same `.loomora` files.
+Windows has **two UIs**: **WinUI 3** (modern) and a plain **Win32** UI (Windows 2000-compatible). They rely on the same backend and the same `.loomora` files.
 
-- **MFC scope**: Windows XP SP3 and later, x86 (x64 optional, XP x64). The same MFC executable also runs on Windows 10 and 11; the user can choose WinUI 3 or MFC there.
-- **Exception to the "no C++" rule**: MFC requires C++ for this one UI layer, which is thin and free of business logic. The core stays in Rust, called through a stable C API generated with `cbindgen` (crate `loomora-capi`). C++ toolchain: Visual Studio with the `v141_xp` toolset (a component deprecated by Microsoft).
-- **Rust toolchain for XP: major risk.** Rust does not officially support Windows XP (the official Windows targets require recent versions of Windows). An unofficial toolchain (adapted standard library, compatibility layer) or an adapted GNU/MinGW target is needed. To be validated in phase 0 (§16.2). Without a viable solution, the XP version is abandoned or redesigned.
-- **Features explicitly disabled on XP** (§2.3):
+- **Win32 scope**: Windows 2000 and later, x86 (the i686 executable runs on Windows 2000 to 11) and x64 (the x86_64 executable, Windows XP x64 and later), ADR 0009. The same executable also runs on Windows 10 and 11; the user can choose WinUI 3 or Win32 there. The floor system validated is Windows 2000 build 2195 without service pack, in a virtual machine (SP4 itself was not run; spike S1 rests on an inference accepted by the owner). Windows XP is covered by inference from Windows 2000, no XP system was run (go / no-go of §15.1.5).
+- **Language and toolchain**: C++11 on the plain Win32 API (`CreateWindowEx` and the standard controls), no MFC; the UI layer is thin and free of business logic, and calls the backend through its C API (ADR 0001). It is built with MinGW-w64 GCC cross-compiled from WSL, like the backend (ADR 0012): no MSVC toolset that compiles C++11 targets Windows 2000, and recent Visual Studio no longer targets XP. A Windows function newer than Windows 2000 is looked up at run time and skipped when absent, each skip being a declared fallback (ADR 0009, ADR 0004).
+- **Toolchain risk lifted**: Rust is abandoned (ADR 0001), so the major risk of an unofficial Rust toolchain for XP no longer exists; the question became whether a C++11 Win32 executable runs on the old system, answered on Windows 2000 (spike S1).
+- **Features explicitly disabled on XP** (§2.3; not exercised by the probe, which has none of these functions):
   - GPU (CPU engine only); 2 GB of addressable memory, hence reduced resolution (§6.1).
   - Bluetooth Low Energy (absent from XP): transfer by file or local HTTP.
   - Modern HTTPS / TLS (TLS 1.2 absent by default): the embedded server stays on HTTP on the local network; no mDNS, pairing by QR or IP address.
   - Simplified embedded server (`std::net` + threads): the modern asynchronous I/O used by `tokio` does not exist on XP.
   - Voice: SAPI 5 if installed, otherwise the feature is disabled (decision 16.1 no. 4).
   - No PWA and no embedded webview.
-- **Drawing and themes**: GDI+ for path drawing; light / dark themes drawn by the application (MFC in *owner-draw*); high contrast follows the Windows contrast scheme.
-- **Security**: XP is no longer maintained by Microsoft. The application displays a warning and exposes nothing outside the local network.
+  - Recorded by the trials on Windows 2000: no DPI awareness and no dark theme (§2.3).
+- **Drawing and themes**: GDI+ for path drawing; light / dark themes drawn by the application (Win32 *owner-draw*); high contrast follows the Windows contrast scheme.
+- **Security**: Windows 2000 and XP are no longer maintained by Microsoft. The application displays an end-of-life warning (shown on Windows 2000) and exposes nothing outside the local network.
 
 ### 2.2 Technical stack
-- **Core entirely in Rust** (memory safety, no GC, no C++ runtime). C++ is excluded from the core; the only exception is the MFC UI layer (§2.1.2).
+- **Backend entirely in strict C++11** (`-std=c++11 -pedantic-errors`): one code base behind a handwritten C API (`core/include/loomora.h`, valid as C89); exceptions never cross that boundary (ADR 0001, spike S6). Rust is abandoned. The backend is always compiled as C++11 whatever the UI uses; Legacy UIs are written in C++11, Modern UIs may use up to C++17 (ADR 0011).
 - A feature **may be reimplemented several times depending on the platform** (audio, Bluetooth, printing, speech recognition…), but universal methods should be preferred when they exist.
-- **User interface: native on each platform** (decision 16.1 no. 1). Tauri and webviews are ruled out for installed applications; only the PWA is a web UI.
+- **User interface: native on each platform** (decision 16.1 no. 1). Tauri and webviews are ruled out for installed applications; only the PWA is a web UI. Each platform has **two UIs on the same backend**: a Legacy UI for the oldest systems (features may be disabled, §2.3) and a Modern UI (ADR 0008).
 
 #### 2.2.1 UI per platform
 
 | Platform | UI technology | Remarks |
 |---|---|---|
-| Android | Kotlin, Jetpack Compose (Views if Compose causes problems on API 21) | |
-| iOS / iPadOS | SwiftUI (Swift) | iOS 15; occasional UIKit if a SwiftUI API is missing |
-| macOS | SwiftUI, module shared with iOS / iPadOS | Occasional AppKit |
-| Windows (x86, x64, ARM64) | WinUI 3 (C#, Windows App SDK) | Modern UI; Windows 10 to be confirmed depending on the SDK version |
-| Windows XP and later (x86) | MFC (C++, `v141_xp` toolset) | Legacy UI (§2.1.2); thin layer over the core's C API |
-| Linux | GTK 4 + libadwaita via `gtk-rs` (Rust), delivered as Flatpak and AppImage | **Provisional** (§16.2) |
-| Web (PWA) | TypeScript + lightweight web framework, engine in WebAssembly | Same application model as the other UIs |
+| Android | Modern: Kotlin, Jetpack Compose (API 24+); Legacy: Java views with JNI glue (API 9 to 23) | Compose and AndroidX need API 23, the Modern floor is 24 (spike S8); ADR 0008, ADR 0016 |
+| iOS / iPadOS | SwiftUI (Swift); Legacy: Objective-C (UIKit), decided in ADR 0008, not built | iOS 15; occasional UIKit if a SwiftUI API is missing |
+| macOS | SwiftUI, module shared with iOS / iPadOS; Legacy: Objective-C (AppKit), decided in ADR 0008, not built | Occasional AppKit |
+| Windows (x86, x64, ARM64) | WinUI 3 (C#, Windows App SDK) | Modern UI; Windows 10 version 1809+; calls the backend C API through `LibraryImport`, no C++/CLI (ADR 0008) |
+| Windows 2000 and later (x86, x64) | Win32 (C++11, MinGW-w64) | Legacy UI (§2.1.2), no MFC (ADR 0009); thin layer over the backend's C API |
+| Linux | Modern: gtkmm (C++, CMake) on GTK 3 with the 3.10 API as the floor, GTK 4 with gtkmm-4.0 as a build option; Legacy: Xlib with Xft (C++11, CMake) | Plain executables built on the target machine, no libadwaita, no Flatpak, no AppImage (§16.1 no. 9; ADR 0005, 0006, 0007, 0010) |
+| Web (PWA) | Modern: TypeScript + lightweight web framework, engine in WebAssembly; Legacy: ECMAScript 3 JavaScript page, engine in WebAssembly or compiled to JavaScript | Same application model as the other UIs (ADR 0017) |
 | Tier C (§2.1.1) | CLI + web UI served by the embedded server (§9.2) | |
 
 Principles:
-- **Thin UIs, zero business logic.** States, use cases and view-models live in `loomora-app` (Rust), exposed by `loomora-ffi`: UniFFI to Kotlin and Swift, `uniffi-bindgen-cs` to C#, C API (`cbindgen`, crate `loomora-capi`) to MFC, direct Rust calls for GTK, `wasm-bindgen` for the web.
+- **Thin UIs, zero business logic.** States, use cases and view-models live in the C++11 backend, whose only interface is the handwritten C API `core/include/loomora.h` (ADR 0001, ADR 0008): header and static library for the C++ and Objective-C UIs (Win32, Xlib, gtkmm), a module map for Swift, `LibraryImport` for C# (WinUI 3), JNI glue for Java and Kotlin, Emscripten exports for the web.
 - **Functional parity.** This document is the single specification. Common acceptance scenarios are run on every UI. A function missing from a platform is disabled explicitly (§2.3), never silently.
 - **Path drawing.** The core provides primitives (polylines, nails, colors, opacity) that each UI draws with its native canvas (Compose Canvas, SwiftUI Canvas / Metal, Direct2D / Win2D, Cairo / GL, Canvas 2D / WebGL). A shared `wgpu` rendering on a native surface (`loomora-render3d`) is adopted for the 3D view (§3.6.7) **[P2]**.
-- **System services** (Bluetooth, voice / TTS, printing, sharing, files, notifications): implemented natively by each UI behind interfaces defined in `loomora-app` (UniFFI callback interfaces). On desktop, Bluetooth may go through `btleplug`.
+- **System services** (Bluetooth, voice / TTS, printing, sharing, files, notifications): implemented natively by each UI behind interfaces defined in the backend (callbacks across the C API: mechanism to be defined, not tried by the probe). On desktop, Bluetooth may go through a cross-platform BLE library.
 - **Texts**: provided by the core (§11), to keep a single translation source.
 
-### 2.3 Graceful degradation (old devices: API 21–25, 32-bit, 1–2 GB of RAM)
+### 2.3 Graceful degradation (old systems and devices: Windows 2000, Android API 9–25, 32-bit, 1–2 GB of RAM)
 - GPU acceleration disabled automatically; strict fallback to the CPU engine.
 - Simulation canvas resolution reduced (§6.1).
 - Advanced offline speech recognition disabled, with fallback to the manual and automatic (timer) modes. Speech synthesis remains in use if the system provides it.
 - Upfront memory allocation to avoid fragmentation; buffers that can be shrunk dynamically (tiled cache or temporary downsampling during computation).
 - No instruction newer than ARMv7 is required in the 32-bit fallback binary.
+
+**Disabled features recorded by the phase 0 trials** (each is a declared fallback, `validation/fallbacks.json`; the reasons are in the verdicts):
+
+| Platform (UI) | Disabled feature | Reason |
+|---|---|---|
+| Windows 2000 (Legacy) | DPI awareness | `user32.dll` does not export `SetProcessDPIAware`; the window is drawn at 96 DPI |
+| Windows 2000 (Legacy) | Dark theme | No `AppsUseLightTheme` setting on this system; system colours are used |
+| Linux, CentOS 5.11 and 6.10, Ubuntu 24.04, i686 (Legacy) | Missing glyph | A code point that no installed font has is drawn as an empty box (the CentOS images have no CJK and no emoji font) |
+| Linux, CentOS 5.11 and 6.10, Ubuntu 24.04, i686 (Legacy) | Text shaping and bidirectional layout | Not implemented, by decision: logical order, left to right, isolated Arabic forms, ZWJ sequences drawn as components |
+| Linux, Ubuntu 24.04 and i686 (Legacy) | Glyph substitution | Core-font path, taken only when libXft and fontconfig are missing at build time or switched off at run time (not the path of the builds tried): a character the core font cannot draw is drawn as `?` |
+| Android 7.0 (Modern) | High contrast through `UiModeManager.getContrast()` | The call needs API 34; below it the standard Material 3 light or dark scheme is used |
+| Web, Firefox 10 (Legacy) | Peak memory | Firefox 10 has no `performance.memory` |
 
 ### 2.4 Compute engines: CPU and GPU **[P0]**
 Two interchangeable implementations behind a single interface, with automatic selection at startup according to the detected capabilities (the user can force an engine).
@@ -302,7 +316,7 @@ Priorities: the complete feature is **[P2]**, after the MVP. However, the **data
 #### 3.6.9 Degradation and performance
 - The precomputation of the admissibility matrix (N²/2 segment-mesh tests by BVH) is parallelized on CPU / GPU, with pruning by distance, angle and bounding boxes. The numerical targets will be set by benchmark (phases 1 and 8).
 - Limited devices: automatic mesh simplification, wireframe 3D view without GPU.
-- **Windows XP (MFC)**: CPU computation and export, 100,000-triangle cap, basic software wireframe 3D view.
+- **Windows 2000 and XP (Win32 Legacy UI)**: CPU computation and export, 100,000-triangle cap, basic software wireframe 3D view.
 
 ---
 
@@ -646,7 +660,9 @@ All UIs offer three themes: **light**, **dark** and **high contrast**, along wit
 
 ---
 
-## 14. Software architecture (Cargo workspace)
+## 14. Software architecture (modules)
+
+There is no Cargo workspace (ADR 0001, ADR 0010). The backend is one C++11 library (`core/`, the static library `libloomora.a`, built with CMake) behind a handwritten C API; each UI is a separate project under `ui/legacy/<platform>` or `ui/modern/<platform>` and holds no logic; glue without logic (JNI, Emscripten exports) is in `bridge/`, toolchain files in `cmake/toolchains/`, host tools in `tools/`. The tree below is the functional breakdown still wanted for the backend: each `loomora-*` entry becomes a module of `core/`, or a library it links, when its feature is built. Today the backend only computes the probe (greeting, end-of-life test, probe record).
 
 ```
 loomora/
@@ -661,21 +677,17 @@ loomora/
 │   ├── loomora-net/          # HTTP/WebSocket server (axum, tokio), QR, BLE (btleplug)
 │   ├── loomora-storage/      # Transactional persistence (SQLite via rusqlite)
 │   ├── loomora-app/          # States, use cases, view-models, UI-independent; system service interfaces
-│   ├── loomora-ffi/          # UniFFI bridges (Kotlin, Swift, C#)
-│   ├── loomora-capi/         # Stable C API (cbindgen) for the MFC UI
-│   ├── loomora-wasm/         # WebAssembly binding for the PWA (wasm-bindgen)
+│   ├── loomora-ffi/          # Glue without logic: JNI (Android), `LibraryImport` declarations (C#); today `bridge/` and the UI projects
+│   ├── loomora-capi/         # Handwritten stable C API `loomora.h` (C89), the only boundary; today `core/include/`
+│   ├── loomora-wasm/         # WebAssembly and JavaScript exports for the PWA (Emscripten); today `bridge/wasm/`
 │   └── loomora-i18n/         # fluent, unic-langid, language packs
-└── apps/
-    ├── android/              # Kotlin, Jetpack Compose
-    ├── apple/                # SwiftUI: iOS, iPadOS, macOS (shared module)
-    ├── windows-winui/        # WinUI 3 (C#)
-    ├── windows-mfc/          # MFC (C++), Windows XP and later
-    ├── linux/                # GTK 4 (gtk-rs)
-    ├── web/                  # PWA (TypeScript)
-    └── cli/                  # Batch computation, headless server, tests
+├── ui/
+│   ├── legacy/               # windows-win32, linux-xlib, android-views, web (macOS, iOS: Objective-C, not built)
+│   └── modern/               # windows-winui3, linux-gtk3 (gtkmm), android-compose, web-ts (macOS, iOS: SwiftUI, not built)
+└── cli/                      # Batch computation, headless server, tests (not built)
 ```
 
-Indicative libraries: `nalgebra` or `glam`, `geo`, `lyon_geom`, `image`, `rayon`, `wgpu`, `naga`, `axum`, `tokio`, `btleplug`, `rusqlite`, `fluent`, `uniffi`, `wasm-bindgen`, `gtk4`, `parry3d` (BVH, intersections), `stl_io`, `tobj`, `ply-rs`, `gltf`.
+Indicative libraries (Rust crate names, historic: see the reading note on the backend language): `nalgebra` or `glam`, `geo`, `lyon_geom`, `image`, `rayon`, `wgpu`, `naga`, `axum`, `tokio`, `btleplug`, `rusqlite`, `fluent`, `uniffi`, `wasm-bindgen`, `gtk4`, `parry3d` (BVH, intersections), `stl_io`, `tobj`, `ply-rs`, `gltf`.
 
 ---
 
@@ -688,7 +700,7 @@ Indicative libraries: `nalgebra` or `glam`, `geo`, `lyon_geom`, `image`, `rayon`
 4. **Phase 4 — Advanced geometries**: predefined shapes, nested shapes, interior nails and automatic placement, nail import, vector mode.
 5. **Phase 5 — Advanced engines**: GPU backend, LSQR/NNLS, metaheuristics.
 6. **Phase 6 — Exchange and machines**: server, QR, BLE, CNC / G-code exports, PDF tiling.
-7. **Phase 7 — Multi-color, full i18n, PWA**: multiple spools, language packs, RTL; PWA / WebAssembly delivery; tier B and C architectures; MFC UI (Windows XP).
+7. **Phase 7 — Multi-color, full i18n, PWA**: multiple spools, language packs, RTL; PWA / WebAssembly delivery; tier B and C architectures; Win32 Legacy UI (Windows 2000 and later).
 8. **Phase 8 — Non-flat supports (3D)**: mesh import and primitives, checking and repair; 3D nails; string domain and admissibility (BVH); 3D tangents and pass levels; multi-view projection; 3D view; 3D player; exports and templates.
 
 ### 15.1 Phase 0 — Technical validation and PoC
@@ -729,6 +741,8 @@ The PoC exercises, on each target, the whole technical chain with fixed referenc
 
 Each step produces a success or failure result and measurements (time, peak memory, binary size).
 
+**Phase 0 as run (specification 001, 2026-11-12 to 2026-11-15).** The PoC was reduced to a deliberately minimal probe: a text field and the greeting `Bonjour ` + text computed by the backend. Steps 1 to 9 above were not run, and the hypotheses that need them stay "not covered". Scope rule (owner decision 2026-11-15): the Legacy UI is validated on the lowest testable system of each family, the Modern UI on one system and one 64-bit processor; success there stands for the range, rows not run stay `not_tested` and are not failures. macOS and iOS are pending (no trial). The test bench of §15.1.2 was reduced accordingly: a Windows 2000 build 2195 virtual machine (instead of XP SP3), Windows 11 x64, Android API 16 (Legacy) and API 24 (Modern) emulators, the CentOS 5.11 userland (manylinux1 image) and Ubuntu 24.04, Firefox 10.0 on Windows 2000 and Chrome 157.
+
 #### 15.1.4 Matrix of hypotheses to validate
 
 | # | Choice to validate | Old targets concerned | Success criterion | Fallback on failure |
@@ -754,10 +768,13 @@ Each step produces a success or failure result and measurements (time, peak memo
 | V19 | **Themes and contrast** | All | Contrast ratios verified automatically; system high contrast detected | Manual choice |
 | V20 | **Distribution and signing** | Play (16 KB pages, `targetSdk`), App Store, macOS notarization, Flatpak / AppImage, XP installer and accepted signature | One installable package per platform | Packaging adaptation |
 
+Reading after the probe (rows keep their numbers; the text as worded is also in `validation/hypotheses.json`): V6, V9, V10, V15 and V19 are *OK with restrictions* for the part the probe exercised, the other fifteen are *not covered by this probe*. V1 as worded is void (Rust is abandoned, ADR 0001): it is read as the C++11 toolchain (spikes S1 and S6). In V6 the bridges are the handwritten C API (header, JNI, `LibraryImport`, Emscripten exports), not UniFFI or `cbindgen`; in V9 the Windows legacy UI is Win32, not MFC; in V10 the Linux UIs are gtkmm on GTK 3.10 (GTK 4 an option) and Xlib, not GTK 4 against Slint; "XP" in the Windows entries is read as Windows 2000, the floor validated (XP is covered by inference).
+
 #### 15.1.5 Milestone G0 and deliverables
 - **Deliverables**: validation report (matrix of §15.1.4 filled in: OK, OK with restrictions, KO), decision log (ADR), versioned reference dataset, reproducible test bench, PoC kept as a non-regression baseline.
 - **Update of the requirements document**: tiers A / B / C (§2.1.1) reclassified, decisions of §16 confirmed or revised, features disabled per platform (§2.3) specified.
 - **Milestone G0 (move to phase 1)**: all hypotheses for the tier A platforms are validated, and the go / no-go decision is made for **Windows XP (V1, V9)**. The tier B and C targets can continue in parallel, their decision having to be made before phase 7.
+- **Go / no-go for the old Windows systems** (2026-11-15): Windows 2000 is *go* (OK with restrictions, verdict `windows-2000-x86-legacy`); Windows XP is *go by inference*, no XP system was run (spec Clarifications 2026-11-15).
 
 ---
 
@@ -769,25 +786,27 @@ These decisions remain **provisional** until they are validated by the phase 0 P
 
 | # | Item | Decision |
 |---|---|---|
-| 1 | UI | **Native UI per platform**: Kotlin (Android), SwiftUI (iOS, iPadOS, macOS), PWA / WebAssembly (web); Windows: WinUI 3 + MFC (no. 8); Linux: see no. 9. **Tauri ruled out** (§2.2) |
+| 1 | UI | **Native UI per platform**, two per platform (Legacy and Modern, ADR 0008): Kotlin and Java views (Android), SwiftUI and Objective-C (iOS, iPadOS, macOS; not built), PWA / WebAssembly (web); Windows: WinUI 3 + Win32 (no. 8); Linux: see no. 9. **Tauri ruled out** (§2.2) |
 | 2 | Minimum iOS | **iOS 15.0**, with possible functional restrictions on missing APIs |
 | 3 | Persistence | **SQLite (`rusqlite`, embedded SQLite)** — chosen by default, the user having no preference: transactional, portable across 32 / 64-bit and little / big-endian, mature tooling. `redb` ruled out (less proven on exotic architectures) |
 | 4 | Speech recognition | **System API only**; feature disabled if it is absent (§10.1) |
 | 5 | `.loomora` format | Validated; specified in §9.1 |
 | 6 | PWA / WebAssembly | **In scope** (P2) |
 | 7 | Architectures | **As many as possible**, including Linux ARM 32-bit and PowerPC; tiers A / B / C (§2.1.1) |
-| 8 | Windows UI | **Two UIs**: **WinUI 3** (Windows 10+, x86 / x64 / ARM64) and **MFC** (Windows XP SP3 and later, x86); §2.1.2 |
+| 8 | Windows UI | **Two UIs**: **WinUI 3** (Windows 10 version 1809+, x86 / x64 / ARM64) and plain **Win32** in C++11 (Windows 2000 and later, x86 / x64); **MFC dropped** (ADR 0009); §2.1.2 |
+| 9 | Linux desktop UI | **Two UIs**: Modern = GTK 3 with gtkmm (C++, CMake), GTK 3.10 API as the floor, GTK 4 with gtkmm-4.0 as a build option, each newer feature behind a compile-time macro; Legacy = Xlib with Xft (C++11, CMake). Plain executables built on the machine that runs them, no Flatpak, no AppImage, no libadwaita (owner decisions 2026-11-12 and 2026-11-14; ADR 0005, 0006, 0007, 0010). Slint was not tried |
+| 13 | Android UI | **Two UIs**: Legacy in Java views (API 9 to 23), Modern in Kotlin and Jetpack Compose (API 24+, the pinned Compose and AndroidX libraries need API 23, spike S8); ADR 0008, ADR 0016 |
+| 14 | Rust toolchain for Windows XP | **Moot**: Rust is abandoned (ADR 0001). A C++11 Win32 executable built with MinGW-w64 runs on Windows 2000 build 2195 (spike S1; SP4 not run, XP by inference) |
 
 ### 16.2 Still open
 
+Items 9, 13 and 14 were settled on 2026-11-15 and moved to §16.1 (Annex B); numbers are not reused.
+
 | # | Item | Remark |
 |---|---|---|
-| 9 | **Linux desktop UI** | Provisionally chosen: GTK 4 (Rust). Alternative: a single Rust toolkit (Slint), to be validated for complex text and RTL (§11) |
 | 10 | Winding direction displayed by default | Relative, dial or CW / CCW |
 | 11 | License and business model | Open source, free, paid; affects the stores, the dependencies and third-party code |
 | 12 | Pilot platforms of the MVP | Suggestion: Android + WinUI 3 |
-| 13 | Jetpack Compose or Views on Android API 21 | To be decided after the phase 0 spike |
-| 14 | **Rust toolchain for Windows XP** | Major risk (§2.1.2): unofficial toolchain, server without `tokio`, TLS absent. Spike in phase 0; otherwise the MFC XP version is abandoned or redesigned |
 
 ---
 
@@ -837,3 +856,23 @@ These decisions remain **provisional** until they are validated by the phase 0 P
 | Non-flat supports: concave and convex shapes, 3D nails (interior / exterior), interior / exterior string, mesh input | §3.6, §9.1, §17 |
 | Windows MFC version compatible with XP + WinUI 3 version | §2.1.2, §2.2.1, §16 |
 | Verify the technical choices and build a PoC against the requirements of old systems | §15.1, §16 |
+
+Note (2026-11-15): the requests "Rust and not C++" and "Windows MFC version compatible with XP" were superseded by the owner decisions of the spec Clarifications of 2026-11-12 (C++11 backend, plain Win32 instead of MFC); the rows keep tracing the original requests.
+
+---
+
+## Annex B — Revision history
+
+| Date | Version | Change | Source |
+|---|---|---|---|
+| 2026-11-15 | V6.5 | Backend language: Rust, Cargo, `cbindgen` and UniFFI abandoned, one C++11 backend behind a handwritten C API; reading note, §2.1 column "Backend toolchain", §2.1.1 first sentence and 32-bit constraint, §2.2, §2.2.1, §14, §15.1.4 reading | Spec Clarifications 2026-11-12 (second session); ADR 0001, ADR 0011; spike S6 |
+| 2026-11-15 | V6.5 | Windows legacy: Windows XP SP3 and MFC replaced by Windows 2000 (validated build 2195, no service pack) and plain Win32 built with MinGW-w64; XP by inference; end-of-life warning; §2.1, §2.1.2, §2.2.1, §3.6.9, §14, §15 phase 7, §15.1.5, §16.1 no. 1, 8 and 14 | Spec Clarifications 2026-11-12 (third session) and 2026-11-15; ADR 0009, ADR 0012; verdict `windows-2000-x86-legacy`; spike S1; report section 2 |
+| 2026-11-15 | V6.5 | Windows modern: Windows 10 raised to version 1809, framework-dependent runtime requirement; §2.1, §2.2.1, §16.1 no. 8 | Research R6; deliverable `windows-11-x64-modern`; verdict `windows-11-x64-modern`; spike S8 |
+| 2026-11-15 | V6.5 | Linux: GTK 4 with `gtk-rs`, AppImage and Flatpak replaced by gtkmm on GTK 3.10 (Modern) and Xlib (Legacy), binaries built on the target machine, lowest userland tried CentOS 5.11; §2.1, §2.2.1, §16.1 no. 9 | Spec Clarifications 2026-11-12 and 2026-11-14; ADR 0005, 0006, 0007, 0010; verdicts `linux-centos-5.11-x86_64-legacy`, `linux-ubuntu-24.04-x86_64-modern` |
+| 2026-11-15 | V6.5 | Android: Legacy UI (API 9 to 23, NDK r15c, run on API 16) and Modern UI (API 24+, Kotlin and Compose) instead of minSdk 21; Compose or Views settled; §2.1, §2.2.1, §16.1 no. 13 | ADR 0008, ADR 0016; spikes S3 and S8; verdicts `android-4.1.2-x86-legacy`, `android-7.0-x86_64-modern` |
+| 2026-11-15 | V6.5 | Web: WebAssembly path and JavaScript path (Emscripten 1.39.20 fastcomp), Firefox 10.0 on Windows 2000 as the Legacy floor, Internet Explorer up to 9 dropped, Safari covered by inference, Modern UI validated on one current browser; §2.1, §2.2.1 | Spec Clarifications 2026-11-12; ADR 0017; spike S5; verdicts `web-firefox-10-windows-2000-x86-legacy`, `web-chrome-157-windows-11-x64-modern` |
+| 2026-11-15 | V6.5 | Tiers: no longer defined by Rust target availability, but by a C++11 compiler and the platform libraries; Rust triples removed from §2.1.1 | Spec Clarifications 2026-11-12 (second session); report section 10 |
+| 2026-11-15 | V6.5 | CI on GitHub-hosted runners; the targets they cannot run are local runs; §2.1.1 | ADR 0018 |
+| 2026-11-15 | V6.5 | Disabled features recorded by the trials added to §2.3 (Windows 2000: DPI awareness, dark theme; Linux Legacy: missing glyph, text shaping and bidi, glyph substitution; Android Modern: `uimode-contrast`; Web Legacy: peak memory) | Verdicts `windows-2000-x86-legacy`, `linux-*-legacy`, `android-7.0-x86_64-modern`, `web-firefox-10-windows-2000-x86-legacy`; report section 10 |
+| 2026-11-15 | V6.5 | Phase 0 as run (minimal probe, PoC scope rule, reduced test bench), reading of the hypotheses matrix, go / no-go for Windows 2000 and XP; §15.1.3, §15.1.4, §15.1.5 | Spec Clarifications 2026-11-15 (fourth session) and Assumptions; report sections 2 and 9 |
+| 2026-11-15 | V6.5 | Decisions of §16: no. 1 and 8 updated; no. 9, 13 and 14 settled and moved from §16.2 to §16.1; requirement identifiers and rows V1 to V20 unchanged | As the rows above |
