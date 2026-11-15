@@ -273,11 +273,12 @@ jobs:
           sdk="$RUNNER_TEMP/android-sdk"
           mkdir -p "$sdk"
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          avdmanager="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
+          # avdmanager finds the SDK from its own location (neither ANDROID_SDK_ROOT nor ANDROID_HOME
+          # moves it), so the one of this job's SDK is used, not the image's.
+          avdmanager="$sdk/cmdline-tools/latest/bin/avdmanager"
           yes | JAVA_HOME="$JAVA_HOME_17_X64" "$sdkmanager" --sdk_root="$sdk" --licenses > /dev/null || true
-          JAVA_HOME="$JAVA_HOME_17_X64" "$sdkmanager" --sdk_root="$sdk" platform-tools emulator "system-images;android-$API;default;$ABI"
-          # avdmanager has no --sdk_root: it reads ANDROID_SDK_ROOT, which the image points at its own SDK.
-          echo "no" | JAVA_HOME="$JAVA_HOME_17_X64" ANDROID_SDK_ROOT="$sdk" ANDROID_HOME="$sdk" "$avdmanager" create avd -n loomora -k "system-images;android-$API;default;$ABI" -d pixel
+          JAVA_HOME="$JAVA_HOME_17_X64" "$sdkmanager" --sdk_root="$sdk" "cmdline-tools;latest" platform-tools emulator "system-images;android-$API;default;$ABI"
+          echo "no" | JAVA_HOME="$JAVA_HOME_17_X64" "$avdmanager" create avd -n loomora -k "system-images;android-$API;default;$ABI" -d pixel
           config="$HOME/.android/avd/loomora.avd/config.ini"
           sed -i '/^hw\.ramSize=/d;/^hw\.sdCard=/d' "$config"
           printf 'hw.ramSize=1536\nhw.sdCard=no\n' >> "$config"
