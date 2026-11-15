@@ -59,6 +59,7 @@ Date: 2026-11-12. Rewritten after the backend moved from Rust to C++11 (spec, se
 - **Legacy UI**: plain HTML + **ES5** page: if `typeof WebAssembly === "object"` load `loomora.wasm`, otherwise load `loomora.js`; same exported C functions through `ccall`/`cwrap`.
 - **Modern UI** (decided): **TypeScript** (ES modules, `WebAssembly.instantiateStreaming`), WebAssembly only, same `loomora.wasm`; about Chrome 61 / Firefox 60 / Safari 11 / Edge 16 (to verify). Other browsers get the Legacy page.
 - **To verify (S5)**: IE 9 and Safari 5.1 run the JavaScript build (obtain period browsers from archive installers or a VM); the IE 9 typed-array emulation is fast enough for a one-line function.
+- **Outcome (2026-11-15, spike S5 confirmed, ADR 0017)**: the current Emscripten (7.0.0) still builds a JavaScript path with `-sWASM=0` (through `wasm2js`) but its output is ECMAScript 2021, so it cannot run on old browsers; Emscripten 1.39.20 fastcomp (asm.js, parses as ES3) was used for the JavaScript path and runs on Firefox 10.0 on Windows 2000; Internet Explorer up to 9 is dropped (no typed arrays, no Emscripten version builds the backend without them). See `docs/implementation/adr/0017-web-javascript-path-fastcomp-1-39-20.md`.
 
 ## R9 — Build system, tests and host tools
 
