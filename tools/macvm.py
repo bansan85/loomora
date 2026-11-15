@@ -48,10 +48,10 @@ VMS = {
         "purpose": "Modern macOS and iOS simulator (T047-T052, T061); CI on a macos-26 runner covers it "
                    "without any local disk, so this VM is optional",
         "boot": "opencore", "ram_mb": 8192, "smp": "4,cores=2,sockets=1",
-        "disk_gb": 40, "ssh_port": 2222, "vnc": 1,
+        "disk_gb": 80, "ssh_port": 2222, "vnc": 1,
         "media": "downloaded by `fetch` (Apple recovery image through OSX-KVM, size not stated by OSX-KVM; "
                  "the macOS install itself then downloads more from Apple), Xcode 26.x from the owner's Apple ID",
-        "estimate": "disk 30-40 GB in use at the 40 GB cap (Xcode and the simulator will not fit: grow the disk with `qemu-img resize` and `diskutil resizeContainer`), download 20-30 GB (estimates, not measured)",
+        "estimate": "disk 50-70 GB in use (estimate); the 80 GB disk is sparse, so the VHDX must be able to hold what is written (`macvm-vhdx.ps1` size), download 20-30 GB (estimates, not measured)",
     },
     "mavericks": {
         "title": "OS X 10.9 Mavericks with Xcode 5.1.1",
