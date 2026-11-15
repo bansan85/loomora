@@ -10,6 +10,15 @@
 # kernel (no sysctl, no boot parameter); if the page is not mapped the job fails, it is not
 # hidden by `continue-on-error`.
 #
+# RESULT (first run 2026-11-15, https://github.com/bansan85/loomora/actions/runs/43732316641): the
+# hosted `ubuntu-24.04` runner (image ubuntu24/20261111.127.1) runs the kernel 7.0.0-1014-aws, built
+# with CONFIG_LEGACY_VSYSCALL_XONLY=y and started with no `vsyscall=` parameter, so the page is
+# mapped execute-only (`ffffffffff600000-ffffffffff601000 --xp [vsyscall]`) and the unmodified
+# image runs: every probe command exits 0, the UI builds, 15 of 15 vectors pass, the window run
+# passes. The job takes about 1 min 20 s. The kernel of a hosted runner is GitHub's choice: if a
+# future runner image changes the vsyscall mode, the first step shows it and the probe fails
+# loudly. The facts are in ADR 0018.
+#
 # Rules kept in every workflow of this repository (T129), see ci.yml: third-party actions pinned
 # by full commit SHA, a read-only token, `persist-credentials: false`, cancelled outdated runs, a
 # timeout on every job, a `changes` job that skips the build for a change that cannot affect it,
