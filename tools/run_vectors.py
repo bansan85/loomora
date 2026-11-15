@@ -69,6 +69,11 @@ $LOOMORA_WSL_DISTRO). To avoid every quoting problem (quotes, backslashes, newli
 input) the Windows side never puts the text on a command line: it passes the UTF-8 bytes as hex
 digits to this same script run inside WSL (`--inner-run`), which starts the UI with an argv list
 (no shell) and returns the exit status, standard output and standard error as one JSON line.
+Linux in a Docker container (--docker IMAGE [--docker-volume NAME]): for a system that is a container
+image, such as the manylinux2010 one (CentOS 6, glibc 2.12; see LinuxDockerLauncher). The UI is built
+in that same image (`docker run ... python3.8 tools/build.py linux legacy`, build directory = the
+volume mounted as /root/loomora-build); this script starts one container (worktree mounted at /src,
+private Xvfb on :99) and runs each vector through `docker exec` of its own --inner-run.
 Windows legacy: the executable out/windows-legacy/<arch>/loomora.exe built by
 `python tools/build.py windows legacy` (built through WSL when missing) runs on a Windows host
 only (no Wine). Each run copies it into its own scratch directory (so the probe files of parallel
@@ -109,6 +114,12 @@ import common
 
 UI_MAX_CHARS = 1000  # ui-contract.md: the field is limited to 1,000 characters
 DEFAULT_WSL_DISTRO = "Ubuntu-24.04"
+# Linux in a Docker container (--docker): the Python of the manylinux2010 image that runs this script
+# (the system Python of CentOS 6 is 2.6), the private X display, the build volume mounted as the
+# $HOME/loomora-build of the container (root).
+DOCKER_PYTHON = "/opt/python/cp38-cp38/bin/python3"
+DOCKER_DISPLAY = ":99"
+DOCKER_DEFAULT_VOLUME = "loomora-build"
 WINDOWS_ARCHS = ("x64", "x86")
 FAMILY_PREFIXES = {
     "win": "windows", "windows": "windows", "macos": "macos", "mac": "macos", "ios": "ios",
@@ -357,6 +368,96 @@ class LinuxModernLauncher(Launcher):
 
 class LinuxLegacyLauncher(LinuxModernLauncher):
     """The Linux Legacy (Xlib) UI: the same launch and checks, another executable."""
+
+
+def docker_start_cmd(image, root, volume):
+    """`docker run` command of the long-lived container: the worktree is /src, the build volume is
+    the $HOME/loomora-build of its root user, and a private Xvfb serves DOCKER_DISPLAY (never the
+    display of the host)."""
+    return ["docker", "run", "-d", "--rm", "-v", "%s:/src" % root,
+            "-v", "%s:/root/loomora-build" % volume, "-w", "/src",
+            "-e", "DISPLAY=" + DOCKER_DISPLAY, "-e", "LANG=C.UTF-8", image,
+            "bash", "-c", "Xvfb %s -screen 0 1280x1024x24 -nolisten tcp & exec sleep 86400"
+            % DOCKER_DISPLAY]
+
+
+def docker_inner_cmd(container, python, variant, exe, *script_args):
+    """`docker exec` of this script's Linux side (--inner-*) in the container."""
+    cmd = ["docker", "exec", container, python, "tools/run_vectors.py", "--inner-variant", variant]
+    if exe:
+        cmd += ["--exe", exe]
+    return cmd + list(script_args)
+
+
+class LinuxDockerLauncher(LinuxModernLauncher):
+    """The Linux UIs inside a Docker container (--docker IMAGE), for a system that is not a
+    machine, such as the manylinux2010 image (CentOS 6, glibc 2.12). prepare() starts one container
+    with the worktree mounted at /src, the build volume (where tools/build.py built the UI inside
+    that same image, see --docker-volume) and a private Xvfb; every run is a `docker exec` of this
+    script's --inner-run (the text travels as hex, as through WSL); close() removes the container."""
+
+    def __init__(self, args):
+        Launcher.__init__(self, args)
+        self.image = args.docker
+        self.volume = args.docker_volume
+        self.container = None
+
+    def _inner(self, *script_args):
+        return docker_inner_cmd(self.container, DOCKER_PYTHON, LINUX_UI["variant"],
+                                LINUX_UI["exe"], *script_args)
+
+    def _exec(self, command, timeout=120):
+        return subprocess.run(["docker", "exec", self.container, "bash", "-c", command],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+
+    def prepare(self):
+        res = subprocess.run(docker_start_cmd(self.image, common.ROOT, self.volume),
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
+        if res.returncode != 0:
+            raise RuntimeError("cannot start the container of image %s: %s"
+                               % (self.image, res.stderr.decode("utf-8", "replace").strip()))
+        self.container = res.stdout.decode("utf-8", "replace").strip()
+        for _ in range(50):  # the X server of the container takes a moment
+            if self._exec("test -S /tmp/.X11-unix/X%s" % DOCKER_DISPLAY[1:], 20).returncode == 0:
+                break
+            time.sleep(0.2)
+        else:
+            raise RuntimeError("the Xvfb of the container did not start")
+        res = subprocess.run(self._inner("--inner-where"), stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, timeout=120)
+        exe = res.stdout.decode("utf-8", "replace").strip().splitlines()
+        if res.returncode != 0 or not exe or not exe[-1].startswith("/"):
+            raise RuntimeError(
+                "cannot locate the Linux %s executable in the container (volume %s): build it there "
+                "with 'python tools/build.py linux %s'\n%s"
+                % (LINUX_UI["variant"], self.volume, LINUX_UI["variant"],
+                   res.stderr.decode("utf-8", "replace").strip()))
+        system = self._exec("head -n 1 /etc/redhat-release 2>/dev/null || head -n 1 /etc/issue; "
+                            "ldd --version | head -n 1").stdout.decode("utf-8", "replace")
+        return "docker %s (%s): %s" % (self.image, "; ".join(system.strip().splitlines()), exe[-1])
+
+    def run(self, text, timeout):
+        start = time.time()
+        cmd = self._inner("--inner-run", "x" + text.encode("utf-8").hex(), "--timeout", str(timeout))
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 timeout=timeout + 40)
+        except subprocess.TimeoutExpired:
+            return RunResult(None, "", "", time.time() - start, "docker exec timed out")
+        lines = [l for l in res.stdout.decode("utf-8", "replace").splitlines() if l.startswith("{")]
+        if res.returncode != 0 or not lines:
+            return RunResult(None, "", res.stderr.decode("utf-8", "replace"), time.time() - start,
+                             "docker exec failed (status %d)" % res.returncode)
+        reply = json.loads(lines[-1])
+        if "error" in reply:
+            return RunResult(None, "", "", time.time() - start, reply["error"])
+        return RunResult(reply["returncode"], reply["stdout"], reply["stderr"], time.time() - start)
+
+    def close(self):
+        if self.container:
+            subprocess.run(["docker", "rm", "-f", self.container], stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, timeout=120)
+            self.container = None
 
 
 WINDOWS_PROBE_FILE = "loomora-probe.json"
@@ -1192,6 +1293,23 @@ def self_test():
            any(p.startswith("platform_id") for p in check_run(vec, res, "android-7.0-x86_64", "legacy")[0]), True)
     expect("probe says android-7.0-x86 and that id is expected: platform_id accepted",
            any(p.startswith("platform_id") for p in check_run(vec, res, "android-7.0-x86", "legacy")[0]), False)
+
+    # the docker launcher: the commands it builds (no Docker needed)
+    start = docker_start_cmd("img", "/work/tree", "vol")
+    expect("docker run: image, mounts, display, private Xvfb",
+           (start[:4], start[4:8], start[8:10], start[10:14], start[14], start[-1]),
+           (["docker", "run", "-d", "--rm"],
+            ["-v", "/work/tree:/src", "-v", "vol:/root/loomora-build"], ["-w", "/src"],
+            ["-e", "DISPLAY=" + DOCKER_DISPLAY, "-e", "LANG=C.UTF-8"], "img",
+            "Xvfb %s -screen 0 1280x1024x24 -nolisten tcp & exec sleep 86400" % DOCKER_DISPLAY))
+    expect("docker exec: the Linux side of this script, variant and text",
+           docker_inner_cmd("c1", "/py3", "legacy", None, "--inner-run", "x41", "--timeout", "30"),
+           ["docker", "exec", "c1", "/py3", "tools/run_vectors.py", "--inner-variant", "legacy",
+            "--inner-run", "x41", "--timeout", "30"])
+    expect("docker exec: --exe is passed on",
+           docker_inner_cmd("c1", "/py3", "legacy", "/x/loomora-xlib", "--inner-where"),
+           ["docker", "exec", "c1", "/py3", "tools/run_vectors.py", "--inner-variant", "legacy",
+            "--exe", "/x/loomora-xlib", "--inner-where"])
     print("self-test %s" % ("FAILED" if failures else "passed"))
     return 1 if failures else 0
 
@@ -1219,6 +1337,12 @@ def main(argv=None):
     ap.add_argument("--arch", choices=WINDOWS_ARCHS,
                     help="Windows only: executable to run, x64 (default) or x86 (under WOW64 it "
                     "reports the same platform id as the x64 one)")
+    ap.add_argument("--docker", metavar="IMAGE", help="Linux only: run the UI inside a container "
+                    "of this image (for example loomora-manylinux2010, built from "
+                    "tools/trials/linux-manylinux2010-x86_64/Dockerfile) with a private Xvfb; the "
+                    "UI must have been built there, into --docker-volume")
+    ap.add_argument("--docker-volume", default=DOCKER_DEFAULT_VOLUME, help="Docker volume mounted "
+                    "as $HOME/loomora-build of the container (default %s)" % DOCKER_DEFAULT_VOLUME)
     ap.add_argument("--dry-run", action="store_true",
                     help="only list the vectors that would run and those skipped")
     ap.add_argument("--exe", help="the executable to run instead of the one that tools/build.py "
@@ -1262,7 +1386,11 @@ def main(argv=None):
     if args.ui_abi and family != "android":
         ap.error("--ui-abi is for Android platform ids only")
     data = common.read_json(args.vectors)
+    if args.docker and family != "linux":
+        ap.error("--docker is for Linux platform ids only")
     launcher_cls = select_launcher(family, args.variant, args.platform_id)
+    if args.docker:
+        launcher_cls = LinuxDockerLauncher
     unit = launcher_cls.length_unit if launcher_cls else Launcher.length_unit
     runs, skipped = plan_vectors(data, unit)
     log = []
