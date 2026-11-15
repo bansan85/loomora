@@ -74,6 +74,18 @@ Implemented targets:
                  deliverable record per Web platform of WEB_PLATFORM_PATH that has a platform
                  record (a browser on an operating system, T093), naming the files of its path.
 
+  web modern     CMake + Ninja with Emscripten and npm + TypeScript on ui/modern/web-ts (T038-T040),
+                 WSL / Linux only (on a Windows host the tool re-runs itself in WSL): the C++11
+                 backend built as WebAssembly with the current Emscripten (the same toolchain and
+                 emsdk as web legacy, self-test run by node), the sources of ui/modern/web-ts copied
+                 into $HOME/loomora-build/web-modern/ts/ (so that node_modules never enters the
+                 repository tree), `npm ci` (package-lock.json, exact versions) and `tsc`, then the
+                 folder $HOME/loomora-build/web-modern/dist/ (index.html, main.js, native.js,
+                 loomora.js, loomora.wasm), outside the repository tree. It writes NO deliverable
+                 record: no Web platform record for a current browser exists yet (the Chrome trial,
+                 T063, adds it); the run of the page under node is
+                 `python tools/run_vectors.py web-node-wasm modern`.
+
   android legacy CMake + Ninja with cmake/toolchains/android-ndk-r15c.cmake (T029, T081, T082) for
                  the JNI glue bridge/jni/loomora_jni.cpp and the C++11 backend, once per ABI
                  (armeabi, armeabi-v7a, x86: API 9 sysroot; arm64-v8a: API 21 sysroot), plus
@@ -137,7 +149,6 @@ DEFAULT_WSL_DISTRO = "Ubuntu-24.04"
 
 # Targets that do not exist yet and the task that will add each of them.
 PENDING = {
-    ("web", "modern"): "T040",
     ("macos", "modern"): "T049",
     ("ios", "modern"): "T052",
     ("macos", "legacy"): "T077",
@@ -1493,7 +1504,7 @@ def web_run(cmd, env_dir, cwd, fastcomp, log):
     with open(str(log), "a", encoding="utf-8", newline="\n") as f:
         f.write("$ %s\n%s\n" % (" ".join(argv), res.stdout))
     if res.returncode != 0:
-        sys.exit("web legacy: command failed (%d), see %s:\n%s\n%s"
+        sys.exit("web build: command failed (%d), see %s:\n%s\n%s"
                  % (res.returncode, log, " ".join(argv), res.stdout[-2000:]))
     return res.stdout
 
@@ -1606,6 +1617,86 @@ def run_web_legacy(args):
         write_deliverable(record, dist / names[-1])
 
 
+# ---- web modern (T038-T040) -----------------------------------------------------------------
+
+WEB_MODERN_UI = Path("ui") / "modern" / "web-ts"
+WEB_MODERN_PAGE_FILES = ("index.html",)
+WEB_MODERN_TS_INPUTS = ("package.json", "package-lock.json", "tsconfig.json")
+WEB_MODERN_TS_OUTPUTS = ("main.js", "native.js")
+
+
+def web_plain_run(cmd, cwd, log):
+    """Run `cmd` as it is (no Emscripten environment: npm and tsc use the system node); the output
+    goes to `log`; stops on failure."""
+    argv = [str(c) for c in cmd]
+    res = subprocess.run(argv, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         universal_newlines=True)
+    with open(str(log), "a", encoding="utf-8", newline="\n") as f:
+        f.write("$ %s\n%s\n" % (" ".join(argv), res.stdout))
+    if res.returncode != 0:
+        sys.exit("web build: command failed (%d), see %s:\n%s\n%s"
+                 % (res.returncode, log, " ".join(argv), res.stdout[-2000:]))
+    return res.stdout
+
+
+def run_web_modern(args):
+    if sys.platform == "win32":
+        rerun_in_wsl(args, "web", "modern")
+        return
+    if not in_wsl_or_linux():
+        sys.exit("web modern cannot be built on this host (%s): use Linux or Windows with WSL"
+                 % sys.platform)
+    require_tools(["cmake", "ninja", "node", "npm", "bash"])
+    emsdk, _ = web_emsdk_dirs()
+    if not (emsdk / "emsdk_env.sh").is_file():
+        sys.exit("web modern: the current emsdk is not at %s (set LOOMORA_EMSDK)" % emsdk)
+    ui = common.ROOT / WEB_MODERN_UI
+    for name in WEB_MODERN_TS_INPUTS:
+        if not (ui / name).is_file():
+            sys.exit("web modern: %s is missing (a lock file is made by `npm install` in "
+                     "a copy of the folder, see tools/build.py)" % (WEB_MODERN_UI / name))
+    build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (Path.home() / "loomora-build"))
+    root = build_root / "web-modern"
+    root.mkdir(parents=True, exist_ok=True)
+
+    wasm_dir = web_build_module("wasm", "emscripten-wasm.cmake", emsdk, False, root)
+
+    # TypeScript: built in a copy, so that node_modules is not made inside the repository tree
+    ts = root / "ts"
+    log = root / "ts.log"
+    if ts.exists():
+        shutil.rmtree(str(ts))
+    if log.exists():
+        log.unlink()
+    ts.mkdir()
+    for name in WEB_MODERN_TS_INPUTS:
+        shutil.copyfile(str(ui / name), str(ts / name))
+    shutil.copytree(str(ui / "src"), str(ts / "src"))
+    web_plain_run(["npm", "ci", "--no-audit", "--no-fund"], ts, log)
+    version = web_plain_run([str(ts / "node_modules" / ".bin" / "tsc"), "--version"], ts, log).strip()
+    web_plain_run([str(ts / "node_modules" / ".bin" / "tsc"), "-p", "tsconfig.json"], ts, log)
+    print("typescript: %s (log %s)" % (version, log))
+
+    dist = root / "dist"
+    if dist.exists():
+        shutil.rmtree(str(dist))
+    dist.mkdir()
+    for name in WEB_MODERN_PAGE_FILES:
+        shutil.copyfile(str(ui / name), str(dist / name))
+    for name in WEB_MODERN_TS_OUTPUTS:
+        shutil.copyfile(str(ts / "dist" / name), str(dist / name))
+    shutil.copyfile(str(wasm_dir / "bridge" / "wasm" / "loomora.js"), str(dist / "loomora.js"))
+    shutil.copyfile(str(wasm_dir / "bridge" / "wasm" / "loomora.wasm"), str(dist / "loomora.wasm"))
+    extra = sorted(p.name for p in (ts / "dist").iterdir() if p.name not in WEB_MODERN_TS_OUTPUTS)
+    if extra:
+        sys.exit("web modern: tsc wrote files that are not served: %s" % ", ".join(extra))
+    for p in sorted(dist.iterdir()):
+        print("%8d  %s" % (p.stat().st_size, p.name))
+    print("dist: %s" % dist)
+    print("no deliverable record written: no Web platform record for a current browser exists yet "
+          "(the Chrome trial, T063, adds it)")
+
+
 TARGETS = {
     ("android", "legacy"): run_android_legacy,
     ("android", "modern"): run_android_modern,
@@ -1614,6 +1705,7 @@ TARGETS = {
     ("windows", "legacy"): run_windows_legacy,
     ("windows", "modern"): run_windows_modern,
     ("web", "legacy"): run_web_legacy,
+    ("web", "modern"): run_web_modern,
 }
 
 
