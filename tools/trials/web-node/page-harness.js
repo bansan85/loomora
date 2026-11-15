@@ -3,7 +3,7 @@
 // in a vm context with a minimal DOM stub, without any browser. Tooling, not evidence.
 //
 //   node page-harness.js [--dist DIR] [--path wasm|js] [--query "?probe=1&input=Coucou"|-]
-//                        [--typing TEXT] [--timeout SECONDS] [--verbose]
+//                        [--typing TEXT] [--ua USER-AGENT] [--timeout SECONDS] [--verbose]
 //
 //   --dist DIR     the folder tools/build.py web legacy assembles (default $LOOMORA_WEB_DIST, then
 //                  $HOME/loomora-build/web-legacy/dist): index.html, app.js, loomora.js,
@@ -14,6 +14,9 @@
 //   --query Q      the URL query of the page; "-" reads it from standard input (ASCII, so that any
 //                  text can be passed through a command line that mangles non-ASCII). Without
 //                  --query the page runs without probe mode.
+//   --ua STRING    navigator.userAgent of the context (default "node page-harness"); for example
+//                  "Mozilla/5.0 (Windows NT 5.0; rv:10.0) Gecko/20100101 Firefox/10.0" shows the
+//                  end-of-life notice (the harness then checks that the record and the page agree).
 //   --typing TEXT  after the first greeting, set the field to TEXT and fire onkeyup, then check
 //                  the greeting follows (the event handling of the page).
 //
@@ -33,7 +36,7 @@ var path = require("path");
 var vm = require("vm");
 
 var opts = { dist: process.env.LOOMORA_WEB_DIST || path.join(process.env.HOME || ".", "loomora-build", "web-legacy", "dist"),
-             path: "js", query: null, typing: null, timeout: 30, verbose: false };
+             path: "js", query: null, typing: null, ua: "node page-harness", timeout: 30, verbose: false };
 for (var ai = 2; ai < process.argv.length; ai++) {
   var a = process.argv[ai];
   if (a === "--verbose") opts.verbose = true;
@@ -41,6 +44,7 @@ for (var ai = 2; ai < process.argv.length; ai++) {
   else if (a === "--path") opts.path = process.argv[++ai];
   else if (a === "--query") opts.query = process.argv[++ai];
   else if (a === "--typing") opts.typing = process.argv[++ai];
+  else if (a === "--ua") opts.ua = process.argv[++ai];
   else if (a === "--timeout") opts.timeout = Number(process.argv[++ai]);
   else { console.error("unknown argument " + a); process.exit(2); }
 }
@@ -58,6 +62,7 @@ function Node(type, tag) {
 Object.defineProperty(Node.prototype, "firstChild", { get: function () { return this.childNodes[0] || null; } });
 Node.prototype.appendChild = function (child) {
   child.parentNode = this; this.childNodes.push(child);
+  if (child.id && typeof byId !== "undefined" && !byId[child.id]) byId[child.id] = child;   // getElementById finds an element the page adds
   if (child.tagName === "script" && child.src && attached(this)) loadScript(child);
   return child;
 };
@@ -84,6 +89,17 @@ function attached(node) {
   return false;
 }
 
+// A browser normalises the new lines of textarea.value: CRLF and a lone CR read back as LF (HTML,
+// "API value"). The field of the page is a textarea, so the stub does the same; an <input
+// type="text"> would strip the line feeds instead (that was the reason for the textarea).
+function makeTextarea(node) {
+  var stored = "";
+  Object.defineProperty(node, "value", {
+    get: function () { return stored; },
+    set: function (v) { stored = String(v).replace(/\r\n?/g, "\n"); }
+  });
+}
+
 var byId = {};
 var pageHtml = fs.readFileSync(path.join(opts.dist, "index.html"), "utf8");
 var re = /<(\w+)([^>]*?)>/g, m;
@@ -92,6 +108,12 @@ while ((m = re.exec(pageHtml)) !== null) {
   if (!idm) continue;
   var e = new Node(1, m[1].toLowerCase());
   var valm = /\svalue="([^"]*)"/.exec(m[2]);
+  if (e.tagName === "textarea") {
+    // The initial value of a textarea is its content (up to the closing tag), not an attribute.
+    var endTag = pageHtml.indexOf("</textarea>", re.lastIndex);
+    valm = [null, pageHtml.slice(re.lastIndex, endTag)];
+    makeTextarea(e);
+  }
   e.value = valm ? valm[1] : "";
   e.id = idm[1];
   byId[e.id] = e;
@@ -119,7 +141,7 @@ var sandbox = { document: doc,
                 clearInterval: clearInterval };
 sandbox.window = sandbox; sandbox.self = sandbox;
 sandbox.location = { search: opts.query === null ? "" : opts.query, href: "file:///" + opts.dist.replace(/^\//, "") + "/index.html" + (opts.query || "") };
-sandbox.navigator = { userAgent: "node page-harness" };
+sandbox.navigator = { userAgent: opts.ua };
 if (opts.path === "wasm") {
   sandbox.WebAssembly = WebAssembly;
   // The glue of Emscripten 7.0.0 reads loomora.wasm with fetch in a web environment.
@@ -200,6 +222,8 @@ function finish(s, err, done) {
       var want = opts.path === "wasm" ? "cpp-wasm" : "cpp-js";
       if (rec.core !== want) bad.push("core is " + rec.core + ", expected " + want);
       if (rec.ui_variant !== "legacy") bad.push("ui_variant is " + rec.ui_variant);
+      var banner = !!byId.eol && textContent(byId.eol) !== "";
+      if (banner !== (rec.eol_warning_shown === true)) bad.push("eol_warning_shown " + rec.eol_warning_shown + " but the notice is " + (banner ? "shown" : "not shown"));
     }
   }
   if (!probeMode && !err && done) {
@@ -207,6 +231,7 @@ function finish(s, err, done) {
     if (s.greeting !== "Bonjour " + input) bad.push("greeting " + JSON.stringify(s.greeting) + ", expected " + JSON.stringify("Bonjour " + input));
   }
   if (line) console.log(line);
+  console.log("eol notice: " + (byId.eol ? textContent(byId.eol) : "none"));
   console.log("title: " + s.title);
   console.log("greeting: " + s.greeting.slice(0, 200).replace(/[\r\n]/g, " "));
   if (bad.length) { console.error("FAIL " + bad.join("; ")); process.exit(1); }
