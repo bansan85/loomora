@@ -37,6 +37,13 @@ if(LOOMORA_TARGET_WIN2000)
   target_sources(loomora_selftest PRIVATE
     "${PROJECT_SOURCE_DIR}/ui/legacy/windows-win32/getthreadid_shim.cpp")
 endif()
+# Emscripten (cmake/toolchains/emscripten-*.cmake): the toolchain exports the six loomora_*
+# functions of the module; the self-test needs its own main() kept instead, otherwise the linker
+# drops it as dead code and the test would pass without running anything.
+if(LOOMORA_TARGET_WEB)
+  target_link_options(loomora_selftest PRIVATE
+    "-sEXPORTED_FUNCTIONS=@${PROJECT_SOURCE_DIR}/bridge/wasm/exports-selftest.txt")
+endif()
 add_test(NAME selftest COMMAND loomora_selftest)
 
 # --- loomora_tests: Catch2 --------------------------------------------------------------

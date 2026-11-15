@@ -32,6 +32,12 @@ if(LOOMORA_TARGET_ANDROID)
   add_subdirectory(ui/legacy/android-views)
 endif()
 
+# Web module (loomora.js and loomora.wasm): only with cmake/toolchains/emscripten-wasm.cmake or
+# emscripten-js.cmake.
+if(LOOMORA_TARGET_WEB)
+  add_subdirectory(bridge/wasm)
+endif()
+
 if(LOOMORA_BUILD_LINUX_MODERN)
   add_subdirectory(ui/modern/linux-gtk3)
 endif()
