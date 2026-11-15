@@ -48,6 +48,13 @@
       "inherits": "web-wasm",
       "binaryDir": "$env{HOME}/loomora-build/web-js",
       "toolchainFile": "${sourceDir}/cmake/toolchains/emscripten-js.cmake"
+    },
+    {
+      "name": "web-js-fastcomp",
+      "description": "Emscripten 1.39.20 fastcomp (EM_CONFIG and PATH of the fastcomp emsdk): loomora.js as asm.js that parses as ES3, memory image inside the file (--memory-init-file 0)",
+      "inherits": "web-js",
+      "binaryDir": "$env{HOME}/loomora-build/web-js-fastcomp",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/emscripten-js-fastcomp.cmake"
     }
   ],
   "buildPresets": [
@@ -56,7 +63,8 @@
     { "name": "host-msvc", "configurePreset": "host-msvc", "configuration": "Release" },
     { "name": "host-msvc-arm64", "configurePreset": "host-msvc-arm64", "configuration": "Release" },
     { "name": "web-wasm", "configurePreset": "web-wasm" },
-    { "name": "web-js", "configurePreset": "web-js" }
+    { "name": "web-js", "configurePreset": "web-js" },
+    { "name": "web-js-fastcomp", "configurePreset": "web-js-fastcomp" }
   ],
   "testPresets": [
     { "name": "host-msvc", "configurePreset": "host-msvc", "configuration": "Release" }
