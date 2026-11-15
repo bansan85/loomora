@@ -59,6 +59,21 @@ Implemented targets:
                  instead, which tools/validate_records.py reports as a deliverable without
                  platform until the platform record exists.
 
+  web legacy     CMake + Ninja with Emscripten on ui/legacy/web (T085, T086), WSL / Linux only (on a
+                 Windows host the tool re-runs itself in WSL): the C++11 backend built twice, as
+                 WebAssembly with the current Emscripten (cmake/toolchains/emscripten-wasm.cmake,
+                 the emsdk of $LOOMORA_EMSDK, default ~/emsdk, activated with emsdk_env.sh) and as
+                 JavaScript with Emscripten 1.39.20 fastcomp (emscripten-js-fastcomp.cmake, the emsdk
+                 of $LOOMORA_EMSDK_FASTCOMP, default ~/emsdk-fastcomp, activated with EM_CONFIG and
+                 PATH), each with its self-test run by node (ctest). The page and its script are
+                 copied with the three module files into the folder
+                 $HOME/loomora-build/web-legacy/dist/ (index.html, app.js, loomora.js,
+                 loomora-wasm.js, loomora.wasm), outside the repository tree; that folder is the
+                 deliverable. Checks that app.js and the JavaScript build parse as ECMAScript 3
+                 (tools/trials/web-node/es-level.js, acorn of the fastcomp emsdk). Writes NO
+                 deliverable record yet: a record names a platform record, and the Web platforms
+                 (a browser on an operating system) are added with the browser runs (T093).
+
   android legacy CMake + Ninja with cmake/toolchains/android-ndk-r15c.cmake (T029, T081, T082) for
                  the JNI glue bridge/jni/loomora_jni.cpp and the C++11 backend, once per ABI
                  (armeabi, armeabi-v7a, x86: API 9 sysroot; arm64-v8a: API 21 sysroot), plus
@@ -127,7 +142,6 @@ PENDING = {
     ("ios", "modern"): "T052",
     ("macos", "legacy"): "T077",
     ("ios", "legacy"): "T079",
-    ("web", "legacy"): "T086",
 }
 
 
@@ -1424,6 +1438,126 @@ def windows_modern_records(built, platforms, msvc_toolset, msvc_version, dotnet_
     return out
 
 
+# ---- web legacy (T085, T086) ---------------------------------------------------------------
+
+WEB_LEGACY_UI = Path("ui") / "legacy" / "web"
+WEB_LEGACY_PAGE_FILES = ("index.html", "app.js")
+ES_LEVEL = Path("tools") / "trials" / "web-node" / "es-level.js"
+
+
+def web_emsdk_dirs():
+    home = Path.home()
+    return (Path(os.environ.get("LOOMORA_EMSDK") or (home / "emsdk")),
+            Path(os.environ.get("LOOMORA_EMSDK_FASTCOMP") or (home / "emsdk-fastcomp")))
+
+
+def web_run(cmd, env_dir, cwd, fastcomp, log):
+    """Run `cmd` with Emscripten activated; the output goes to `log` (a Path); stops on failure.
+
+    The current emsdk is activated by sourcing its emsdk_env.sh. The fastcomp one (1.39.20) is
+    activated by what its emsdk_env.sh does not set: EM_CONFIG (its .emscripten file) and the PATH
+    of emcc and of its node 14."""
+    env = dict(os.environ)
+    argv = [str(c) for c in cmd]
+    if fastcomp:
+        nodes = sorted(env_dir.glob("node/*/bin"))
+        env["EM_CONFIG"] = str(env_dir / ".emscripten")
+        env["PATH"] = os.pathsep.join(
+            [str(env_dir / "fastcomp" / "emscripten")] + [str(n) for n in nodes] + [env["PATH"]])
+        full = argv
+    else:
+        full = ["bash", "-c", 'source "$1/emsdk_env.sh" >/dev/null 2>&1 || exit 97; shift; exec "$@"',
+                "bash", str(env_dir)] + argv
+    res = subprocess.run(full, cwd=str(cwd), env=env, stdout=subprocess.PIPE,
+                         stderr=subprocess.STDOUT, universal_newlines=True)
+    with open(str(log), "a", encoding="utf-8", newline="\n") as f:
+        f.write("$ %s\n%s\n" % (" ".join(argv), res.stdout))
+    if res.returncode != 0:
+        sys.exit("web legacy: command failed (%d), see %s:\n%s\n%s"
+                 % (res.returncode, log, " ".join(argv), res.stdout[-2000:]))
+    return res.stdout
+
+
+def web_build_module(kind, toolchain, env_dir, fastcomp, root):
+    """Configure, build and test one Web module; returns its build directory."""
+    build = root / kind
+    log = root / ("%s.log" % kind)
+    if log.exists():
+        log.unlink()
+    web_run(["cmake", "-S", common.ROOT, "-B", build, "-G", "Ninja",
+             "-DCMAKE_TOOLCHAIN_FILE=%s" % (common.ROOT / "cmake" / "toolchains" / toolchain),
+             "-DCMAKE_BUILD_TYPE=Release", "-DLOOMORA_BUILD_CATCH2_TESTS=OFF"],
+            env_dir, root, fastcomp, log)
+    web_run(["cmake", "--build", build], env_dir, root, fastcomp, log)
+    out = web_run(["ctest", "--output-on-failure"], env_dir, build, fastcomp, log)
+    tail = [l for l in out.splitlines() if "tests passed" in l]
+    print("%s: built, self-test: %s (log %s)" % (kind, tail[-1].strip() if tail else "?", log))
+    return build
+
+
+def web_es_level(acorn_dir, js_file):
+    """Lowest ECMAScript edition that parses js_file, as es-level.js prints it."""
+    res = subprocess.run(["node", str(common.ROOT / ES_LEVEL), str(acorn_dir), str(js_file)],
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+    for line in res.stdout.splitlines():
+        if line.startswith("lowest edition that parses:"):
+            return line.split(":", 1)[1].strip()
+    return "does not parse (%s)" % res.stdout.strip()[-200:]
+
+
+def run_web_legacy(args):
+    if sys.platform == "win32":
+        rerun_in_wsl(args, "web", "legacy")
+        return
+    if not in_wsl_or_linux():
+        sys.exit("web legacy cannot be built on this host (%s): use Linux or Windows with WSL"
+                 % sys.platform)
+    require_tools(["cmake", "ninja", "node", "bash"])
+    emsdk, fastcomp = web_emsdk_dirs()
+    if not (emsdk / "emsdk_env.sh").is_file():
+        sys.exit("web legacy: the current emsdk is not at %s (set LOOMORA_EMSDK; it builds the "
+                 "WebAssembly path)" % emsdk)
+    if not (fastcomp / ".emscripten").is_file():
+        sys.exit("web legacy: the Emscripten 1.39.20 fastcomp emsdk is not at %s (set "
+                 "LOOMORA_EMSDK_FASTCOMP; it builds the JavaScript path, spike S5)" % fastcomp)
+    build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (Path.home() / "loomora-build"))
+    root = build_root / "web-legacy"
+    root.mkdir(parents=True, exist_ok=True)
+
+    wasm_dir = web_build_module("wasm", "emscripten-wasm.cmake", emsdk, False, root)
+    js_dir = web_build_module("js", "emscripten-js-fastcomp.cmake", fastcomp, True, root)
+
+    dist = root / "dist"
+    if dist.exists():
+        shutil.rmtree(str(dist))
+    dist.mkdir()
+    ui = common.ROOT / WEB_LEGACY_UI
+    for name in WEB_LEGACY_PAGE_FILES:
+        shutil.copyfile(str(ui / name), str(dist / name))
+    if (js_dir / "bridge" / "wasm" / "loomora.js.mem").exists():
+        sys.exit("web legacy: the JavaScript build wrote loomora.js.mem (--memory-init-file 0 lost?)")
+    shutil.copyfile(str(js_dir / "bridge" / "wasm" / "loomora.js"), str(dist / "loomora.js"))
+    shutil.copyfile(str(wasm_dir / "bridge" / "wasm" / "loomora.js"), str(dist / "loomora-wasm.js"))
+    shutil.copyfile(str(wasm_dir / "bridge" / "wasm" / "loomora.wasm"), str(dist / "loomora.wasm"))
+
+    acorn = fastcomp / "fastcomp" / "emscripten" / "node_modules" / "acorn"
+    problems = []
+    # loomora-wasm.js is not checked: it is modern JavaScript on purpose (only browsers that have
+    # WebAssembly load it) and the acorn of the fastcomp emsdk does not finish on it.
+    for name in ("app.js", "loomora.js"):
+        level = web_es_level(acorn, dist / name)
+        print("%-16s lowest ECMAScript edition that parses: %s" % (name, level))
+        if level != "ecmaVersion 3":
+            problems.append("%s parses only as %s (ES3 required)" % (name, level))
+    for p in sorted(dist.iterdir()):
+        print("%8d  %s" % (p.stat().st_size, p.name))
+    if problems:
+        sys.exit("web legacy: " + "; ".join(problems))
+    print("dist: %s" % dist)
+    print("NOTE: no deliverable record written: a record names a platform record and no Web platform "
+          "(browser + operating system) exists yet (T093).")
+
+
 TARGETS = {
     ("android", "legacy"): run_android_legacy,
     ("android", "modern"): run_android_modern,
@@ -1431,6 +1565,7 @@ TARGETS = {
     ("linux", "legacy"): run_linux_legacy,
     ("windows", "legacy"): run_windows_legacy,
     ("windows", "modern"): run_windows_modern,
+    ("web", "legacy"): run_web_legacy,
 }
 
 
