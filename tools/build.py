@@ -779,7 +779,8 @@ def windows_legacy_records(built, platforms):
         generic, artifact = built[arch]
         record = dict(generic)
         record["platform_id"] = platform_id
-        record["fallbacks"] = fallbacks_of(platform_id)
+        # builtin-expect is taken by the MSVC build of the Windows Modern deliverable, not by MinGW GCC
+        record["fallbacks"] = [f for f in fallbacks_of(platform_id) if f != "builtin-expect"]
         notes = ("Deliverable of platform %s (validation/platforms/%s.json). %s; artifact sha256 "
                  "%s." % (platform_id, platform_id, generic["notes"], common.sha256(artifact)))
         if arch == "x64" and "x86" in built:
@@ -1434,8 +1435,10 @@ def windows_modern_records(built, platforms, msvc_toolset, msvc_version, dotnet_
                               packs.get(facts["tf"], {}).get("Microsoft.NETCore.App.Runtime.win-" + arch, "unknown")),
             "artifact": {"name": facts["archive"].name, "size": facts["zip_bytes"]},
             "disabled_features": [],
-            # selftest-no-iostream is a MinGW-w64 (Windows Legacy) fallback: platform ids carry no variant
-            "fallbacks": [f for f in fallbacks_of(platform_id) if f != "selftest-no-iostream"],
+            # selftest-no-iostream and win-api-level are MinGW-w64 (Windows Legacy) fallbacks: platform
+            # ids carry no variant
+            "fallbacks": [f for f in fallbacks_of(platform_id)
+                          if f not in ("selftest-no-iostream", "win-api-level")],
             "notes": "python tools/build.py windows modern: cmake --preset %s (Visual Studio 18 "
                      "2026 generator; loomora.dll exports exactly the loomora_* functions of "
                      "loomora.h and imports KERNEL32 only) then dotnet publish of "
