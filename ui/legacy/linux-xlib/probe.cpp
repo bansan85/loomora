@@ -70,6 +70,30 @@ bool OsReleaseValue(const char *path, const char *key, std::string &value) {
     return found;
 }
 
+// A system without /etc/os-release (CentOS 6, whose release file is /etc/redhat-release, first
+// line "CentOS release 6.10 (Final)"): the first word is the id and the word after "release" the
+// version. Returns true when both were read (fallback linux-platform-id-redhat-release).
+bool RedHatRelease(std::string &osId, std::string &osVersion) {
+    std::FILE *f = std::fopen("/etc/redhat-release", "r");
+    char line[256];
+    bool ok = false;
+    if (f == nullptr)
+        return false;
+    if (std::fgets(line, sizeof(line), f) != nullptr) {
+        const char *space = std::strchr(line, ' ');
+        const char *release = std::strstr(line, " release ");
+        if (space != nullptr && release != nullptr && space == release) {
+            osId.assign(line, static_cast<std::string::size_type>(space - line));
+            osVersion.clear();
+            for (const char *p = release + 9; *p != '\0' && *p != ' ' && *p != '\n'; p++)
+                osVersion += *p;
+            ok = !osId.empty() && !osVersion.empty();
+        }
+    }
+    std::fclose(f);
+    return ok;
+}
+
 // Peak resident memory in kB (VmHWM of /proc/self/status), or -1 if it cannot be read.
 long PeakRssKb() {
     std::FILE *f = std::fopen("/proc/self/status", "r");
@@ -144,6 +168,9 @@ std::string PlatformId() {
         if (OsReleaseValue("/etc/os-release", "VERSION_ID", osVersion) ||
             OsReleaseValue("/usr/lib/os-release", "VERSION_ID", osVersion))
             haveVersion = !osVersion.empty();
+    } else if (RedHatRelease(osId, osVersion)) {
+        haveId = true;
+        haveVersion = true;
     }
     if (haveId) {
         id += '-';

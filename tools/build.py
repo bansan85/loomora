@@ -178,6 +178,14 @@ def linux_platform_id():
                     if sep:
                         values[key] = value.strip("\"' ")
             break
+    else:
+        # No os-release (CentOS 6): /etc/redhat-release, "CentOS release 6.10 (Final)", same rule
+        # as PlatformId() of ui/legacy/linux-xlib/probe.cpp (fallback linux-platform-id-redhat-release).
+        if os.path.exists("/etc/redhat-release"):
+            with open("/etc/redhat-release", encoding="utf-8") as f:
+                m = re.match(r"(\S+) release (\S+)", f.readline())
+            if m:
+                values["ID"], values["VERSION_ID"] = m.group(1), m.group(2)
     parts = ["linux"]
     for key in ("ID", "VERSION_ID"):
         if values.get(key):
