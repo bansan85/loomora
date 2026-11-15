@@ -1,6 +1,6 @@
 # Build and run
 
-How to build, verify and run the Loomora probe. It covers what works today; the macOS, iOS and Web builds are not written yet.
+How to build, verify and run the Loomora probe. It covers what works today; the macOS and iOS builds are not written (Apple hardware is pending).
 
 Commands start with `PS>` on the Windows host and `wsl$` inside WSL.
 
@@ -60,7 +60,7 @@ PS> python tools/run_vectors.py windows-11-x64 legacy
 PS> python tools/run_vectors.py windows-11-x64 legacy --arch x86
 ```
 
-The executables are `out\windows-legacy\x64\loomora.exe` (XP x64 to 11) and `out\windows-legacy\x86\loomora.exe` (Windows 2000 to 11). `build.py` checks every imported function against `tools/win2000_imports.json`. `loomora.exe --probe` shows the window for 2 seconds and writes the probe line to `loomora-probe.json` in the current folder; without `--probe` it opens the window. The Windows 2000 trials run in a VM and are not described here (see `tools/trials/windows-2000-x86/` and the procedure `docs/implementation/validation/procedures/windows.md`).
+The executables are `out\windows-legacy\x64\loomora.exe` (XP x64 to 11) and `out\windows-legacy\x86\loomora.exe` (Windows 2000 to 11). `build.py` checks every imported function against `tools/win2000_imports.json`. `loomora.exe --probe` shows the window for 2 seconds and writes the probe line to `loomora-probe.json` next to the executable; without `--probe` it opens the window. The Windows 2000 trials run in a VM and are not described here (see `tools/trials/windows-2000-x86/` and the procedure `docs/implementation/validation/procedures/windows.md`).
 
 Linux (x86_64, built on the machine that runs it; `--arch i686` builds the 32-bit executable too, which needs the `:i386` development packages; only the build was run for it):
 
@@ -70,19 +70,19 @@ wsl$ python3 tools/run_vectors.py linux-ubuntu-24.04-x86_64 legacy
 wsl$ out/linux-legacy/x86_64/loomora-xlib --probe
 ```
 
-The platform id is `linux-<ID>-<VERSION_ID>-<machine>` of `/etc/os-release`. `--probe` needs an X display (WSLg provides `:0`) and prints one JSON line on standard output.
+The platform id is `linux-<ID>-<VERSION_ID>-<machine>` of `/etc/os-release`. `--probe` needs an X display (WSLg provides `:0`) and prints one JSON line on standard output. `run_vectors.py` types into the display: on WSLg's shared `:0` another program using the keyboard can corrupt a vector (seen once: extra characters appended to the input), so run the vectors on a private display (`Xvfb :87 -screen 0 1280x800x24 &`, then `export DISPLAY=:87`), as `verify.py` does.
 
 Android (API 9 to 23; built on the Windows host, not in WSL; the emulator can run only from API 16):
 
 ```
-PS> $env:LOOMORA_ANDROID_NDK = "E:\Program\Androidndroid-ndk-r15c"   # NDK r15c only: r16b has no android-9
+PS> $env:LOOMORA_ANDROID_NDK = "E:\Program\Android\android-ndk-r15c"   # NDK r15c only: r16b has no android-9
 PS> $env:LOOMORA_ANDROID_SDK = "E:\Program\Android\Sdk"                # platforms/android-9, build-tools with d8
 PS> python tools/build.py android legacy
 PS> emulator -avd API16 -no-window -no-audio -no-snapshot -no-boot-anim   # start it yourself, kill it with: adb emu kill
 PS> python tools/run_vectors.py android-4.1.2-x86 legacy
 ```
 
-`build.py` builds the four ABIs (`armeabi`, `armeabi-v7a`, `x86`: API 9 sysroot; `arm64-v8a`: API 21) with `cmake/toolchains/android-ndk-r15c.cmake` and packages one APK, `outndroid-legacy\loomora.apk` (`ui/legacy/android-views/build_apk.py`); the self-tests are in `outndroid-legacy\selftest\<abi>\`. Only the x86 build can be run (the platform id is `android-<release>-<abi>`, read from the device). See ADR 0016.
+`build.py` builds the four ABIs (`armeabi`, `armeabi-v7a`, `x86`: API 9 sysroot; `arm64-v8a`: API 21) with `cmake/toolchains/android-ndk-r15c.cmake` and packages one APK, `out\android-legacy\loomora.apk` (`ui/legacy/android-views/build_apk.py`); the self-tests are in `out\android-legacy\selftest\<abi>\`. Only the x86 build can be run (the platform id is `android-<release>-<abi>`, read from the device). See ADR 0016.
 
 **Scenario 3: one platform, Modern UI**
 
@@ -104,9 +104,29 @@ PS> build\windows-modern\net10-x64\Loomora.WinUI.exe --probe
 
 The zips are `out\windows-modern\loomora-winui-<net8|net10>-<x64|arm64>.zip`; the published folders stay in `build\windows-modern\`. The ARM64 build is built, never run on an x64 machine. `run_vectors.py ... modern --exe <folder>\Loomora.WinUI.exe` runs another published folder (for example the net8 one).
 
+Android Modern (Kotlin and Compose, minSdk 24; Windows host; needs `LOOMORA_ANDROID_SDK` with NDK 30, `platforms;android-37.0` and build-tools 36.0.0, a JDK 17 or later, and the Internet for Gradle): `PS> python tools/build.py android modern` writes `out/android-modern/loomora.apk`. The vectors run on an API 24 x86_64 emulator (`python tools/run_vectors.py android-7.0-x86_64 modern`, as `android.yml` does); none is set up on the build machine.
+
 `build.py` writes the deliverable record of each build into `docs/implementation/validation/deliverables/` (only when the submodule is checked out); do not commit those records unless the build is the one a verdict refers to.
 
-**Not available yet**: scenario 4 (Web), scenario 5 (text change across every platform: only three UIs exist), the macOS, iOS and Android builds, and scenario 0 (spikes, manual). Scenario 6 (`tools/measure_sharing.py`, `tools/prefix_check.py`, `tools/report.py`) and scenario 7 (the procedures in `docs/implementation/validation/procedures/`, written for Windows and Linux only) exist in part; run the tools with `--help`. The quickstart still names `tools/build.py windows-2000 legacy` and `windows-11 modern`; the working form is the one above (T118).
+**Scenario 4: Web, two paths** (WSL; the current Emscripten in `~/emsdk` for the WebAssembly path and Emscripten 1.39.20 fastcomp in `~/emsdk-fastcomp` for the JavaScript path, or `LOOMORA_EMSDK` and `LOOMORA_EMSDK_FASTCOMP`; node and npm):
+
+```
+wsl$ python3 tools/build.py web legacy
+wsl$ python3 tools/build.py web modern
+wsl$ python3 tools/run_vectors.py web-node-js legacy --exe ~/loomora-build/web-legacy/dist
+wsl$ python3 tools/run_vectors.py web-node-wasm legacy --exe ~/loomora-build/web-legacy/dist
+wsl$ python3 tools/run_vectors.py web-node-wasm modern --exe ~/loomora-build/web-modern/dist
+PS> $env:LOOMORA_WEB_DIST = "\\wsl.localhost\Ubuntu-24.04\home\<user>\loomora-build\web-modern\dist"
+PS> python tools/run_vectors.py web-chrome-157-windows-11-x64 modern --timeout 60
+```
+
+The pages are the `dist/` folders under `$LOOMORA_BUILD_DIR` (default `$HOME/loomora-build`), never in the repository. The node runs execute the page script in a DOM stub; the Chrome run drives the Modern page in the headless Chrome of the Windows host (a temporary profile of its own). The Legacy page in Firefox 10 is a local run (see "Local runs (not CI)").
+
+**Scenario 5: text change.** `python tools/prefix_check.py` changes the prefix in `core/src/greet.cpp` of a copy of the sources, rebuilds from scratch the Windows host, Windows x64 and x86, Linux Legacy x86_64 and i686 and Linux Modern UIs, runs the vectors and checks that only that file differs (`--list` names the targets, `--vm` adds the Windows 2000 VM). It does not build the Web, Android and WinUI 3 UIs yet: change the prefix by hand for those.
+
+**Scenarios 6 and 7**: `python tools/measure_sharing.py [--write]`, `python tools/report.py` and `python tools/report.py --check` (scenario 6); the procedures in `docs/implementation/validation/procedures/` for Windows, Linux, Android and Web (scenario 7). Scenario 0 (spikes) is manual: the status of each spike is in `docs/implementation/validation/spikes.json`.
+
+**Not available yet**: everything for macOS and iOS (needs Apple hardware, pending). The commands of the other scenarios were replayed on 2026-11-15 (T118), except the runs in the Windows 2000 and Firefox 10 virtual machines.
 
 ## Continuous integration
 
