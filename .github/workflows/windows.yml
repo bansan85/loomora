@@ -245,10 +245,8 @@ jobs:
           Select-String -Path "$build/CMakeCache.txt" -Pattern '^(CMAKE_(RC_COMPILER|MT|LINKER|CXX_COMPILER_TARGET|CXX_COMPILER_ID)):' | ForEach-Object Line
           clang -v 2>&1 | Select-String 'Target|clang version'
           $exe = "$build/ui/legacy/windows-win32/loomora.exe"
-          Get-Command mt.exe -ErrorAction SilentlyContinue | ForEach-Object Source
-          & mt.exe -nologo "-inputresource:$exe;#1" -out:"$env:RUNNER_TEMP/embedded.manifest"
-          Get-Content "$env:RUNNER_TEMP/embedded.manifest"
-          Start-Process -FilePath $exe -ArgumentList '--probe' -Wait -ErrorAction Continue
+          python -c "import re,sys; d=open(sys.argv[1],'rb').read(); print(len(d),'bytes'); [print(m.group(0).decode('utf-8','replace')) for m in re.finditer(rb'<assembly.*?</assembly>', d, re.S)]; print('utf-16 manifests:', len(re.findall('<assembly'.encode('utf-16-le'), d)))" $exe
+          try { Start-Process -FilePath $exe -ArgumentList '--probe' -Wait } catch { $_.Exception.Message }
           Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='SideBySide'} -MaxEvents 5 -ErrorAction SilentlyContinue |
             ForEach-Object { $_.TimeCreated; $_.Message }
       - name: Upload the logs
