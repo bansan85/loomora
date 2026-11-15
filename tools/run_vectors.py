@@ -45,6 +45,10 @@ Platform launchers (registry LAUNCHERS, keyed by family and variant; select_laun
 VirtualBox launcher for the guest platforms of VBOX_PLATFORMS). Implemented: linux modern, linux
 legacy (the Xlib UI, same way; executable from $HOME/loomora-build/linux-legacy-x86_64, then out/,
 or --exe), windows legacy on the local Windows host and windows legacy in a VirtualBox guest (windows-2000-x86).
+Windows modern (WinUI 3, platform id windows-11-x64): see WindowsModernLauncher; the published folder of
+`python tools/build.py windows modern` (build/windows-modern/net10-x64, or the folder of --exe, for example
+the net8 one), run serially from a scratch copy, the line read from standard output and checked against
+loomora-probe.json.
 Android legacy and modern (platform id android-<release>-<abi>, for example android-4.1.2-x86 or
 android-7.0-x86_64): see AndroidLegacyLauncher and AndroidModernLauncher (out/android-modern/). The APK out/android-legacy/loomora.apk (or --exe) is installed on the one
 emulator or device adb sees (--serial / $ANDROID_SERIAL to choose); the launcher never starts or
@@ -411,6 +415,101 @@ class WindowsLegacyLauncher(Launcher):
                              time.time() - start)
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
+
+
+# ---- Windows Modern UI (WinUI 3) on the local Windows host ---------------------------------------
+
+WINUI_EXE = "Loomora.WinUI.exe"
+
+
+def winui_folder(arch, target="net10"):
+    """The published folder that `python tools/build.py windows modern` leaves."""
+    return common.ROOT / "build" / "windows-modern" / ("%s-%s" % (target, arch))
+
+
+class WindowsModernLauncher(Launcher):
+    """The Windows Modern UI (WinUI 3, C#, loomora.dll through LibraryImport): the published
+    folder of tools/build.py windows modern (default build/windows-modern/net10-x64, or the folder
+    of --exe). The folder is copied once into a scratch directory (the probe file lands next to the
+    executable, never in the build folder) and the copy is started once per vector, serially (one
+    WinUI process at a time), with `--probe --probe-input <text>` through CreateProcess and an
+    argument list, like the Legacy launcher. The probe line is read from standard output (the
+    contract requires it, here a pipe) and compared with loomora-probe.json next to the
+    executable; a difference is a failure. The field limit (TextBox MaxLength) counts UTF-16
+    units."""
+
+    length_unit = "utf16"
+    max_jobs = 1
+
+    def __init__(self, args):
+        Launcher.__init__(self, args)
+        arch = args.arch or "x64"
+        if arch != "x64":
+            raise RuntimeError("the Windows Modern launcher runs x64 only on this host (--arch %s)" % arch)
+        self.exe = Path(args.exe) if args.exe else winui_folder(arch) / WINUI_EXE
+        self.tag = self.exe.parent.name  # for example net10-x64
+        self.scratch = None
+        self.copy = None
+
+    def prepare(self):
+        if sys.platform != "win32":
+            raise RuntimeError("the Windows Modern UI runs on a Windows host only (this host is %s)"
+                               % sys.platform)
+        if not self.exe.is_file():
+            raise RuntimeError("executable not found: %s (run 'python tools/build.py windows "
+                               "modern' on the Windows host)" % self.exe)
+        self.scratch = tempfile.mkdtemp(prefix="loomora-winui-run-")
+        folder = os.path.join(self.scratch, "app")
+        shutil.copytree(str(self.exe.parent), folder)
+        self.copy = os.path.join(folder, self.exe.name)
+        try:
+            shown = self.exe.relative_to(common.ROOT).as_posix()
+        except ValueError:  # --exe outside the repository
+            shown = str(self.exe)
+        return "Windows modern %s: %s (%d bytes, sha256 %s; %d files, %d bytes in the folder)" % (
+            self.tag, shown, self.exe.stat().st_size, common.sha256(self.exe),
+            sum(1 for p in self.exe.parent.rglob("*") if p.is_file()),
+            sum(p.stat().st_size for p in self.exe.parent.rglob("*") if p.is_file()))
+
+    @staticmethod
+    def _alive():
+        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq " + WINUI_EXE, "/NH"],
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout
+        return out.decode("oem", "replace").count(WINUI_EXE)
+
+    def run(self, text, timeout):
+        start = time.time()
+        probe_file = os.path.join(os.path.dirname(self.copy), WINDOWS_PROBE_FILE)
+        if os.path.exists(probe_file):
+            os.remove(probe_file)
+        try:
+            res = subprocess.run([self.copy, "--probe", "--probe-input", text],
+                                 cwd=os.path.dirname(self.copy), stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            subprocess.run(["taskkill", "/F", "/IM", WINUI_EXE], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+            return RunResult(None, "", "", time.time() - start,
+                             "timeout after %s s (the UI should exit by itself after 2 s)" % timeout)
+        except OSError as e:
+            return RunResult(None, "", "", time.time() - start, "cannot start %s: %s" % (self.copy, e))
+        stdout = res.stdout.decode("utf-8", "replace")
+        try:
+            with open(probe_file, "rb") as f:
+                from_file = f.read().decode("utf-8", "replace")
+        except OSError:
+            from_file = ""
+        result = RunResult(res.returncode, stdout, res.stderr.decode("utf-8", "replace"),
+                           time.time() - start)
+        if from_file != stdout:
+            result.error = ("the probe line on standard output differs from loomora-probe.json "
+                            "(stdout %r, file %r)" % (_clip(stdout), _clip(from_file)))
+        result.leftover = self._alive()
+        return result
+
+    def close(self):
+        if self.scratch:
+            shutil.rmtree(self.scratch, ignore_errors=True)
 
 
 # ---- Windows Legacy UI in a VirtualBox guest (Windows 2000) -------------------------------------
@@ -938,6 +1037,7 @@ class AndroidModernLauncher(AndroidLegacyLauncher):
 LAUNCHERS = {("linux", "modern"): LinuxModernLauncher,
              ("linux", "legacy"): LinuxLegacyLauncher,
              ("windows", "legacy"): WindowsLegacyLauncher,
+             ("windows", "modern"): WindowsModernLauncher,
              ("android", "legacy"): AndroidLegacyLauncher,
              ("android", "modern"): AndroidModernLauncher}
 
