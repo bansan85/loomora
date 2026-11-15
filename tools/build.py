@@ -1623,6 +1623,8 @@ WEB_MODERN_UI = Path("ui") / "modern" / "web-ts"
 WEB_MODERN_PAGE_FILES = ("index.html",)
 WEB_MODERN_TS_INPUTS = ("package.json", "package-lock.json", "tsconfig.json")
 WEB_MODERN_TS_OUTPUTS = ("main.js", "native.js")
+# Web platform records (a current browser) the Modern page is delivered for: the page only has the wasm path.
+WEB_MODERN_PLATFORMS = {"web-chrome-157-windows-11-x64": "wasm"}
 
 
 def web_plain_run(cmd, cwd, log):
@@ -1693,8 +1695,33 @@ def run_web_modern(args):
     for p in sorted(dist.iterdir()):
         print("%8d  %s" % (p.stat().st_size, p.name))
     print("dist: %s" % dist)
-    print("no deliverable record written: no Web platform record for a current browser exists yet "
-          "(the Chrome trial, T063, adds it)")
+    emscripten = (emsdk / "upstream" / "emscripten" / "emscripten-version.txt").read_text().strip().strip('"')
+    names = ("index.html",) + WEB_MODERN_TS_OUTPUTS + ("loomora.js", "loomora.wasm")
+    for platform_id in sorted(WEB_MODERN_PLATFORMS):
+        if not common.docs_present() or not (common.VALIDATION / "platforms" / (platform_id + ".json")).is_file():
+            print("no platform record for %s: no deliverable record written for it" % platform_id)
+            continue
+        record = {
+            "platform_id": platform_id, "ui_variant": "modern", "cpp_std": "c++11",
+            "compiler": "emscripten-" + emscripten,
+            "target": "wasm32-unknown-emscripten",
+            "output": "wasm",
+            "ui_language": "typescript (ES modules), html, css",
+            "ui_toolkit": "one HTML page (a textarea and an output element, CSS with prefers-color-scheme) and two "
+                          "ES modules, DOM only, no framework and no runtime dependency; the backend is called "
+                          "through ccall / cwrap of the Emscripten module and WebAssembly.instantiateStreaming",
+            "ui_compiler": "TypeScript %s (tsc -p tsconfig.json, npm ci from package-lock.json), node %s"
+                           % (version.replace("Version ", ""), web_plain_run(["node", "--version"], ts, log).strip()),
+            "artifact": {"name": "dist/ (%s)" % ", ".join(names),
+                         "size": sum((dist / n).stat().st_size for n in names)},
+            "disabled_features": [],
+            "fallbacks": fallbacks_of(platform_id),
+            "notes": ("Deliverable of platform %s (validation/platforms/%s.json), the wasm path of the "
+                      "page (it has no other). Built by python tools/build.py web modern; the files are in "
+                      "$HOME/loomora-build/web-modern/dist/ (never in the repository tree); sha256 %s."
+                      % (platform_id, platform_id,
+                         ", ".join("%s %s" % (n, common.sha256(dist / n)) for n in names)))}
+        write_deliverable(record, dist / "loomora.wasm")
 
 
 TARGETS = {

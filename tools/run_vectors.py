@@ -75,6 +75,11 @@ WebFirefoxVmLauncher): the dist folder is served over HTTP by this process, Fire
 "Windows 2000" opens `http://10.0.2.2:<port>/index.html?probe=1&input=<text>&platform=<id>&post=1&run=<n>`
 (a long text through a redirect), the page POSTs its probe record back (post=1) and the window is
 closed with Alt+F4; the leftover firefox.exe processes are counted. Same VM rules as the Windows guest.
+Web modern in Chrome on the Windows 11 host (platform id web-chrome-<major>-windows-11-x64, see
+WebChromeHostLauncher): the dist folder of `python tools/build.py web modern` is served over HTTP on
+127.0.0.1, headless Chrome (`--headless=new --dump-dom`, a throw-away --user-data-dir per run) opens
+`http://127.0.0.1:<port>/index.html?probe=1&input=<text>&platform=<id>`, and the probe record is read from
+<pre id="probe"> of the dumped DOM (the title must be LOOMORA_PROBE_DONE); leftover chrome.exe are counted.
 Every other family exits with status 1 and "launcher not implemented yet" until the tasks that
 add the UIs (T060-T093) add theirs: they only have to implement Launcher.run().
 Linux modern: the executable built by `python tools/build.py linux modern`
@@ -1322,7 +1327,7 @@ class WebProbeServer(object):
     `run` query field of a POST to (path, body, time). Nothing is cached (Cache-Control: no-store),
     so every run fetches every file again."""
 
-    def __init__(self, dist_dir, port=0):
+    def __init__(self, dist_dir, port=0, host="0.0.0.0"):
         import http.server
         self.dist = Path(dist_dir)
         self.requests = []       # (utc time text, client, method, path, status, bytes, user agent)
@@ -1394,7 +1399,7 @@ class WebProbeServer(object):
             daemon_threads = True
             allow_reuse_address = True
 
-        self.httpd = Server(("0.0.0.0", port), Handler)
+        self.httpd = Server((host, port), Handler)
         self.port = self.httpd.server_address[1]
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
 
@@ -1638,6 +1643,160 @@ class WebFirefoxVmLauncher(Launcher):
         return result
 
 
+# ---- Web modern page in Chrome on the Windows host (T063) ------------------------------------------
+
+WEB_CHROME_HOST_RE = re.compile(r"^web-chrome-(\d+)-windows-11-x64$")   # a browser run on this host
+WEB_CHROME_FLAGS = ("--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+                    "--disable-extensions", "--disable-component-update", "--disable-background-networking",
+                    "--disable-sync", "--metrics-recording-only")
+WEB_CHROME_VIRTUAL_MS = 15000       # --virtual-time-budget: the page needs well under 1 s
+WEB_LOOPBACK = "127.0.0.1"
+
+
+def chrome_executable():
+    """chrome.exe of the host: $LOOMORA_CHROME, else the usual install folders."""
+    candidates = [os.environ.get("LOOMORA_CHROME")]
+    for var in ("ProgramFiles", "ProgramFiles(x86)", "LocalAppData"):
+        if os.environ.get(var):
+            candidates.append(os.path.join(os.environ[var], "Google", "Chrome", "Application", "chrome.exe"))
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c
+    return None
+
+
+def chrome_version(exe):
+    """The version of an installed Chrome: the name of the version folder next to chrome.exe
+    (`chrome.exe --version` prints nothing on Windows); None when there is none."""
+    for name in sorted(os.listdir(os.path.dirname(exe)), reverse=True):
+        if re.match(r"^\d+(\.\d+){3}$", name):
+            return name
+    return None
+
+
+def parse_dumped_dom(dom):
+    """(title, probe text) of a DOM dumped by `chrome --dump-dom` (the probe text is None when
+    <pre id="probe"> is absent): what the Modern page shows at the end of a probe run."""
+    import html
+    title = re.search(r"<title>(.*?)</title>", dom, re.S)
+    probe = re.search(r'<pre\b[^>]*\bid="probe"[^>]*>(.*?)</pre>', dom, re.S)
+    return (html.unescape(title.group(1)) if title else None,
+            html.unescape(probe.group(1)) if probe else None)
+
+
+class WebChromeHostLauncher(Launcher):
+    """The Web Modern page in Chrome on the Windows host (platform id web-chrome-<major>-windows-11-x64,
+    WebAssembly path). The dist folder of `python tools/build.py web modern` ($LOOMORA_WEB_DIST, --exe
+    DIR, or the build folder of WSL) is served over HTTP on 127.0.0.1 (a free port) by this process
+    (WebProbeServer). Each run starts chrome.exe `--headless=new --dump-dom` with a new throw-away
+    --user-data-dir (a folder of the system temp folder, deleted by close(); the profile of the user
+    is never touched) on http://127.0.0.1:<port>/index.html?probe=1&input=<text>&platform=<id>; the
+    DOM it dumps must have the title LOOMORA_PROBE_DONE and the probe record in <pre id="probe">
+    (the page writes it there). Chrome processes that use the run's profile folder and are still
+    alive after the exit are counted (and terminated by PID). Settings: $LOOMORA_CHROME, $LOOMORA_WEB_DIST.
+    Serial runs."""
+
+    length_unit = "utf16"  # the field limit counts UTF-16 units (JavaScript)
+    max_jobs = 1
+
+    def __init__(self, args):
+        Launcher.__init__(self, args)
+        self.major = int(WEB_CHROME_HOST_RE.match(args.platform_id).group(1))
+        self.exe = None
+        self.server = None
+        self.profiles = None
+        self.run_number = 0
+
+    def dist_dir(self):
+        if self.args.exe:
+            return Path(self.args.exe)
+        if os.environ.get("LOOMORA_WEB_DIST"):
+            return Path(os.environ["LOOMORA_WEB_DIST"])
+        if sys.platform == "win32":  # the build folder of WSL, as a UNC path
+            distro = self.args.wsl_distro or os.environ.get("LOOMORA_WSL_DISTRO") or DEFAULT_WSL_DISTRO
+            res = subprocess.run(["wsl", "-d", distro, "--", "sh", "-c",
+                                  'wslpath -w "${LOOMORA_BUILD_DIR:-$HOME/loomora-build}/web-modern/dist"'],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if res.returncode == 0:
+                return Path(res.stdout.decode("utf-8", "replace").strip())
+        return Path.home() / "loomora-build" / "web-modern" / "dist"
+
+    def prepare(self):
+        if sys.platform != "win32":
+            raise RuntimeError("%s runs Chrome on a Windows 11 host" % self.args.platform_id)
+        self.exe = chrome_executable()
+        if self.exe is None:
+            raise RuntimeError("chrome.exe not found (install Chrome or set LOOMORA_CHROME)")
+        version = chrome_version(self.exe)
+        if version is None or int(version.split(".")[0]) != self.major:
+            raise RuntimeError("%s is Chrome %s, the platform id says Chrome %d"
+                               % (self.exe, version, self.major))
+        dist = self.dist_dir()
+        for name in ("index.html", "main.js", "native.js", "loomora.js", "loomora.wasm"):
+            if not (dist / name).is_file():
+                raise RuntimeError("%s not found in %s (python tools/build.py web modern, then "
+                                   "--exe DIR or LOOMORA_WEB_DIST)" % (name, dist))
+        self.profiles = tempfile.mkdtemp(prefix="loomora-chrome-")
+        self.server = WebProbeServer(dist, host=WEB_LOOPBACK)
+        self.server.start()
+        digests = ", ".join("%s sha256 %s" % (n, common.sha256(dist / n)[:16])
+                            for n in ("index.html", "main.js", "native.js", "loomora.js", "loomora.wasm"))
+        return ("Chrome %s (%s), headless=new, new --user-data-dir per run under %s, server http://%s:%d/ "
+                "serving %s (%s)" % (version, self.exe, self.profiles, WEB_LOOPBACK, self.server.port, dist, digests))
+
+    def close(self):
+        if self.server is not None:
+            self.server.stop()
+            self.server = None
+        if self.profiles:
+            shutil.rmtree(self.profiles, ignore_errors=True)
+            self.profiles = None
+
+    def chrome_pids(self, token):
+        """Process ids of the chrome.exe whose command line contains `token` (a profile folder)."""
+        script = ("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+                  "Where-Object { $_.CommandLine -like '*%s*' } | ForEach-Object { $_.ProcessId }"
+                  % token.replace("'", "''"))
+        res = subprocess.run(["powershell", "-NoProfile", "-Command", script],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return [int(w) for w in res.stdout.decode("ascii", "replace").split() if w.isdigit()]
+
+    def kill(self, pids):
+        for pid in pids:
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def extra_evidence(self):
+        return {"server-requests.txt": self.server.log_text()}
+
+    def run(self, text, timeout):
+        start = time.time()
+        self.run_number += 1
+        profile = os.path.join(self.profiles, "run%d" % self.run_number)
+        url = "http://%s:%d/index.html%s" % (WEB_LOOPBACK, self.server.port,
+                                             web_probe_query(text, self.args.platform_id))
+        cmd = [self.exe] + list(WEB_CHROME_FLAGS) + ["--dump-dom", "--virtual-time-budget=%d" % WEB_CHROME_VIRTUAL_MS,
+                                                     "--user-data-dir=" + profile, url]
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self.kill(self.chrome_pids(profile))
+            return RunResult(None, "", "", time.time() - start, "timeout after %s s (chrome.exe terminated)" % timeout)
+        except OSError as e:
+            return RunResult(None, "", "", time.time() - start, "cannot start chrome.exe: %s" % e)
+        elapsed = time.time() - start
+        title, probe = parse_dumped_dom(res.stdout.decode("utf-8", "replace"))
+        left = self.chrome_pids(profile)
+        self.kill(left)
+        if title == "LOOMORA_PROBE_DONE" and probe:
+            out, err, code = probe + "\n", "", res.returncode
+        else:
+            out, err, code = "", "title %r, probe record %s" % (title, "absent" if not probe else "present"), 1
+        result = RunResult(code, out, err, elapsed)
+        result.leftover = len(left)
+        result.page_ms = int(elapsed * 1000)  # start of chrome.exe to its exit after the DOM dump
+        return result
+
+
 LAUNCHERS = {("linux", "modern"): LinuxModernLauncher,
              ("linux", "legacy"): LinuxLegacyLauncher,
              ("windows", "legacy"): WindowsLegacyLauncher,
@@ -1657,6 +1816,8 @@ def select_launcher(family, variant, platform_id):
         return WebNodeLauncher   # the Modern page has no JavaScript path
     if (family, variant) == ("web", "legacy") and platform_id in WEB_FIREFOX_VM_PLATFORMS:
         return WebFirefoxVmLauncher
+    if (family, variant) == ("web", "modern") and WEB_CHROME_HOST_RE.match(platform_id):
+        return WebChromeHostLauncher
     return LAUNCHERS.get((family, variant))
 
 
@@ -1791,6 +1952,19 @@ def self_test():
     expect("no launcher for a browser platform that was not run", select_launcher("web", "legacy", "web-firefox-12-windows-2000-x86"), None)
     expect("web launcher for Firefox 10 in the Windows 2000 VM",
            select_launcher("web", "legacy", "web-firefox-10-windows-2000-x86"), WebFirefoxVmLauncher)
+    expect("web modern launcher for Chrome on the Windows 11 host",
+           select_launcher("web", "modern", "web-chrome-157-windows-11-x64"), WebChromeHostLauncher)
+    expect("no web legacy launcher for Chrome (the Legacy page is validated on Firefox 10)",
+           select_launcher("web", "legacy", "web-chrome-157-windows-11-x64"), None)
+    expect("no web modern launcher for another system of Chrome",
+           select_launcher("web", "modern", "web-chrome-157-windows-10-x64"), None)
+    dom = ('<html><head><title>LOOMORA_PROBE_DONE</title></head><body><pre id="probe" aria-label="Probe record">'
+           '{"message":"Bonjour a&amp;b"}</pre></body></html>')
+    expect("Chrome DOM dump: title and probe record", parse_dumped_dom(dom),
+           ("LOOMORA_PROBE_DONE", '{"message":"Bonjour a&b"}'))
+    expect("Chrome DOM dump with an empty probe record",
+           parse_dumped_dom('<title>Loomora</title><pre id="probe" hidden=""></pre>'), ("Loomora", ""))
+    expect("Chrome launcher counts UTF-16 units", WebChromeHostLauncher.length_unit, "utf16")
     expect("Firefox VM launcher counts UTF-16 units", WebFirefoxVmLauncher.length_unit, "utf16")
     expect("web launcher counts UTF-16 units", WebNodeLauncher.length_unit, "utf16")
     print("self-test %s" % ("FAILED" if failures else "passed"))
