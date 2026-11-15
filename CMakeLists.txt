@@ -1,7 +1,12 @@
 cmake_minimum_required(VERSION 3.13)
+# CMP0091 NEW makes MSVC_RUNTIME_LIBRARY (the /MT of loomora.dll) take effect.
+if(POLICY CMP0091)
+  cmake_policy(SET CMP0091 NEW)
+endif()
 project(loomora LANGUAGES C CXX)
 
 option(LOOMORA_BUILD_TESTS "Build the backend self-test" ON)
+option(LOOMORA_BUILD_WIN32_LEGACY "Build the Windows Legacy UI (ui/legacy/windows-win32) on a Windows host" ON)
 option(LOOMORA_BUILD_LINUX_MODERN "Build the Linux Modern UI (C++, gtkmm; needs its development files)" OFF)
 
 if(LOOMORA_BUILD_TESTS)
@@ -10,7 +15,9 @@ endif()
 
 add_subdirectory(core)
 
-if(WIN32)
+# The host-msvc preset (loomora.dll for the WinUI 3 UI) turns the Legacy UI off: it is built with
+# MinGW-w64 by tools/build.py windows legacy.
+if(WIN32 AND LOOMORA_BUILD_WIN32_LEGACY)
   add_subdirectory(ui/legacy/windows-win32)
 endif()
 

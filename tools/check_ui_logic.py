@@ -47,7 +47,7 @@ XML_EXT = {".xml", ".xaml", ".html", ".htm", ".svg", ".storyboard", ".xib", ".pl
            ".manifest", ".axml"}
 DATA_EXT = {".json", ".strings", ".stringsdict", ".txt", ".def", ".map", ".rc2", ".ini"}
 SKIP_DIRS = {"test", "tests", "doc", "docs", "build", "node_modules", "__pycache__", ".git",
-             ".gradle", ".kotlin", ".cxx"}  # the last three: Gradle, Kotlin and CMake caches
+             ".gradle", ".kotlin", ".cxx", "bin", "obj"}  # the last five: Gradle, Kotlin and CMake caches, .NET outputs
 SKIP_SUFFIX = {".md", ".rst", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".icns", ".webp", ".ttf",
                ".otf", ".woff", ".woff2", ".jar", ".so", ".a", ".o", ".dll", ".exe", ".pdf"}
 SOURCE_EXT = C_EXT - {".rc", ".css"}  # files that can call the backend

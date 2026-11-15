@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Loomora.WinUI.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Loomora">
+
+    <!-- Only theme resources for colours: the light, dark and high contrast themes of the system
+         then give every pair of text and background its own contrast (at least 4.5:1). -->
+    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}" Padding="24" RowSpacing="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- End-of-life warning of the backend, shown above the field; it blocks nothing. -->
+        <InfoBar x:Name="EolWarning" Grid.Row="0" Severity="Warning" IsOpen="False"
+                 IsClosable="False" IsTabStop="False" />
+
+        <!-- A single-line field in use: Enter is swallowed (PreviewKeyDown). AcceptsReturn is on only
+             because a single-line TextBox drops everything after a line break of a text set by the
+             program (control characters of the reference vectors, pasted text). -->
+        <TextBox x:Name="InputBox" Grid.Row="1" MaxLength="1000" AcceptsReturn="True"
+                 TextWrapping="NoWrap" MaxHeight="96" AutomationProperties.Name="Name"
+                 PreviewKeyDown="InputBox_PreviewKeyDown" TextChanged="InputBox_TextChanged" />
+
+        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" VerticalScrollMode="Auto">
+            <TextBlock x:Name="GreetingText" TextWrapping="Wrap" TextAlignment="Center"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       IsTextSelectionEnabled="True" AutomationProperties.LiveSetting="Polite"
+                       Style="{ThemeResource TitleTextBlockStyle}"
+                       Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+        </ScrollViewer>
+    </Grid>
+</Window>

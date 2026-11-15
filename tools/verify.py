@@ -398,6 +398,13 @@ def step_vectors(ctx, ui):
     run_vectors(ctx, ui, ctx.exes.get(ui), "")
 
 
+def step_vectors_winui(ctx):
+    """Windows Modern UI (WinUI 3): runs the published folder that `python tools/build.py windows
+    modern` left (the build needs the .NET SDK, NuGet and Visual Studio, so verify does not make it)."""
+    exe = ROOT / "build" / "windows-modern" / "net10-x64" / "Loomora.WinUI.exe"
+    run_vectors(ctx, "modern", exe if exe.is_file() else None, "")
+
+
 def step_screenshots(ctx, ui):
     exe = ctx.exes.get(ui)
     for scenario, text in SCENARIOS:
@@ -514,6 +521,7 @@ def make_plan(ctx):
     S.append(("ctest", {"ctest"}, "ctest of the default build", step_ctest, True))
     if IS_WINDOWS:
         S.append(("run_vectors windows legacy", {"vectors", "legacy"}, "tools/run_vectors.py on the Win32 executable", lambda c: step_vectors(c, "legacy"), True))
+        S.append(("run_vectors windows modern", {"vectors", "modern"}, "tools/run_vectors.py on the WinUI 3 build of tools/build.py windows modern (skipped when not built)", step_vectors_winui, True))
     else:
         for ui in UIS:
             S.append(("run_vectors linux " + ui, {"vectors", ui}, "tools/run_vectors.py on the Linux %s UI" % ui, (lambda u: lambda c: step_vectors(c, u))(ui), True))

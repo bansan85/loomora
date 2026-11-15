@@ -106,6 +106,7 @@ import os
 import platform
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -122,7 +123,6 @@ DEFAULT_WSL_DISTRO = "Ubuntu-24.04"
 # Targets that do not exist yet and the task that will add each of them.
 PENDING = {
     ("web", "modern"): "T040",
-    ("windows", "modern"): "T046",
     ("macos", "modern"): "T049",
     ("ios", "modern"): "T052",
     ("macos", "legacy"): "T077",
@@ -1163,12 +1163,274 @@ def android_modern_records(apk, clang_version, versions, facts, java_home):
         }
 
 
+# ---- windows modern (T041, T046) ------------------------------------------------------------
+
+WINUI_DIR = common.ROOT / "ui" / "modern" / "windows-winui3"
+WINUI_PROJECT = WINUI_DIR / "Loomora.WinUI.csproj"
+# short name -> target framework: the same sources, two .NET targets (net8 only for Windows 10 1809).
+WINUI_TARGETS = (("net8", "net8.0-windows10.0.19041.0"), ("net10", "net10.0-windows10.0.19041.0"))
+# architecture -> (runtime identifier, CMake preset of loomora.dll, MSVC host/target folder)
+WINUI_ARCHS = (("x64", "win-x64", "host-msvc", "Hostx64/x64"),
+               ("arm64", "win-arm64", "host-msvc-arm64", "Hostx64/arm64"))
+WINUI_ARCHS_PRESET = dict((arch, preset) for arch, _rid, preset, _host in WINUI_ARCHS)
+# Where each Windows platform takes its deliverable: Windows 11 runs the recent target, a
+# Windows 10 platform (none is recorded yet) would run the .NET 8 fallback.
+WINUI_PLATFORM_TARGET = {"Windows 11": "net10", "Windows 10": "net8"}
+WINUI_ARCH_OF_PLATFORM = {"x86_64": "x64", "arm64": "arm64"}
+
+WINUI_INSTALL_HELP = """\
+windows modern needs, on the Windows host (no WSL):
+  Visual Studio 2026 (Community is enough) with the C++ desktop workload and, for ARM64, the
+  component "MSVC Build Tools for ARM64/ARM64EC (Latest)"; cmake on PATH (generator
+  "Visual Studio 18 2026", CMake 4.2 or later)
+  the .NET SDK named by ui/modern/windows-winui3/global.json (10.0.404 or a later 10.0 patch);
+  the packs of the two target frameworks and the Windows App SDK package come from NuGet
+  (network access, or a filled NuGet cache)
+  to RUN the result: the .NET Desktop Runtime of the target (8 or 10, x64 or ARM64) and the
+  Windows App Runtime 2.6 (Microsoft.WindowsAppRuntime.2, same architecture); see
+  docs/implementation/validation/procedures/windows.md"""
+
+
+def vswhere_install_path():
+    vswhere = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / \
+        "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
+    if not vswhere.is_file():
+        sys.exit("windows modern: vswhere.exe not found (Visual Studio 2026 is not installed?)\n\n%s"
+                 % WINUI_INSTALL_HELP)
+    path = capture([vswhere, "-latest", "-products", "*", "-requires",
+                    "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property",
+                    "installationPath"])
+    if not path:
+        sys.exit("windows modern: no Visual Studio with the MSVC x64 tools\n\n%s" % WINUI_INSTALL_HELP)
+    return Path(path)
+
+
+def latest_msvc_dir(vs_path):
+    versions = sorted((vs_path / "VC" / "Tools" / "MSVC").iterdir(),
+                      key=lambda p: [int(x) for x in p.name.split(".")])
+    if not versions:
+        sys.exit("windows modern: no MSVC toolset under %s" % vs_path)
+    return versions[-1]
+
+
+def cl_version(cl):
+    """Version of cl.exe, from its banner (written on standard error)."""
+    res = subprocess.run([str(cl)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         universal_newlines=True, errors="replace")
+    m = re.search(r"(\d+\.\d+\.\d+(?:\.\d+)?)", res.stdout.splitlines()[0] if res.stdout else "")
+    return m.group(1) if m else "unknown"
+
+
+def header_functions():
+    text = (common.CORE / "include" / "loomora.h").read_text(encoding="utf-8")
+    return sorted(set(re.findall(r"LOOMORA_API[^;(]*?\b(loomora_\w+)\s*\(", text)))
+
+
+def build_loomora_dll(preset, msvc):
+    """Configure and build the preset of CMakePresets.json, then check the DLL: it exports exactly
+    the loomora_* functions of the header and imports KERNEL32 only (the C runtime is static, /MT)."""
+    for step in (["--preset", preset], ["--build", "--preset", preset]):
+        res = subprocess.run(["cmake"] + step, cwd=str(common.ROOT))
+        if res.returncode != 0:
+            sys.exit("cmake %s failed (%d)" % (" ".join(step), res.returncode))
+    dll = common.ROOT / "build" / preset / "core" / "Release" / "loomora.dll"
+    if not dll.is_file():
+        sys.exit("cmake finished but %s is missing" % dll)
+    exports, by_ordinal = check_imports.read_exports(dll)
+    expected = set(header_functions())
+    if exports != expected or by_ordinal:
+        sys.exit("%s exports %s, expected exactly %s" % (dll, sorted(exports), sorted(expected)))
+    dumpbin = msvc / "bin" / "Hostx64" / "x64" / "dumpbin.exe"
+    text = capture([dumpbin, "/headers", "/dependents", dll])
+    machine = re.search(r"machine \(([^)]+)\)|\(([^)]+)\) machine", text)
+    needed = sorted(set(re.findall(r"^\s+(\S+\.dll)\s*$", text, re.M | re.I)), key=str.lower)
+    if needed != ["KERNEL32.dll"]:
+        sys.exit("%s imports %s, expected KERNEL32.dll only (static C runtime)" % (dll, needed))
+    machine = (machine.group(1) or machine.group(2)) if machine else "unknown machine"
+    print("%s: %s, exports exactly the %d loomora_* functions, imports %s, %d bytes"
+          % (dll.relative_to(common.ROOT).as_posix(), machine, len(exports), ", ".join(needed),
+             dll.stat().st_size))
+    return dll, machine
+
+
+def folder_facts(folder):
+    files = [p for p in folder.rglob("*") if p.is_file()]
+    return {"files": len(files), "bytes": sum(p.stat().st_size for p in files)}
+
+
+def zip_folder(folder, archive):
+    """Zip the published folder (files at the root of the archive, a fixed time stamp so that
+    identical folders give identical archives)."""
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(str(archive), "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        for path in sorted(p for p in folder.rglob("*") if p.is_file()):
+            info = zipfile.ZipInfo(path.relative_to(folder).as_posix(), (2026, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            z.writestr(info, path.read_bytes())
+
+
+def winui_package_versions(assets):
+    """({package id: version} of the packages the last restore resolved,
+    {target framework: {pack id: version}} of the packs it downloaded: runtime packs, Windows SDK
+    projection)."""
+    data = common.read_json(assets)
+    libraries = {}
+    for key in data.get("libraries", {}):
+        name, _, version = key.partition("/")
+        libraries[name] = version
+    packs = {}
+    for tf, info in data.get("project", {}).get("frameworks", {}).items():
+        packs[tf] = dict((d["name"], d["version"].strip("[]").split(",")[0].strip())
+                         for d in info.get("downloadDependencies", []))
+    return libraries, packs
+
+
+def publish_winui(tf_short, tf, arch, rid, dll, build_root):
+    out = build_root / "windows-modern" / ("%s-%s" % (tf_short, arch))
+    if out.exists():
+        shutil.rmtree(str(out))
+    cmd = ["dotnet", "publish", str(WINUI_PROJECT), "-c", "Release", "-f", tf, "-r", rid,
+           "-p:Platform=" + arch, "-p:LoomoraDll=" + str(dll), "-o", str(out), "--nologo"]
+    res = subprocess.run(cmd, cwd=str(WINUI_DIR))
+    if res.returncode != 0:
+        sys.exit("dotnet publish failed (%d): %s" % (res.returncode, " ".join(cmd)))
+    for needed in ("Loomora.WinUI.exe", "Loomora.WinUI.dll", "loomora.dll",
+                   "Loomora.WinUI.runtimeconfig.json", "Microsoft.WindowsAppRuntime.Bootstrap.dll"):
+        if not (out / needed).is_file():
+            sys.exit("%s is missing from the published folder %s" % (needed, out))
+    machine = {"x64": 0x8664, "arm64": 0xAA64}[arch]
+    for native in ("Loomora.WinUI.exe", "loomora.dll", "Microsoft.WindowsAppRuntime.Bootstrap.dll"):
+        header = (out / native).read_bytes()[:4096]
+        found = struct.unpack_from("<H", header, struct.unpack_from("<I", header, 0x3C)[0] + 4)[0]
+        if found != machine:
+            sys.exit("%s of %s has machine type 0x%04X, expected 0x%04X (%s)"
+                     % (native, out, found, machine, arch))
+    facts = folder_facts(out)
+    archive = common.ROOT / "out" / "windows-modern" / ("loomora-winui-%s-%s.zip" % (tf_short, arch))
+    zip_folder(out, archive)
+    facts.update(folder=out, archive=archive, zip_bytes=archive.stat().st_size,
+                 zip_sha256=common.sha256(archive), tf=tf, arch=arch)
+    print("%s %s: published folder %d files, %d bytes; %s %d bytes (sha256 %s)"
+          % (tf_short, arch, facts["files"], facts["bytes"], archive.name, facts["zip_bytes"],
+             facts["zip_sha256"]))
+    return facts
+
+
+def run_windows_modern(args):
+    if sys.platform != "win32":
+        sys.exit("windows modern builds on a Windows host (PowerShell or Python), not in WSL\n\n%s"
+                 % WINUI_INSTALL_HELP)
+    require_tools(["cmake", "dotnet"])
+    vs_path = vswhere_install_path()
+    msvc = latest_msvc_dir(vs_path)
+    msvc_version = cl_version(msvc / "bin" / "Hostx64" / "x64" / "cl.exe")
+    dotnet_version = capture(["dotnet", "--version"], cwd=WINUI_DIR)
+    print("Visual Studio: %s; MSVC toolset %s (cl.exe %s); .NET SDK %s (ui/modern/windows-winui3/"
+          "global.json)" % (vs_path, msvc.name, msvc_version, dotnet_version))
+    build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (common.ROOT / "build"))
+    built = {}  # architecture -> {"dll", "machine", "targets": {short name: facts}}
+    for arch, rid, preset, host in WINUI_ARCHS:
+        if not (msvc / "bin" / host.replace("/", os.sep) / "cl.exe").is_file():
+            print("%s: SKIPPED, the MSVC tools for %s are not installed (%s/cl.exe is missing); "
+                  "install the component \"MSVC Build Tools for ARM64/ARM64EC (Latest)\" of "
+                  "Visual Studio" % (arch, arch, host))
+            continue
+        dll, machine = build_loomora_dll(preset, msvc)
+        entry = {"dll": dll, "machine": machine, "targets": {}}
+        for tf_short, tf in WINUI_TARGETS:
+            entry["targets"][tf_short] = publish_winui(tf_short, tf, arch, rid, dll, build_root)
+        built[arch] = entry
+    if not built:
+        sys.exit("windows modern: nothing was built")
+    assets = WINUI_DIR / "obj" / "project.assets.json"
+    packages = winui_package_versions(assets) if assets.is_file() else ({}, {})
+    for record, artifact in windows_modern_records(built, windows_platforms(), msvc.name,
+                                                   msvc_version, dotnet_version, packages):
+        write_deliverable(record, artifact)
+
+
+def windows_modern_records(built, platforms, msvc_toolset, msvc_version, dotnet_version, packages):
+    """[(record, artifact)]: one Deliverable per Windows platform record whose architecture was
+    built (Windows 11: the net10 zip, Windows 10: the net8 zip), and a generic record
+    windows-<arch>-modern for an architecture without any platform record (the validator reports
+    it as a deliverable without platform until the platform record exists)."""
+    libraries, packs = packages
+    wasdk = libraries.get("Microsoft.WindowsAppSDK.WinUI", "unknown")
+
+    def make(platform_id, arch, tf_short):
+        entry = built[arch]
+        facts = entry["targets"][tf_short]
+        other = ["%s: %s, %d bytes, sha256 %s, published folder %d files / %d bytes"
+                 % (s, f["archive"].name, f["zip_bytes"], f["zip_sha256"], f["files"], f["bytes"])
+                 for s, f in sorted(entry["targets"].items()) if s != tf_short]
+        record = {
+            "platform_id": platform_id,
+            "ui_variant": "modern",
+            "cpp_std": "c++11",
+            "compiler": "msvc-%s" % msvc_version,
+            "target": "%s (loomora.dll, MSVC toolset %s, /MT static C runtime, cl.exe default "
+                      "/std:c++14 for the C++11 sources, the lowest it accepts; %s)"
+                      % (arch, msvc_toolset, entry["machine"]),
+            "output": "native",
+            "ui_language": "c#",
+            "ui_toolkit": "WinUI 3, Windows App SDK %s (packages Microsoft.WindowsAppSDK.WinUI and "
+                          ".Runtime, Base, Foundation and InteractiveExperiences with them, not the "
+                          "Microsoft.WindowsAppSDK metapackage), unpackaged and framework-dependent "
+                          "(WindowsPackageType None, WindowsAppSDKSelfContained false), %s, "
+                          "TargetPlatformMinVersion 10.0.17763.0; loomora.dll called through "
+                          "LibraryImport (no C++/CLI, no C++/WinRT)" % (wasdk, facts["tf"]),
+            "ui_compiler": ".NET SDK %s (pinned by ui/modern/windows-winui3/global.json), Roslyn, "
+                           "LibraryImport source generator, Microsoft.Windows.SDK.NET.Ref %s, "
+                           "Microsoft.Windows.SDK.BuildTools %s, Microsoft.Windows.SDK.BuildTools.MSIX "
+                           "%s, Microsoft.Web.WebView2 %s, runtime pack Microsoft.NETCore.App %s"
+                           % (dotnet_version,
+                              packs.get(facts["tf"], {}).get("Microsoft.Windows.SDK.NET.Ref", "unknown"),
+                              libraries.get("Microsoft.Windows.SDK.BuildTools", "unknown"),
+                              libraries.get("Microsoft.Windows.SDK.BuildTools.MSIX", "unknown"),
+                              libraries.get("Microsoft.Web.WebView2", "unknown"),
+                              packs.get(facts["tf"], {}).get("Microsoft.NETCore.App.Runtime.win-" + arch, "unknown")),
+            "artifact": {"name": facts["archive"].name, "size": facts["zip_bytes"]},
+            "disabled_features": [],
+            # selftest-no-iostream is a MinGW-w64 (Windows Legacy) fallback: platform ids carry no variant
+            "fallbacks": [f for f in fallbacks_of(platform_id) if f != "selftest-no-iostream"],
+            "notes": "python tools/build.py windows modern: cmake --preset %s (Visual Studio 18 "
+                     "2026 generator; loomora.dll exports exactly the loomora_* functions of "
+                     "loomora.h and imports KERNEL32 only) then dotnet publish of "
+                     "ui/modern/windows-winui3 for %s; the zip holds the published folder "
+                     "(%d files, %d bytes unzipped) with loomora.dll next to Loomora.WinUI.exe; "
+                     "artifact sha256 %s; needs the .NET Desktop Runtime (%s) and the Windows App "
+                     "Runtime %s installed on the machine (validation/procedures/windows.md). "
+                     "Same build, other target: %s. Artifacts copied to out/windows-modern/."
+                     % (WINUI_ARCHS_PRESET[arch], facts["tf"], facts["files"], facts["bytes"],
+                        facts["zip_sha256"], facts["tf"].split("-")[0].replace("net", ".NET "),
+                        ".".join(wasdk.split(".")[:2]), "; ".join(other)),
+        }
+        return record, facts["archive"]
+
+    out = []
+    covered = set()
+    for platform_id, rec in sorted(platforms.items()):
+        arch = WINUI_ARCH_OF_PLATFORM.get(rec.get("arch"))
+        short = next((s for name, s in WINUI_PLATFORM_TARGET.items()
+                      if rec.get("os_name", "").startswith(name)), None)
+        if arch not in built or short is None:
+            continue
+        covered.add(arch)
+        out.append(make(platform_id, arch, short))
+    for arch in sorted(built):
+        if arch not in covered:
+            out.append(make("windows-%s" % arch, arch, "net10"))
+    return out
+
+
 TARGETS = {
     ("android", "legacy"): run_android_legacy,
     ("android", "modern"): run_android_modern,
     ("linux", "modern"): run_linux_modern,
     ("linux", "legacy"): run_linux_legacy,
     ("windows", "legacy"): run_windows_legacy,
+    ("windows", "modern"): run_windows_modern,
 }
 
 

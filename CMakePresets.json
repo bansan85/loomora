@@ -16,13 +16,32 @@
     },
     {
       "name": "host-msvc",
-      "generator": "Visual Studio 17 2022",
-      "binaryDir": "${sourceDir}/build/host-msvc"
+      "description": "MSVC of Visual Studio 2026, x64: loomora.dll for the WinUI 3 UI (/MT)",
+      "generator": "Visual Studio 18 2026",
+      "architecture": { "value": "x64", "strategy": "set" },
+      "binaryDir": "${sourceDir}/build/host-msvc",
+      "cacheVariables": {
+        "LOOMORA_BUILD_SHARED": "ON",
+        "LOOMORA_BUILD_WIN32_LEGACY": "OFF",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+      }
+    },
+    {
+      "name": "host-msvc-arm64",
+      "description": "MSVC of Visual Studio 2026, ARM64 (needs the MSVC ARM64 build tools): loomora.dll for the WinUI 3 UI (/MT)",
+      "inherits": "host-msvc",
+      "architecture": { "value": "ARM64", "strategy": "set" },
+      "binaryDir": "${sourceDir}/build/host-msvc-arm64",
+      "cacheVariables": { "LOOMORA_BUILD_TESTS": "OFF" }
     }
   ],
   "buildPresets": [
     { "name": "host-gcc", "configurePreset": "host-gcc" },
     { "name": "host-clang", "configurePreset": "host-clang" },
+    { "name": "host-msvc", "configurePreset": "host-msvc", "configuration": "Release" },
+    { "name": "host-msvc-arm64", "configurePreset": "host-msvc-arm64", "configuration": "Release" }
+  ],
+  "testPresets": [
     { "name": "host-msvc", "configurePreset": "host-msvc", "configuration": "Release" }
   ]
 }

@@ -1,0 +1,67 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Loomora Modern UI for Windows: WinUI 3 (Windows App SDK) in C#, unpackaged and
+    framework-dependent. The same sources are built for two .NET targets:
+      net8.0-windows10.0.19041.0   for Windows 10 1809 machines (fallback, see
+                                   docs/implementation/validation/fallbacks.json)
+      net10.0-windows10.0.19041.0  for Windows 11
+    and for x64 and ARM64. The backend is the C++11 loomora.dll (C API of loomora.h), called through
+    LibraryImport in Native.cs; there is no C++/CLI and no C++/WinRT. tools/build.py windows modern
+    publishes every combination.
+  -->
+  <PropertyGroup>
+    <TargetFrameworks>net8.0-windows10.0.19041.0;net10.0-windows10.0.19041.0</TargetFrameworks>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>Loomora.WinUI</RootNamespace>
+    <AssemblyName>Loomora.WinUI</AssemblyName>
+    <UseWinUI>true</UseWinUI>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- Unpackaged, framework-dependent: .NET Desktop Runtime and Windows App Runtime are installed on the machine. -->
+    <WindowsPackageType>None</WindowsPackageType>
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
+    <SelfContained>false</SelfContained>
+    <!-- Program.cs starts the Windows App Runtime itself through the bootstrapper API. -->
+    <WindowsAppSdkBootstrapInitialize>false</WindowsAppSdkBootstrapInitialize>
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <PublishTrimmed>false</PublishTrimmed>
+    <DebugType>none</DebugType>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <!-- The .NET 8 build is for machines that may only have a later .NET (it is the Windows 10 1809
+       fallback): it uses .NET 8 when installed and otherwise the lowest higher major (RollForward Major; LatestMajor would pick .NET 11 even where .NET 8 is installed). Measured, see procedures/windows.md. -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0-windows10.0.19041.0'">
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+
+  <!-- loomora.dll of the same architecture, built by the host-msvc / host-msvc-arm64 presets of
+       CMakePresets.json (tools/build.py windows modern passes -p:LoomoraDll=...). It is copied next
+       to the executable and into the published folder. -->
+  <PropertyGroup Condition="'$(LoomoraDll)' == '' And '$(Platform)' == 'x64'">
+    <LoomoraDll>$(MSBuildThisFileDirectory)..\..\..\build\host-msvc\core\Release\loomora.dll</LoomoraDll>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(LoomoraDll)' == '' And '$(Platform)' == 'ARM64'">
+    <LoomoraDll>$(MSBuildThisFileDirectory)..\..\..\build\host-msvc-arm64\core\Release\loomora.dll</LoomoraDll>
+  </PropertyGroup>
+  <ItemGroup Condition="Exists('$(LoomoraDll)')">
+    <None Include="$(LoomoraDll)" Link="loomora.dll" CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Windows App SDK 2.6.5, pinned. Only the WinUI and Runtime components, not the
+       Microsoft.WindowsAppSDK metapackage: that one adds the AI, ML, Search and Widgets components,
+       whose native libraries (onnxruntime.dll, DirectML.dll, 44 MB) would ship with this app for
+       nothing (measured: published folder 81.9 MB with the metapackage, 37.7 MB without). -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.6.5" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.Runtime" Version="2.6.5" />
+  </ItemGroup>
+</Project>
