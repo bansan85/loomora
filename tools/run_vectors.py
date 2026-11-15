@@ -60,6 +60,13 @@ emulator or device adb sees (--serial / $ANDROID_SERIAL to choose); the launcher
 stops the emulator. Each run starts the activity with the intent extras of the UI contract and
 reads the probe line from logcat (tag LOOMORA_PROBE; a long line is logged in numbered parts
 "#i/n <text>" and joined here). Runs are serial.
+Web legacy under node (platform ids web-node-js and web-node-wasm, see WebNodeLauncher): runs the
+page script ui/legacy/web/app.js and the module of `python tools/build.py web legacy`
+($HOME/loomora-build/web-legacy/dist, or the folder of --exe) in tools/trials/web-node/page-harness.js,
+in a minimal DOM stub and without any browser, with the URL `?probe=1&input=<percent-encoded>&platform=<id>`
+(ASCII, passed on standard input). The page decides by itself between the JavaScript build and the
+WebAssembly one; the id says which one the harness makes possible. A real browser is another launcher
+(not implemented yet).
 Every other family exits with status 1 and "launcher not implemented yet" until the tasks that
 add the UIs (T060-T093) add theirs: they only have to implement Launcher.run().
 Linux modern: the executable built by `python tools/build.py linux modern`
@@ -107,6 +114,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -1188,6 +1196,66 @@ class AndroidModernLauncher(AndroidLegacyLauncher):
     build_command = "python tools/build.py android modern"
 
 
+# ---- web legacy under node (T085) --------------------------------------------------------------
+
+WEB_NODE_PLATFORMS = {"web-node-js": "js", "web-node-wasm": "wasm"}  # platform id -> page path
+WEB_HARNESS = "tools/trials/web-node/page-harness.js"
+
+
+def web_probe_query(text, platform_id):
+    """The URL query of the Web page's probe mode (ui-contract.md): ASCII, the text UTF-8
+    percent-encoded (a '+' is encoded too, the page reads a plain '+' as a plus sign)."""
+    return "?probe=1&input=%s&platform=%s" % (urllib.parse.quote(text, safe=""), platform_id)
+
+
+class WebNodeLauncher(Launcher):
+    """The Web Legacy page (index.html + app.js) and its built module run by page-harness.js under
+    node, in a DOM stub: no browser. The query goes through standard input, so that no command line
+    (the one of wsl.exe included) can change it. The field limit counts UTF-16 units (JavaScript)."""
+
+    length_unit = "utf16"
+
+    def __init__(self, args):
+        Launcher.__init__(self, args)
+        self.path = WEB_NODE_PLATFORMS.get(args.platform_id)
+        self.prefix = []
+        if sys.platform == "win32":
+            distro = args.wsl_distro or os.environ.get("LOOMORA_WSL_DISTRO") or DEFAULT_WSL_DISTRO
+            self.prefix = ["wsl", "-d", distro, "--cd", str(common.ROOT), "--"]
+
+    def command(self):
+        cmd = self.prefix + ["node", WEB_HARNESS, "--path", self.path, "--query", "-"]
+        if self.args.exe:
+            cmd += ["--dist", self.args.exe]
+        return cmd
+
+    def prepare(self):
+        if self.path is None:
+            raise RuntimeError("%s is not a Web platform run under node (%s)"
+                               % (self.args.platform_id, ", ".join(sorted(WEB_NODE_PLATFORMS))))
+        probe = subprocess.run(self.command(),
+                               input=web_probe_query("Coucou", self.args.platform_id).encode("ascii"),
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if probe.returncode != 0:
+            raise RuntimeError("the page does not run (build it: python tools/build.py web legacy; "
+                               "folder of --exe or $LOOMORA_WEB_DIST): %s"
+                               % probe.stderr.decode("utf-8", "replace").strip()[:300])
+        return "node page-harness.js, %s path (the page script and the module of tools/build.py web legacy)" % self.path
+
+    def run(self, text, timeout):
+        start = time.time()
+        try:
+            res = subprocess.run(self.command(),
+                                 input=web_probe_query(text, self.args.platform_id).encode("ascii"),
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return RunResult(None, "", "", time.time() - start, "timeout after %s s" % timeout)
+        except OSError as e:
+            return RunResult(None, "", "", time.time() - start, "cannot start node: %s" % e)
+        return RunResult(res.returncode, res.stdout.decode("utf-8", "replace"),
+                         res.stderr.decode("utf-8", "replace"), time.time() - start)
+
+
 LAUNCHERS = {("linux", "modern"): LinuxModernLauncher,
              ("linux", "legacy"): LinuxLegacyLauncher,
              ("windows", "legacy"): WindowsLegacyLauncher,
@@ -1201,6 +1269,8 @@ def select_launcher(family, variant, platform_id):
     Legacy UI gets the VM launcher, everything else the launcher of its family and variant."""
     if (family, variant) == ("windows", "legacy") and platform_id in VBOX_PLATFORMS:
         return WindowsVirtualBoxLauncher
+    if (family, variant) == ("web", "legacy") and platform_id in WEB_NODE_PLATFORMS:
+        return WebNodeLauncher
     return LAUNCHERS.get((family, variant))
 
 
@@ -1248,7 +1318,7 @@ def _clip(value, limit=80):
 # ---- self-test ---------------------------------------------------------------------------------
 
 def self_test():
-    """The platform id rules of the Android launchers; no device, no build needed."""
+    """The platform id rules of the Android launchers and the query of the Web one; no device, no build needed."""
     failures = 0
 
     def expect(label, got, want):
@@ -1310,6 +1380,19 @@ def self_test():
            docker_inner_cmd("c1", "/py3", "legacy", "/x/loomora-xlib", "--inner-where"),
            ["docker", "exec", "c1", "/py3", "tools/run_vectors.py", "--inner-variant", "legacy",
             "--exe", "/x/loomora-xlib", "--inner-where"])
+    # Web: the query of the probe mode, and the launcher choice by platform id
+    for label, text in (("ASCII", "Coucou"), ("empty", ""), ("reserved characters", "a&b=c%d+e f#g?h"),
+                        ("accents", u"\u00e9t\u00e9"), ("emoji", u"\U0001F600 x"), ("newline", "a\nb")):
+        query = web_probe_query(text, "web-node-js")
+        fields = dict(part.split("=", 1) for part in query[1:].split("&"))
+        expect("web query, %s: ASCII, three fields, text round-trips" % label,
+               (query.isascii() and sorted(fields) == ["input", "platform", "probe"]
+                and urllib.parse.unquote(fields["input"]) == text and fields["platform"] == "web-node-js"),
+               True)
+    expect("web launcher for web-node-js", select_launcher("web", "legacy", "web-node-js"), WebNodeLauncher)
+    expect("web launcher for web-node-wasm", select_launcher("web", "legacy", "web-node-wasm"), WebNodeLauncher)
+    expect("no launcher yet for a browser platform", select_launcher("web", "legacy", "web-firefox-12-windows-2000-x86"), None)
+    expect("web launcher counts UTF-16 units", WebNodeLauncher.length_unit, "utf16")
     print("self-test %s" % ("FAILED" if failures else "passed"))
     return 1 if failures else 0
 

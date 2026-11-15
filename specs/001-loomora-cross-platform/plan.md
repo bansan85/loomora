@@ -75,14 +75,14 @@ ui/                           # two thin native UIs per platform
 │   ├── ios-uikit/            # Objective-C
 │   ├── android-views/        # Java (scripted APK build, no Gradle)
 │   ├── linux-xlib/           # C++ (Xlib, CMake)
-│   └── web-es5/              # HTML + ES5 JavaScript (wasm / js loader)
+│   └── web/                  # HTML + ES3/ES5-safe JavaScript (wasm / js loader)
 └── modern/
     ├── windows-winui3/       # C#
     ├── macos-swiftui/        # Swift
     ├── ios-swiftui/          # Swift
     ├── android-compose/      # Kotlin
     ├── linux-gtk3/           # C++ (gtkmm-3.0, GTK 3; gtkmm-4.0 as an option), CMake, plain executable (no Flatpak)
-    └── web-ts/               # TypeScript (shares loomora.wasm with web-es5)
+    └── web-ts/               # TypeScript (shares loomora.wasm with web)
 tools/                        # Python host tools: check-std, gen-vectors, build, run-vectors, measure-sharing, check-probe, report
 docs/requirements-specification.md  # the requirements document (English)
 docs/implementation/          # git submodule ../loomora-docs: implementation documentation

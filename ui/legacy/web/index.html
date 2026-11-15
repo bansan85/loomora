@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Loomora</title>
+<style type="text/css">
+html, body { margin: 0; padding: 0; }
+body { font-family: sans-serif; background: #ffffff; color: #111111; text-align: center; }
+#page { padding: 12% 16px 0 16px; }
+label { display: block; margin-bottom: 8px; font-size: 16px; }
+#name { width: 80%; max-width: 480px; font-size: 20px; padding: 4px; }
+#greeting { margin-top: 32px; min-height: 1.4em; font-size: 32px; font-weight: bold; word-wrap: break-word; }
+#eol { margin: 24px auto 0 auto; max-width: 640px; padding: 8px; border: 1px solid #7a4b00; background: #fff3d6; color: #4a2c00; font-size: 14px; }
+#status { margin-top: 24px; font-size: 14px; color: #444444; }
+#probe { display: none; text-align: left; margin: 24px 16px 0 16px; padding: 8px; border: 1px solid #888888; font-size: 12px; white-space: pre-wrap; word-wrap: break-word; }
+@media (prefers-color-scheme: dark) {
+  body { background: #121212; color: #f0f0f0; }
+  #name { background: #1e1e1e; color: #f0f0f0; }
+  #status { color: #bbbbbb; }
+  #eol { background: #3a2a00; color: #ffe3a3; border-color: #c89b3c; }
+}
+</style>
+</head>
+<body>
+<div id="page">
+<label for="name">Text</label>
+<input type="text" id="name" maxlength="1000" value="Coucou" autocomplete="off">
+<div id="greeting"></div>
+<div id="status">Loading the backend...</div>
+</div>
+<pre id="probe"></pre>
+<noscript><p>Loomora needs JavaScript.</p></noscript>
+<script type="text/javascript" src="app.js"></script>
+</body>
+</html>
