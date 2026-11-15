@@ -75,7 +75,7 @@ UI_DIR = {
     ("macos", "legacy"): "macos-appkit", ("macos", "modern"): "macos-swiftui",
     ("ios", "legacy"): "ios-uikit", ("ios", "modern"): "ios-swiftui",
     ("android", "legacy"): "android-views", ("android", "modern"): "android-compose",
-    ("web", "legacy"): "web-es5", ("web", "modern"): "web-ts",
+    ("web", "legacy"): "web", ("web", "modern"): "web-ts",
 }
 # platform family -> bridge directory (glue between the C API and the UI language)
 GLUE_DIR = {"android": "jni", "web": "wasm"}
