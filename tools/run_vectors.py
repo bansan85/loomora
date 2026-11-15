@@ -4,13 +4,18 @@
 Usage:
   python tools/run_vectors.py <platform-id> <variant> [--vectors FILE] [--jobs N] [--timeout S]
                               [--evidence-dir DIR] [--wsl-distro NAME] [--arch x64|x86]
-                              [--exe PATH] [--dry-run]
+                              [--exe PATH] [--ui-abi ABI] [--dry-run]
 
   platform-id  for example linux-ubuntu-24.04-x86_64, windows-11-x64 or windows-2000-x86 (the id
                the UI itself puts in its probe line)
   variant      legacy | modern
   --arch       Windows only: which executable of the Windows Legacy UI runs, x64 (default) or x86
                (windows-2000-x86 runs the x86 executable in a VirtualBox VM and accepts x86 only)
+  --ui-abi     Android only: the ABI the UI process really runs as, when it is not the one of the
+               platform id: the Legacy APK has no x86_64 or arm64-v8a library, so on a 64-bit
+               device it runs as a 32-bit process (x86 on android-7.0-x86_64) and its probe line
+               says android-7.0-x86. Only the 32-bit companion of the device's ABI is accepted
+               (see android_probe_platform_id); the device must list it in ro.product.cpu.abilist
 
 For each valid vector the UI is launched in probe mode with the input override of
 contracts/ui-contract.md (`--probe-input <utf8>` on Windows, macOS and Linux; the intent extra
@@ -226,6 +231,12 @@ class Launcher(object):
     def run(self, text, timeout):
         """Launch the UI in probe mode with `text` (str) as input override; return RunResult."""
         raise NotImplementedError
+
+    def probe_platform_id(self, platform_id):
+        """The platform_id the UI's probe line must carry when it is run for `platform_id`
+        (the id of the platform record). Only a launcher whose UI can run as another ABI than the
+        platform's overrides it."""
+        return platform_id
 
     def close(self):
         """Release what prepare() acquired."""
@@ -793,6 +804,33 @@ def shell_quote(text):
     return "'" + text.replace("'", "'\\''") + "'"
 
 
+# 32-bit ABIs that a 64-bit Android device also runs: a UI whose APK has no library of the 64-bit
+# ABI runs as a 32-bit process, and the probe line then names that ABI (Build.CPU_ABI).
+ANDROID_COMPANION_ABIS = {"x86_64": ("x86",), "arm64-v8a": ("armeabi-v7a", "armeabi")}
+
+
+def android_probe_platform_id(platform_id, ui_abi=None):
+    """The platform_id the probe line of an Android UI must carry on the platform `platform_id`
+    (android-<release>-<device ABI>). Without ui_abi it is `platform_id` itself, so nothing is
+    relaxed. With ui_abi (the ABI the UI process runs as) only the ABI part changes, and only to
+    a 32-bit companion of the device's ABI (x86 on x86_64, armeabi-v7a or armeabi on arm64-v8a):
+    the release must still match and any other ABI is refused with a ValueError."""
+    if not ui_abi:
+        return platform_id
+    m = re.match(r"^(android-[0-9][0-9.]*)-(.+)$", platform_id)
+    if not m:
+        raise ValueError("cannot read the release and the ABI in the platform id %r "
+                         "(expected android-<release>-<abi>)" % platform_id)
+    release, device_abi = m.groups()
+    if ui_abi == device_abi:
+        return platform_id
+    if ui_abi not in ANDROID_COMPANION_ABIS.get(device_abi, ()):
+        raise ValueError("--ui-abi %s: a UI of this ABI does not run on a %s device "
+                         "(accepted there: %s)" % (ui_abi, device_abi,
+                         ", ".join(ANDROID_COMPANION_ABIS.get(device_abi, ())) or "none"))
+    return "%s-%s" % (release, ui_abi)
+
+
 class AndroidLegacyLauncher(Launcher):
     """The Android Legacy UI (an APK) on ONE running emulator or device, driven with adb.
 
@@ -821,6 +859,15 @@ class AndroidLegacyLauncher(Launcher):
         self.apk = Path(args.exe) if args.exe else common.ROOT / "out" / ("android-" + self.variant) / "loomora.apk"
         self.serial = args.serial or os.environ.get("ANDROID_SERIAL")
         self.adb = adb_executable(args)
+        self.ui_abi = getattr(args, "ui_abi", None)
+        if self.ui_abi:
+            self.tag = "ui-" + self.ui_abi  # evidence files of this run are named after it
+
+    def probe_platform_id(self, platform_id):
+        try:
+            return android_probe_platform_id(platform_id, self.ui_abi)
+        except ValueError as e:
+            raise RuntimeError(str(e))
 
     def _adb(self, *cmd, **kwargs):
         full = [self.adb] + (["-s", self.serial] if self.serial else []) + [str(c) for c in cmd]
@@ -841,8 +888,14 @@ class AndroidLegacyLauncher(Launcher):
                                "one first, this tool never does" % (out.strip(), err.strip()))
         if self._prop("sys.boot_completed") != "1":
             raise RuntimeError("the device has not finished booting (sys.boot_completed)")
+        if self.ui_abi:
+            abilist = self._prop("ro.product.cpu.abilist").split(",")
+            if self.ui_abi not in abilist:
+                raise RuntimeError("--ui-abi %s: the device lists %s in ro.product.cpu.abilist"
+                                   % (self.ui_abi, ",".join(abilist)))
         code, out, err = self._adb("install", "-r", self.apk, timeout=300)
-        if "INCONSISTENT_CERTIFICATES" in out:  # an APK signed with another debug key is installed
+        if "INCONSISTENT_CERTIFICATES" in out + err or "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in out + err:
+            # an APK signed with another debug key is installed (the name of the error depends on the API level)
             self._adb("uninstall", self.package)
             code, out, err = self._adb("install", self.apk, timeout=300)
         if code != 0 or "Success" not in out:
@@ -991,6 +1044,63 @@ def _clip(value, limit=80):
     return text if len(text) <= limit else text[:limit] + "...(%d chars)" % len(text)
 
 
+# ---- self-test ---------------------------------------------------------------------------------
+
+def self_test():
+    """The platform id rules of the Android launchers; no device, no build needed."""
+    failures = 0
+
+    def expect(label, got, want):
+        nonlocal failures
+        if got == want:
+            print("ok   " + label)
+        else:
+            failures += 1
+            print("FAIL %s: got %r, expected %r" % (label, got, want))
+
+    def refused(label, *args):
+        nonlocal failures
+        try:
+            got = android_probe_platform_id(*args)
+        except ValueError as e:
+            print("ok   refused (%s): %s" % (label, e))
+        else:
+            failures += 1
+            print("FAIL %s: accepted, gave %r" % (label, got))
+
+    expect("no --ui-abi: the platform id as is", android_probe_platform_id("android-7.0-x86_64"),
+           "android-7.0-x86_64")
+    expect("same ABI is a no-op", android_probe_platform_id("android-7.0-x86_64", "x86_64"),
+           "android-7.0-x86_64")
+    expect("x86 UI on an x86_64 device", android_probe_platform_id("android-7.0-x86_64", "x86"),
+           "android-7.0-x86")
+    expect("armeabi-v7a UI on an arm64-v8a device",
+           android_probe_platform_id("android-5.0-arm64-v8a", "armeabi-v7a"),
+           "android-5.0-armeabi-v7a")
+    refused("x86_64 UI on an x86 device", "android-4.1.2-x86", "x86_64")
+    refused("arm UI on an x86_64 device", "android-7.0-x86_64", "armeabi-v7a")
+    refused("x86 UI on an arm64-v8a device", "android-5.0-arm64-v8a", "x86")
+    refused("an ABI of nothing on an x86 device", "android-4.1.2-x86", "mips")
+    refused("not an Android id", "linux-ubuntu-24.04-x86_64", "x86")
+
+    # check_run: the id the probe line carries must be the one expected, whatever the cause
+    base = json.loads(open_good_line())
+    vec = type("V", (), {"expected_input": base["input"], "expected_message": base["message"]})()
+    line = json.dumps(dict(base, platform_id="android-7.0-x86", ui_variant="legacy"))
+    res = RunResult(0, line + chr(10), "", 0.0)
+    expect("probe says android-7.0-x86 and the platform id is expected: refused",
+           any(p.startswith("platform_id") for p in check_run(vec, res, "android-7.0-x86_64", "legacy")[0]), True)
+    expect("probe says android-7.0-x86 and that id is expected: platform_id accepted",
+           any(p.startswith("platform_id") for p in check_run(vec, res, "android-7.0-x86", "legacy")[0]), False)
+    print("self-test %s" % ("FAILED" if failures else "passed"))
+    return 1 if failures else 0
+
+
+def open_good_line():
+    import check_probe
+    return check_probe.GOOD_LINE
+
+
 # ---- main --------------------------------------------------------------------------------------
 
 def main(argv=None):
@@ -1014,6 +1124,10 @@ def main(argv=None):
     ap.add_argument("--exe", help="the executable to run instead of the one that tools/build.py "
                     "left (Linux: a path on the Linux side, in $HOME/loomora-build or out/; "
                     "Windows legacy: a loomora.exe, default out/windows-legacy/<arch>/)")
+    ap.add_argument("--ui-abi", help="Android only: the ABI the UI process runs as when it differs "
+                    "from the platform id's: the 32-bit companion of a 64-bit device (x86 on "
+                    "android-7.0-x86_64); the probe line must then carry that ABI")
+    ap.add_argument("--self-test", action="store_true", help="check the platform id rules and exit")
     ap.add_argument("--adb", help="Android only: the adb executable (default $LOOMORA_ADB, the "
                     "platform-tools of $LOOMORA_ANDROID_SDK / $ANDROID_HOME, then PATH)")
     ap.add_argument("--serial", help="Android only: adb serial of the device (default "
@@ -1023,6 +1137,8 @@ def main(argv=None):
     ap.add_argument("--inner-where", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
+    if args.self_test:
+        return self_test()
     LINUX_UI["exe"] = args.exe
     LINUX_UI["variant"] = args.inner_variant or args.variant or "modern"
     if args.inner_where:
@@ -1043,6 +1159,8 @@ def main(argv=None):
               % (args.platform_id, ", ".join(sorted(FAMILY_PREFIXES))), file=sys.stderr)
         return 2
 
+    if args.ui_abi and family != "android":
+        ap.error("--ui-abi is for Android platform ids only")
     data = common.read_json(args.vectors)
     launcher_cls = select_launcher(family, args.variant, args.platform_id)
     unit = launcher_cls.length_unit if launcher_cls else Launcher.length_unit
@@ -1075,6 +1193,10 @@ def main(argv=None):
     try:
         launcher = launcher_cls(args)
         say("launcher: " + launcher.prepare())
+        expected_id = launcher.probe_platform_id(args.platform_id)
+        if expected_id != args.platform_id:
+            say("the probe line must carry platform_id %s (platform record %s: the UI runs as "
+                "another ABI)" % (expected_id, args.platform_id))
     except (RuntimeError, OSError, subprocess.SubprocessError) as e:
         print("run_vectors: %s" % e, file=sys.stderr)
         if launcher is not None:
@@ -1088,7 +1210,7 @@ def main(argv=None):
 
     def one(vector):
         result = launcher.run(vector.text, args.timeout)
-        problems, line = check_run(vector, result, args.platform_id, args.variant)
+        problems, line = check_run(vector, result, expected_id, args.variant)
         return vector, result, problems, line
 
     try:
