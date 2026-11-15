@@ -237,18 +237,6 @@ jobs:
           fi
       - name: Self-test of the vector runner (platform id rules)
         run: python tools/run_vectors.py --self-test
-      - name: Diagnose a failure (build configuration, manifest, side-by-side log)
-        if: failure()
-        shell: pwsh
-        run: |
-          $build = "$env:RUNNER_TEMP/loomora-build/default"
-          Select-String -Path "$build/CMakeCache.txt" -Pattern '^(CMAKE_(RC_COMPILER|MT|LINKER|CXX_COMPILER_TARGET|CXX_COMPILER_ID)):' | ForEach-Object Line
-          clang -v 2>&1 | Select-String 'Target|clang version'
-          $exe = "$build/ui/legacy/windows-win32/loomora.exe"
-          python -c "import re,sys; d=open(sys.argv[1],'rb').read(); print(len(d),'bytes'); [print(m.group(0).decode('utf-8','replace')) for m in re.finditer(rb'<assembly.*?</assembly>', d, re.S)]; print('utf-16 manifests:', len(re.findall('<assembly'.encode('utf-16-le'), d)))" $exe
-          try { Start-Process -FilePath $exe -ArgumentList '--probe' -Wait } catch { $_.Exception.Message }
-          Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='SideBySide'} -MaxEvents 5 -ErrorAction SilentlyContinue |
-            ForEach-Object { $_.TimeCreated; $_.Message }
       - name: Upload the logs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
