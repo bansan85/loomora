@@ -38,6 +38,12 @@ Rules enforced as ERROR, each quoted from data-model.md:
     Spike ids are S1-S9 except S4 (removed on 2026-11-14), status in {open, confirmed, refuted}, "result" non-empty unless open,
     "A refuted spike must name the chosen fallback" (field "fallback" or "adr"); an "adr" path
     must exist; "sources" lists (any record) reference ids of sources.json.
+  * Fallback -> code (T115, when the main repository is available, --code-root): every switch
+    found in core/, ui/, bridge/ and cmake/ (a LOOMORA_HAS_* / LOOMORA_GTK_HAS_* macro, a
+    LOOMORA_FEATURE_* feature id, a name tested by #if / #ifdef / defined() / getenv() / CMake
+    if()) is named in fallbacks.json (macro, description, min_compiler or reason) or is listed in
+    NOT_A_FALLBACK below with the reason it is not a fallback; every LOOMORA_HAS_* /
+    LOOMORA_GTK_HAS_* macro of fallbacks.json exists in the code.
 
 "Incomplete" findings, WARN by default and ERROR with --require-complete (SC-004: "no platform
 is left without a verdict"), because trials are not done yet:
@@ -306,6 +312,86 @@ def check_fallbacks(path, source_ids, report):
         check_source_refs(rec, source_ids, path, report, label)
     report_unknown(unknown, path, report, "fallbacks")
     return ids
+
+
+# ---- Fallbacks versus the code (T115) ------------------------------------------------------------
+
+CODE_DIRS = ("core", "ui", "bridge", "cmake", "CMakeLists.txt")
+CODE_SUFFIXES = (".cpp", ".hpp", ".h", ".cmake", ".rc")
+# The macro families that are always a fallback switch, and the other places a switch is read.
+HAS_MACRO_RE = re.compile(r"\bLOOMORA_(?:GTK_)?HAS_[A-Z0-9_]+\b")
+CODE_SWITCH_RES = (
+    HAS_MACRO_RE,
+    re.compile(r'#\s*define\s+(LOOMORA_FEATURE_[A-Z0-9_]+)\s+"'),
+    re.compile(r'(?:#\s*if(?:n?def)?\s+|defined\(\s*|getenv\(")(LOOMORA_[A-Z0-9_]+)'),
+    re.compile(r"\bif\(\s*(?:NOT\s+)?(LOOMORA_[A-Z0-9_]+)"),
+    re.compile(r"(?:target_compile_definitions|add_definitions|option)\([^)]*?(LOOMORA_[A-Z0-9_]+)"),
+)
+# Names read by the code that are not fallbacks, with the reason (a build option, a toolchain
+# marker, an export macro, an include guard: no old and no new system path is chosen by them).
+NOT_A_FALLBACK = OrderedDict([
+    ("LOOMORA_ANDROID_NDK", "the directory of the NDK, a path"),
+    ("LOOMORA_EMSCRIPTEN_ROOT", "the directory of Emscripten, a path"),
+    ("LOOMORA_BUILD_TESTS", "build option: which targets exist"),
+    ("LOOMORA_BUILD_CATCH2_TESTS", "build option: which targets exist"),
+    ("LOOMORA_BUILD_LINUX_MODERN", "build option: which targets exist"),
+    ("LOOMORA_BUILD_WIN32_LEGACY", "build option: which targets exist"),
+    ("LOOMORA_BUILD_SHARED", "build option: static library only or shared library too"),
+    ("LOOMORA_BUILD_SHARED_LIB", "export macro of the shared library"),
+    ("LOOMORA_USE_DLL", "import macro of the Windows DLL"),
+    ("LOOMORA_TARGET_ANDROID", "toolchain marker: adds the Android UI target"),
+    ("LOOMORA_TARGET_WEB", "toolchain marker: adds the web module target"),
+    ("LOOMORA_WIN32_MSVC_ABI", "host build (clang with the MSVC ABI) versus MinGW: which "
+                               "compiler flags and resource compiler options, same behaviour"),
+    ("LOOMORA_RC_MANIFEST", "where the manifest is embedded (resource file or linker), same result"),
+    ("LOOMORA_HAVE_X11", "result of the X11 link test: the Linux Legacy UI is skipped or an error"),
+    ("LOOMORA_XFT_FOUND", "result of the Xft link test; its outcome is the fallback "
+                          "xlib-core-font-glyphs (LOOMORA_XLIB_HAVE_XFT)"),
+    ("LOOMORA_XLIB_REQUIRED", "build option: a missing X11 is an error instead of a skipped target"),
+])
+
+
+def scan_code_switches(code_root):
+    """name -> first file (relative, '/') of every switch the patterns find in the code."""
+    found = OrderedDict()
+    code_root = Path(code_root)
+    for entry in CODE_DIRS:
+        top = code_root / entry
+        if top.is_file():
+            files = [top]
+        elif top.is_dir():
+            files = sorted(f for f in top.rglob("*") if f.is_file() and
+                           (f.suffix in CODE_SUFFIXES or f.name == "CMakeLists.txt"))
+        else:
+            continue
+        for f in files:
+            text = f.read_text(encoding="utf-8", errors="replace")
+            for rx in CODE_SWITCH_RES:
+                for m in rx.finditer(text):
+                    name = m.group(1) if rx.groups else m.group(0)
+                    if re.search(r"_(H|HPP)$", name):
+                        continue  # include guard
+                    found.setdefault(name, f.relative_to(code_root).as_posix())
+    return found
+
+
+def check_code_switches(code_root, fallbacks, path, report):
+    found = scan_code_switches(code_root)
+    declared = " ".join(str(v) for rec in fallbacks.values() for v in rec.values()
+                        if isinstance(v, str))
+    for name, where in found.items():
+        # a whole word, or the name of a compiler / CMake definition: -DNAME
+        mention = r"(?:(?<![A-Za-z0-9_])|(?<=-D))%s(?![A-Za-z0-9_])" % re.escape(name)
+        if name in NOT_A_FALLBACK or re.search(mention, declared):
+            continue
+        report.error(path, "%s (read in %s) has no entry in fallbacks.json: declare it, or list "
+                     "it in NOT_A_FALLBACK of tools/validate_records.py with the reason it is not "
+                     "a fallback (FR-021)" % (name, where))
+    for fid, rec in fallbacks.items():
+        macro = rec.get("macro")
+        if is_text(macro) and HAS_MACRO_RE.fullmatch(macro) and macro not in found:
+            report.error(path, "fallback %r: macro %s is not found in the code (stale entry?)"
+                         % (fid, macro))
 
 
 def check_spikes(path, root, source_ids, report):
@@ -662,7 +748,7 @@ KNOWN_TOP = ("sources.json", "fallbacks.json", "spikes.json", "hypotheses.json")
 KNOWN_DIRS = ("platforms", "verdicts", "deliverables", "evidence", "procedures")
 
 
-def validate(validation_dir, root, require_complete=False):
+def validate(validation_dir, root, require_complete=False, code_root=None):
     validation_dir = Path(validation_dir)
     root = Path(root)
     report = Report(root, require_complete)
@@ -685,6 +771,8 @@ def validate(validation_dir, root, require_complete=False):
     fallback_ids = OrderedDict()
     if (validation_dir / "fallbacks.json").is_file():
         fallback_ids = check_fallbacks(validation_dir / "fallbacks.json", source_ids, report)
+        if code_root is not None:
+            check_code_switches(code_root, fallback_ids, validation_dir / "fallbacks.json", report)
     else:
         report.error(validation_dir / "fallbacks.json", "file not found")
     if (validation_dir / "spikes.json").is_file():
@@ -753,6 +841,9 @@ def _good_tree():
         OrderedDict([("id", "src-a"), ("url", "https://example.org/a"), ("title", "A"),
                      ("accessed", "2026-11-12"), ("claim", "c"), ("verified", "yes"),
                      ("note", "extra field")])]
+    tree["core/src/internal/config.hpp"] = (
+        b"#ifndef LOOMORA_X_HPP\n#define LOOMORA_X_HPP\n#define LOOMORA_HAS_A 1\n"
+        b"#ifdef LOOMORA_BUILD_TESTS\n#endif\n#endif\n")
     tree["validation/fallbacks.json"] = [
         OrderedDict([("id", "fb-a"), ("description", "d"), ("macro", "LOOMORA_HAS_A"),
                      ("min_compiler", "gcc 7"), ("platform_ids", ["lin-1"]), ("reason", "r")])]
@@ -905,6 +996,18 @@ def _mutations():
              records=["validation/procedures/none.md"])),
         ("hypothesis verdict without coverage", "needs covered_by_probe = true",
          lambda t: t["validation/hypotheses.json"][0].update(covered_by_probe=False)),
+        ("code macro without a fallback entry", "LOOMORA_HAS_B (read in ui/x.cpp) has no entry",
+         lambda t: t.__setitem__("ui/x.cpp", b"#define LOOMORA_HAS_B 1\n")),
+        ("code switch tested by #ifdef without an entry", "LOOMORA_NEW_SWITCH (read in ui/x.cpp)",
+         lambda t: t.__setitem__("ui/x.cpp", b"#ifdef LOOMORA_NEW_SWITCH\n#endif\n")),
+        ("run-time environment switch without an entry", "LOOMORA_ENV_SWITCH (read in ui/x.cpp)",
+         lambda t: t.__setitem__("ui/x.cpp", b'const char *v = getenv("LOOMORA_ENV_SWITCH");\n')),
+        ("feature id without an entry", "LOOMORA_FEATURE_NEW (read in ui/x.h)",
+         lambda t: t.__setitem__("ui/x.h", b'#define LOOMORA_FEATURE_NEW "new"\n')),
+        ("CMake switch without an entry", "LOOMORA_CMAKE_SWITCH (read in cmake/t.cmake)",
+         lambda t: t.__setitem__("cmake/t.cmake", b"if(LOOMORA_CMAKE_SWITCH)\nendif()\n")),
+        ("fallback macro missing from the code", "macro LOOMORA_HAS_A is not found in the code",
+         lambda t: t.pop("core/src/internal/config.hpp")),
         ("invalid JSON", "not valid JSON",
          lambda t: t.__setitem__("validation/verdicts/broken.json", b"{not json")),
     ]
@@ -954,7 +1057,7 @@ def _run_case(tree, require_complete=False):
     base = Path(tempfile.mkdtemp(prefix="loomora-validate-"))
     try:
         _materialize(tree, base)
-        return validate(base / "validation", base, require_complete)
+        return validate(base / "validation", base, require_complete, code_root=base)
     finally:
         shutil.rmtree(str(base), ignore_errors=True)
 
@@ -1030,6 +1133,9 @@ def main(argv=None):
     ap.add_argument("--validation-dir", help="directory to check (default: <docs root>/validation)")
     ap.add_argument("--root", help="root that evidence and reproduction paths are relative to "
                     "(default: docs/implementation, the docs submodule)")
+    ap.add_argument("--code-root", help="root of the main repository that fallbacks.json is "
+                    "compared with (default: the repository of this tool when the default "
+                    "validation directory is checked, otherwise no code check)")
     ap.add_argument("--self-test", action="store_true",
                     help="build good and bad records in a temporary directory and check each rule")
     args = ap.parse_args(argv)
@@ -1041,7 +1147,13 @@ def main(argv=None):
         return EXIT_NO_DOCS
     root = Path(args.root) if args.root else common.DOCS
     vdir = Path(args.validation_dir) if args.validation_dir else root / "validation"
-    report = validate(vdir, root, args.require_complete)
+    if args.code_root:
+        code_root = Path(args.code_root)
+    elif not args.root and not args.validation_dir:
+        code_root = common.ROOT
+    else:
+        code_root = None
+    report = validate(vdir, root, args.require_complete, code_root)
     print_report(report)
     return 1 if report.count("ERROR") else 0
 
