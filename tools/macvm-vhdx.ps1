@@ -16,7 +16,10 @@
   -Unmount runs `wsl --unmount <Path>`. The mount does not survive a reboot or `wsl --shutdown`: run -Mount again.
   The file grows only as the VMs write; it never shrinks by itself. Nothing is downloaded.
 
-  Not run on the owner's machine yet when this was written: the first run is the owner's, with -Apply.
+  First real run (2026-11-15, 60 GB): -Create and the ext4 format worked, but the detach after the format and
+  the first -Mount failed ("Operation not permitted", E_ACCESSDENIED on DetachDisk) and left WSL in an odd state;
+  `wsl --shutdown` and then `-Mount` alone worked. If -Mount fails that way, shut WSL down and run -Mount again.
+  Native-command failures do not stop this script: read each message.
 
 .EXAMPLE
   .\tools\macvm-vhdx.ps1 -Path H:\loomora-vm\macvm.vhdx -SizeGB 80            # dry run, prints the plan

@@ -48,16 +48,16 @@ VMS = {
         "purpose": "Modern macOS and iOS simulator (T047-T052, T061); CI on a macos-26 runner covers it "
                    "without any local disk, so this VM is optional",
         "boot": "opencore", "ram_mb": 8192, "smp": "4,cores=2,sockets=1",
-        "disk_gb": 80, "ssh_port": 2222, "vnc": 1,
+        "disk_gb": 40, "ssh_port": 2222, "vnc": 1,
         "media": "downloaded by `fetch` (Apple recovery image through OSX-KVM, size not stated by OSX-KVM; "
                  "the macOS install itself then downloads more from Apple), Xcode 26.x from the owner's Apple ID",
-        "estimate": "disk 50-70 GB in use, download 20-30 GB (estimates, not measured)",
+        "estimate": "disk 30-40 GB in use at the 40 GB cap (Xcode and the simulator will not fit: grow the disk with `qemu-img resize` and `diskutil resizeContainer`), download 20-30 GB (estimates, not measured)",
     },
     "mavericks": {
         "title": "OS X 10.9 Mavericks with Xcode 5.1.1",
         "purpose": "build the Legacy iOS (armv7, armv7s, arm64) and macOS UIs (T078, T079, T067)",
         "boot": "chameleon", "ram_mb": 4096, "smp": "1",
-        "disk_gb": 32, "ssh_port": 2223, "vnc": 2,
+        "disk_gb": 12, "ssh_port": 2223, "vnc": 2,
         "media": "supplied by the owner: 10.9 installer converted to a raw image, a Chameleon ISO, "
                  "Xcode 5.1.1 and the 10.6 SDK (Xcode 3.x or 4.x) from the developer account",
         "estimate": "disk 15-25 GB in use, download 0 if the media already exist (estimates)",
@@ -66,7 +66,7 @@ VMS = {
         "title": "Mac OS X Server 10.6.8 Snow Leopard",
         "purpose": "run the macOS 10.6 floor of the Legacy UI (T067, T089)",
         "boot": "chameleon", "ram_mb": 2048, "smp": "1",
-        "disk_gb": 24, "ssh_port": 2224, "vnc": 3,
+        "disk_gb": 8, "ssh_port": 2224, "vnc": 3,
         "media": "supplied by the owner: the Snow Leopard Server install disc as a raw image, a Chameleon "
                  "ISO, the 10.6.8 Server combo update",
         "estimate": "disk 8-12 GB in use, download 0 if the media already exist (estimates)",
