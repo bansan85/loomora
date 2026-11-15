@@ -1599,7 +1599,7 @@ def run_web_legacy(args):
             "target": "asmjs-unknown-emscripten" if path == "js" else "wasm32-unknown-emscripten",
             "output": path,
             "ui_language": "javascript (ECMAScript 3 syntax), html",
-            "ui_toolkit": "one HTML page (a text field and a div) and one script, DOM only, no framework; "
+            "ui_toolkit": "one HTML page (a one-row text area and a div) and one script, DOM only, no framework; "
                           "the backend is called through ccall / cwrap",
             "ui_compiler": "none: ui/legacy/web/app.js is served as written (tools/build.py checks "
                            "that it parses as ECMAScript 3)",

@@ -249,6 +249,7 @@ class RunResult(object):
         self.leftover = None  # UI processes still alive after the run (None: not measured)
         self.guest_wall_ms = None  # process lifetime measured inside the guest (None: not measured)
         self.page_ms = None  # Web in a browser: start of the browser to the posted record (None: not measured)
+        self.relaunched = False  # Web in a browser: firefox.exe did not start the first time and was started once more
 
 
 class Launcher(object):
@@ -1286,6 +1287,7 @@ WEB_FIREFOX_VM_PLATFORMS = {
     "web-firefox-10-windows-2000-x86": ("Windows 2000", "C:\\Program Files\\Mozilla Firefox\\firefox.exe"),
 }
 WEB_HOST_ADDRESS = "10.0.2.2"      # the host as seen from a VirtualBox NAT guest
+WEB_START_WAIT = 30                # seconds without any request before firefox.exe is started once more
 WEB_DIRECT_URL_MAX = 1500          # longer URLs go through a redirect: cmd.exe cuts a line at 8,191
 WEB_CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
                      ".wasm": "application/wasm"}
@@ -1421,6 +1423,12 @@ class WebProbeServer(object):
             self.events[run] = event
             self.posts.pop(run, None)
         return event
+
+    def requested(self, run):
+        """True when the page of run number `run` (or its redirect) has been requested."""
+        mine = re.compile(r"(?:[?&]run=%d(?:&|$)|^/v/%d$)" % (run, run))
+        with self.lock:
+            return any(method == "GET" and mine.search(path) for _s, _c, method, path, _st, _z, _a in self.requests)
 
     def log_text(self):
         lines = []
@@ -1629,6 +1637,19 @@ class WebFirefoxVmLauncher(Launcher):
             self.ff_count(kill=True)
             return RunResult(None, "", "", time.time() - start, str(e))
         launched = time.time()
+        relaunched = False
+        # About one start in fifteen of firefox.exe is lost in this 168 MB guest (no request ever
+        # reaches the server): when the page has not even been requested after WEB_START_WAIT
+        # seconds, the processes are ended and the browser is started once more (reported).
+        if not event.wait(min(timeout, WEB_START_WAIT)) and not self.server.requested(n):
+            relaunched = True
+            self.ff_count(kill=True)
+            try:
+                self.open_url(launch_url)
+            except VBoxError as e:
+                self.ff_count(kill=True)
+                return RunResult(None, "", "", time.time() - start, str(e))
+            launched = time.time()
         if not event.wait(timeout):
             self.ff_count(kill=True)
             return RunResult(None, "", "", time.time() - start,
@@ -1640,6 +1661,7 @@ class WebFirefoxVmLauncher(Launcher):
                            time.time() - start)
         result.leftover = leftover
         result.page_ms = int((posted - launched) * 1000)  # start of firefox.exe to the posted record
+        result.relaunched = relaunched
         return result
 
 
@@ -2122,7 +2144,8 @@ def main(argv=None):
         else:
             passed += 1
             say("ok   %s  %.1fs%s" % (vector.describe(), result.elapsed,
-                                       "" if result.page_ms is None else " (browser start to record %d ms)" % result.page_ms))
+                                       ("" if result.page_ms is None else " (browser start to record %d ms)" % result.page_ms)
+                                       + (" (firefox.exe lost at the first start, started once more)" if result.relaunched else "")))
     total = time.time() - started
     say("summary: %d vector(s) run, %d passed, %d failed, %d skipped; %d truncated to %d %s; "
         "%.1f s with %d worker(s)"

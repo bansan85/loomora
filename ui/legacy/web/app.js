@@ -32,7 +32,7 @@
   var GREET_CAP = 4200;         /* 4,000 bytes at most (1,000 units) + "Bonjour " + room */
   var PROBE_CAP = 16384;        /* the record is ASCII, at most about 14,000 bytes */
   var ABI_VERSION = 1;
-  var FAMILY_WEB = 6, UI_LEGACY = 1, CORE_WASM = 2, CORE_JS = 3;
+  var FAMILY_WINDOWS = 1, FAMILY_WEB = 6, UI_LEGACY = 1, CORE_WASM = 2, CORE_JS = 3;
   var LOAD_TIMEOUT_MS = 60000;
 
   var startTime = new Date().getTime();
@@ -370,13 +370,28 @@
 
   /* ---- start ------------------------------------------------------------------------- */
 
+  /* The system version for loomora_is_eol. A browser cannot read it, but its user agent states
+     "Windows NT <major>.<minor>" and Windows 2000 to 8.1 (NT 5.0 to 6.3) are reported truthfully,
+     so those are handed over as the Windows family, as the Win32 UI does. Windows 10 and 11 both
+     say NT 10.0 (frozen) and cannot be told apart, and every other system (macOS, Linux, Android)
+     is reported without a usable version: the page then tells the backend "Web family, version
+     0", which is never end of life, rather than guess. */
+  function systemVersion() {
+    var ua = typeof navigator !== "undefined" && navigator.userAgent ? String(navigator.userAgent) : "";
+    var m = /Windows NT (\d+)\.(\d+)/.exec(ua);
+    if (m && Number(m[1]) < 10) {
+      return [FAMILY_WINDOWS, Number(m[1]), Number(m[2])];
+    }
+    return [FAMILY_WEB, 0, 0];
+  }
+
   function ready(M) {
-    var eol = 0, eolEl, text;
+    var eol = 0, eolEl, text, sys;
     core = bindCore(M, webPath);
-    /* The family and the version are all the page tells the backend: a browser cannot read the
-       system version, and the backend answers 0 for the Web family; a 1 would show the
-       warning. */
-    eol = core.isEol(FAMILY_WEB, 0, 0);
+    /* The page only reads the system version the browser states and hands it to the backend;
+       the end-of-life thresholds and the warning text are the backend's (core/src/eol.cpp). */
+    sys = systemVersion();
+    eol = core.isEol(sys[0], sys[1], sys[2]);
     if (eol === 1) {
       eolEl = document.createElement("div");
       eolEl.id = "eol";
