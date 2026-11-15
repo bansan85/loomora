@@ -463,6 +463,19 @@ def conclusion(rec, name_pattern):
     return pats, vs, best[0] if best else "NOT CONCLUDED: no trial"
 
 
+def xp_conclusion(rec):
+    """Like conclusion() for Windows XP. PoC scope rule (spec Clarifications, 2026-11-15): a system
+    newer than the lowest one tried is taken as passing when the lowest one passes, so without an
+    XP trial a GO on Windows 2000 gives a GO by inference for XP (not a measurement)."""
+    pats, vs, lab = conclusion(rec, r"Windows XP")
+    if vs:
+        return pats, vs, lab
+    _, _, w2k = conclusion(rec, r"Windows 2000")
+    if w2k.startswith("GO"):
+        return pats, vs, "GO by inference: " + w2k.split(": ", 1)[1]
+    return pats, vs, lab
+
+
 def sharing_rows(rec):
     """One row per deliverable record: the shared-code numbers written by tools/measure_sharing.py
     (shared_loc, glue_loc, ui_loc, sharing_ratio) and the UI directory the record maps to."""
@@ -587,7 +600,7 @@ def run_checks(rec):
     lines = []
     open_count = 0
     for name, pat in (("Windows 2000", r"Windows 2000"), ("Windows XP", r"Windows XP")):
-        _, _, lab = conclusion(rec, pat)
+        _, _, lab = xp_conclusion(rec) if name == "Windows XP" else conclusion(rec, pat)
         lines.append("%s: %s" % (name, lab))
         open_count += lab.startswith("NOT CONCLUDED")
     checks.append(Check("SC-009", "MET" if not open_count else "INCOMPLETE",
@@ -699,9 +712,21 @@ def sec_conclusion(rec):
     out.append("")
 
     # Windows XP
-    pats, vs, lab = conclusion(rec, r"Windows XP")
+    pats, vs, lab = xp_conclusion(rec)
     out.append("### Windows XP: %s" % lab)
     out.append("")
+    if lab.startswith("GO by inference"):
+        out.append("No Windows XP system was run. Under the PoC scope rule (the Legacy UI is tried "
+                   "on the lowest testable system of a family only; success there is taken as "
+                   "success on every newer system and architecture, and a failure elsewhere would "
+                   "be a detail to fix later), the Windows 2000 result above stands for XP. This "
+                   "is an inference accepted by the owner, not a measurement: XP DLL export tables "
+                   "were never read and the XP-specific behaviours (visual styles, end-of-life "
+                   "banner) were not observed.")
+        out.append("")
+        out.append("**Conclusion (Windows XP): %s.**" % lab)
+        out.append("")
+        return out
     if vs:
         for v in vs:
             out.append("- Verdict `%s` on `%s` (decision: %s); evidence: %s." % (
@@ -1462,7 +1487,10 @@ def self_test():
     text = build(rec)
     expect("Windows 2000 concluded OK with restrictions",
            "### Windows 2000: GO: OK with restrictions" in text)
-    expect("Windows XP not concluded without a trial",
+    expect("Windows XP inferred from Windows 2000 without a trial",
+           "### Windows XP: GO by inference: OK with restrictions" in text)
+    text = build(_records([new], [_v("new-1", "legacy", "ok")]))
+    expect("Windows XP not concluded without any trial",
            "### Windows XP: NOT CONCLUDED: no trial" in text and "no verdict is recorded" in text)
     xp = _p("xp", "windows", "2001-10-25", 25.0, "Windows XP")
     for status, want in (("ok", "GO: OK"), ("ko", "NO-GO: KO")):

@@ -57,6 +57,10 @@
 - Q: How is the WinUI 3 Modern UI connected to the C++11 backend? → A: Written in C#, calling the C API of the backend directly (`LibraryImport`); **no C++/CLI**.
 - Q: Which toolkit and language for the Linux Modern UI? → A: **GTK 3 with gtkmm in C++, built with CMake** (owner decision 2026-11-14, replacing the first answer of 2026-11-12, "GTK 3, written in C" built with Meson; no libadwaita), as a plain executable without Flatpak, using only the GTK 3.10 API subset so it runs on distributions from about 2014 (floor to be confirmed by a trial). The UI uses the system gtkmm packages (gtkmm-3.0) and may be built against GTK 4 with gtkmm-4.0 through a CMake option; the C++ standards are C++11 for the Legacy UIs and up to C++17 for the Modern UIs (this one: C++11 with gtkmm-3.0, C++17 with gtkmm-4.0), while the backend stays C++11 whatever the UI uses (ADR 0006). The Linux Legacy UI (Xlib) is reserved for systems older than that, so a recent distribution such as Ubuntu 22.04 never needs the Legacy UI.
 
+### Session 2026-11-15 (fourth, PoC validation scope)
+
+- Q: On how many systems and processors must each UI be validated? → A: This is a proof of concept, so validating every system version and architecture is out of scope. The **Legacy UI** must run correctly on the **lowest testable system** of its family (Windows 2000, Android API 16, manylinux2010 for Linux); the **Modern UI** on **one system** (Windows 11, Android API 24, Ubuntu 24.04 under WSL) and on **one 64-bit processor**. Success on one system and one architecture is taken as success on every other system and architecture of the range; a failure elsewhere would be a detail to fix later. Rows not run (other Windows, Android and Linux versions, ARM, i686) stay `not_tested` in the records and are not failures. Consequences: SC-002 and SC-009 below are read with this rule, Windows XP is concluded by inference from Windows 2000 (no XP system is run), and the version ladders of User Story 2 (T088, T091, T092) stop at the lowest testable system.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - See the greeting on current platforms with the Modern UI (Priority: P1)
@@ -210,14 +214,14 @@ Any team member can redo the trials on a platform (even an old one) from the doc
 ### Measurable Outcomes
 
 - **SC-001**: With the Modern UI, the greeting "Bonjour Coucou" is displayed in under 3 seconds after launch, and updates within 1 second after typing, on 100% of the tier A platforms of the requirements document (§2.1.1) that are at or above the Modern UI floor of their family; tier A platforms below that floor (for example Android API 21 to 23) are served by the Legacy UI and recorded as such.
-- **SC-002**: For each of the 6 families, the oldest platform that works is identified with evidence for the Legacy UI, and at least **3 families out of 6** are validated with the Legacy UI on a system released **10 years ago or more**.
+- **SC-002**: For each of the 6 families, the lowest testable platform (see the Clarifications of 2026-11-15) is tried with the Legacy UI and the result is recorded with evidence, and at least **3 families out of 6** are validated with the Legacy UI on a system released **10 years ago or more**.
 - **SC-003**: At least **1 family** is validated with the Legacy UI on a system released **15 years ago or more** (full window or older), or its impossibility is demonstrated for each family by a documented cause and at least 2 solutions tried.
 - **SC-004**: 100% of the platforms and variants attempted have a verdict, evidence and reproduction procedure in the report; no platform is left without a verdict.
 - **SC-005**: 100% of hypotheses V1–V20 concerning the old platforms tested receive a verdict, or the mention "not covered by this probe" with the reason.
 - **SC-006**: A change of the greeting prefix, made in one single place, appears on 100% of the built platforms and on both variants with no other code change.
 - **SC-007**: At least **80%** of the application code (excluding generated code and packaging) is shared across platforms, the exact share is published per platform and per variant, and any gap below this value is justified.
 - **SC-008**: A person outside the trials reproduces the verdict of at least 3 old platforms from the documentation alone, with identical results.
-- **SC-009**: The go / no-go decision on Windows 2000 and Windows XP is made (the report concludes OK, OK with restrictions or KO), together with the possible revision of the current floors of the requirements document (Windows 10, macOS 11, iOS 15, Linux Ubuntu 20.04, Android API 21).
+- **SC-009**: The go / no-go decision on Windows 2000 and Windows XP is made (the report concludes OK, OK with restrictions or KO; XP is concluded by inference from Windows 2000 when no XP system is run, see the Clarifications of 2026-11-15), together with the possible revision of the current floors of the requirements document (Windows 10, macOS 11, iOS 15, Linux Ubuntu 20.04, Android API 21).
 - **SC-010**: For 100% of the platforms attempted, both variants have been built and tested, or the absence of one variant is justified in the report.
 - **SC-011**: For 100% of a fixed list of reference inputs (empty, ASCII, accented, CJK, right-to-left, emoji, 1,000 characters), the greeting displayed equals `"Bonjour "` + the input, character for character, on every tested platform and variant.
 
