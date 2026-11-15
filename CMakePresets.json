@@ -33,13 +33,30 @@
       "architecture": { "value": "ARM64", "strategy": "set" },
       "binaryDir": "${sourceDir}/build/host-msvc-arm64",
       "cacheVariables": { "LOOMORA_BUILD_TESTS": "OFF" }
+    },
+    {
+      "name": "web-wasm",
+      "description": "Emscripten (emsdk_env.sh sourced), WebAssembly: loomora.js + loomora.wasm and loomora_selftest.js (run by node)",
+      "generator": "Ninja",
+      "binaryDir": "$env{HOME}/loomora-build/web-wasm",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/emscripten-wasm.cmake",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "LOOMORA_BUILD_CATCH2_TESTS": "OFF" }
+    },
+    {
+      "name": "web-js",
+      "description": "Emscripten (emsdk_env.sh sourced), JavaScript only (-sWASM=0 -sLEGACY_VM_SUPPORT=1): loomora.js and loomora_selftest.js (run by node)",
+      "inherits": "web-wasm",
+      "binaryDir": "$env{HOME}/loomora-build/web-js",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/emscripten-js.cmake"
     }
   ],
   "buildPresets": [
     { "name": "host-gcc", "configurePreset": "host-gcc" },
     { "name": "host-clang", "configurePreset": "host-clang" },
     { "name": "host-msvc", "configurePreset": "host-msvc", "configuration": "Release" },
-    { "name": "host-msvc-arm64", "configurePreset": "host-msvc-arm64", "configuration": "Release" }
+    { "name": "host-msvc-arm64", "configurePreset": "host-msvc-arm64", "configuration": "Release" },
+    { "name": "web-wasm", "configurePreset": "web-wasm" },
+    { "name": "web-js", "configurePreset": "web-js" }
   ],
   "testPresets": [
     { "name": "host-msvc", "configurePreset": "host-msvc", "configuration": "Release" }
