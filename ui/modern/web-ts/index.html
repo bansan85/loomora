@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Loomora</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f4f6fb;
+  --surface: #ffffff;
+  --text: #14161a;
+  --muted: #565d6b;
+  --border: #c3c9d6;
+  --accent: #2f5bd3;
+  --accent-soft: rgba(47, 91, 211, 0.18);
+  --warn-bg: #fff3d6;
+  --warn-text: #4a2c00;
+  --warn-border: #b07a1a;
+  --shadow: 0 1px 2px rgba(20, 22, 26, 0.08), 0 8px 24px rgba(20, 22, 26, 0.08);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101216;
+    --surface: #1a1d23;
+    --text: #eef0f4;
+    --muted: #a7aebb;
+    --border: #3b414d;
+    --accent: #8fb0ff;
+    --accent-soft: rgba(143, 176, 255, 0.25);
+    --warn-bg: #3a2a00;
+    --warn-text: #ffe3a3;
+    --warn-border: #c89b3c;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.4);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.4;
+}
+main {
+  max-width: 36rem;
+  margin: 0 auto;
+  padding: clamp(1.5rem, 12vh, 6rem) 1rem 2rem;
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  box-shadow: var(--shadow);
+  padding: 1.5rem;
+}
+label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+textarea {
+  display: block;
+  width: 100%;
+  min-height: 2.75rem;
+  max-height: 14rem;
+  padding: 0.6rem 0.8rem;
+  font: inherit;
+  font-size: 1.15rem;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  resize: vertical;
+  field-sizing: content;
+}
+textarea:focus-visible {
+  outline: 3px solid var(--accent-soft);
+  border-color: var(--accent);
+}
+#greeting {
+  display: block;
+  margin-top: 1.5rem;
+  min-height: 1.4em;
+  font-size: clamp(1.5rem, 6vw, 2.25rem);
+  font-weight: 700;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+#status {
+  margin: 1rem 0 0;
+  min-height: 1.2em;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+#eol {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--warn-border);
+  border-radius: 0.6rem;
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  font-size: 0.9rem;
+}
+#eol[hidden], #probe[hidden] { display: none; }
+#probe {
+  margin: 1rem 0 0;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: var(--surface);
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <label for="name">Text</label>
+    <textarea id="name" name="name" rows="1" maxlength="1000" autocomplete="off" spellcheck="false">Coucou</textarea>
+    <output id="greeting" for="name" aria-live="polite"></output>
+    <p id="status" role="status">Loading the backend...</p>
+    <div id="eol" role="alert" hidden></div>
+  </div>
+  <pre id="probe" aria-label="Probe record" hidden></pre>
+</main>
+<noscript><p>Loomora needs JavaScript.</p></noscript>
+<script type="module" src="main.js"></script>
+</body>
+</html>

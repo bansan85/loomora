@@ -1,0 +1,13 @@
+{
+  "name": "loomora-web-ts",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Loomora Web Modern UI: TypeScript, ES modules, WebAssembly only. No runtime dependency.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}

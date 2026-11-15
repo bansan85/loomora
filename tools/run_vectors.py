@@ -66,6 +66,10 @@ page script ui/legacy/web/app.js and the module of `python tools/build.py web le
 in a minimal DOM stub and without any browser, with the URL `?probe=1&input=<percent-encoded>&platform=<id>`
 (ASCII, passed on standard input). The page decides by itself between the JavaScript build and the
 WebAssembly one; the id says which one the harness makes possible.
+Web modern under node (platform id web-node-wasm only, same WebNodeLauncher): the same harness runs
+the Modern page (index.html + the ES modules of `python tools/build.py web modern`,
+$HOME/loomora-build/web-modern/dist, or the folder of --exe) with `node --experimental-vm-modules`, in
+the same DOM stub, with the same query; the record must say ui_variant modern and core cpp-wasm.
 Web legacy in a real browser in a VirtualBox guest (platform id web-firefox-10-windows-2000-x86, see
 WebFirefoxVmLauncher): the dist folder is served over HTTP by this process, Firefox 10 in the VM
 "Windows 2000" opens `http://10.0.2.2:<port>/index.html?probe=1&input=<text>&platform=<id>&post=1&run=<n>`
@@ -1218,9 +1222,10 @@ def web_probe_query(text, platform_id):
 
 
 class WebNodeLauncher(Launcher):
-    """The Web Legacy page (index.html + app.js) and its built module run by page-harness.js under
-    node, in a DOM stub: no browser. The query goes through standard input, so that no command line
-    (the one of wsl.exe included) can change it. The field limit counts UTF-16 units (JavaScript)."""
+    """The Web page (Legacy: index.html + app.js; Modern: index.html + ES modules) and its built module
+    run by page-harness.js under node, in a DOM stub: no browser. The query goes through standard
+    input, so that no command line (the one of wsl.exe included) can change it. The field limit
+    counts UTF-16 units (JavaScript). The Modern page only has the wasm path (web-node-wasm)."""
 
     length_unit = "utf16"
 
@@ -1233,7 +1238,10 @@ class WebNodeLauncher(Launcher):
             self.prefix = ["wsl", "-d", distro, "--cd", str(common.ROOT), "--"]
 
     def command(self):
-        cmd = self.prefix + ["node", WEB_HARNESS, "--path", self.path, "--query", "-"]
+        modern = self.args.variant == "modern"
+        # the Modern page is an ES module run through vm.SourceTextModule (experimental in node)
+        node = ["node", "--experimental-vm-modules", "--disable-warning=ExperimentalWarning"] if modern else ["node"]
+        cmd = self.prefix + node + [WEB_HARNESS, "--variant", self.args.variant, "--path", self.path, "--query", "-"]
         if self.args.exe:
             cmd += ["--dist", self.args.exe]
         return cmd
@@ -1246,10 +1254,11 @@ class WebNodeLauncher(Launcher):
                                input=web_probe_query("Coucou", self.args.platform_id).encode("ascii"),
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if probe.returncode != 0:
-            raise RuntimeError("the page does not run (build it: python tools/build.py web legacy; "
+            raise RuntimeError("the page does not run (build it: python tools/build.py web %s; "
                                "folder of --exe or $LOOMORA_WEB_DIST): %s"
-                               % probe.stderr.decode("utf-8", "replace").strip()[:300])
-        return "node page-harness.js, %s path (the page script and the module of tools/build.py web legacy)" % self.path
+                               % (self.args.variant, probe.stderr.decode("utf-8", "replace").strip()[:300]))
+        return ("node page-harness.js, %s path (the page and the module of tools/build.py web %s)"
+                % (self.path, self.args.variant))
 
     def run(self, text, timeout):
         start = time.time()
@@ -1644,6 +1653,8 @@ def select_launcher(family, variant, platform_id):
         return WindowsVirtualBoxLauncher
     if (family, variant) == ("web", "legacy") and platform_id in WEB_NODE_PLATFORMS:
         return WebNodeLauncher
+    if (family, variant) == ("web", "modern") and WEB_NODE_PLATFORMS.get(platform_id) == "wasm":
+        return WebNodeLauncher   # the Modern page has no JavaScript path
     if (family, variant) == ("web", "legacy") and platform_id in WEB_FIREFOX_VM_PLATFORMS:
         return WebFirefoxVmLauncher
     return LAUNCHERS.get((family, variant))
@@ -1766,6 +1777,17 @@ def self_test():
                True)
     expect("web launcher for web-node-js", select_launcher("web", "legacy", "web-node-js"), WebNodeLauncher)
     expect("web launcher for web-node-wasm", select_launcher("web", "legacy", "web-node-wasm"), WebNodeLauncher)
+    expect("web modern launcher for web-node-wasm", select_launcher("web", "modern", "web-node-wasm"), WebNodeLauncher)
+    expect("no web modern launcher for web-node-js (no JavaScript path)", select_launcher("web", "modern", "web-node-js"), None)
+    expect("no web modern launcher for the Firefox VM platform", select_launcher("web", "modern", "web-firefox-10-windows-2000-x86"), None)
+    for variant, flag in (("legacy", False), ("modern", True)):
+        args = type("A", (), {"variant": variant, "platform_id": "web-node-wasm", "exe": None, "wsl_distro": None})()
+        launcher = WebNodeLauncher(args)
+        cmd = launcher.command()
+        expect("web node command, %s: --variant and the path are passed on" % variant,
+               cmd[cmd.index(WEB_HARNESS) + 1:], ["--variant", variant, "--path", "wasm", "--query", "-"])
+        expect("web node command, %s: vm modules flag only for modern" % variant,
+               "--experimental-vm-modules" in cmd, flag)
     expect("no launcher for a browser platform that was not run", select_launcher("web", "legacy", "web-firefox-12-windows-2000-x86"), None)
     expect("web launcher for Firefox 10 in the Windows 2000 VM",
            select_launcher("web", "legacy", "web-firefox-10-windows-2000-x86"), WebFirefoxVmLauncher)
