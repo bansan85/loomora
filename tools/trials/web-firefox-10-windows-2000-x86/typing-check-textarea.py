@@ -29,7 +29,9 @@ w2k = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(w2k)
 
 PLATFORM_ID = "web-firefox-10-windows-2000-x86"
-TAB, CTRL, A = 0x0F, 0x1D, 0x1E
+# On the French AZERTY layout of the guest the letter A is the key at scancode 0x10 (the Q of a
+# QWERTY keyboard), so Ctrl+A is Ctrl + scancode 0x10; 0x1E would be Ctrl+Q.
+TAB, CTRL, A = 0x0F, 0x1D, 0x10
 
 
 def main():
