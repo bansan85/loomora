@@ -7,8 +7,8 @@ Usage:
 
 quick (default)  builds what exists for this host, then runs ctest, tools/run_vectors.py for
                  the UIs built here, tools/check_std.py, tools/check_ui_logic.py (self-test, then the search of
-                 ui/ for a greeting built outside the backend), tools/validate_records.py and the self-test
-                 of tools/diff_verdicts.py.
+                 ui/ for a greeting built outside the backend), tools/validate_records.py and the self-tests
+                 of tools/diff_verdicts.py and tools/run_vectors.py.
                  Linux / WSL: core + the Linux UIs the top-level CMake offers, default variant
                  only (the UIs run on a private Xvfb display when Xvfb is installed, else on the
                  inherited display). Windows host: the clang + Ninja build of core and the Win32
@@ -363,6 +363,12 @@ def step_diff(ctx):
     ctx.ok("diff_verdicts") if rc == 0 else ctx.fail("diff_verdicts", "self-test status %d" % rc, log)
 
 
+def step_vectors_selftest(ctx):
+    log = ctx.log("run_vectors_selftest")
+    rc, _ = run_logged(log, [sys.executable, ROOT / "tools" / "run_vectors.py", "--self-test"])
+    ctx.ok("run_vectors_selftest") if rc == 0 else ctx.fail("run_vectors_selftest", "self-test status %d" % rc, log)
+
+
 def host_platform_id():
     if IS_WINDOWS:
         rel = "11" if sys.getwindowsversion().build >= 22000 else platform.release()
@@ -515,6 +521,7 @@ def make_plan(ctx):
     S.append(("ui-logic", {"ui-logic"}, "tools/check_ui_logic.py (no UI builds the greeting; self-test first)", step_ui_logic, False))
     S.append(("records", {"records"}, "tools/validate_records.py (fetches the docs submodule when missing)", step_records, False))
     S.append(("diff_verdicts", {"diff"}, "tools/diff_verdicts.py --self-test", step_diff, False))
+    S.append(("run_vectors_selftest", {"vectors-selftest"}, "tools/run_vectors.py --self-test (platform id rules)", step_vectors_selftest, False))
     if ctx.variants or (ctx.only and ctx.only & ({"variants", "xlib-corefont"} | set(v[0] for v in VARIANTS))):
         if not IS_WINDOWS:
             for vid, ui, extra, hint in VARIANTS:
