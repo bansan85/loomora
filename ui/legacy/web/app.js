@@ -17,6 +17,10 @@
  *   input=TEXT   the text put in the field instead of "Coucou" (cut to 1,000 UTF-16 units)
  *   platform=ID  the platform_id of the probe record (default "web-unknown")
  *   path=js      use the JavaScript build even in a browser that has WebAssembly
+ *   post=1       also send the record to the server of the page: an XMLHttpRequest POST of the line
+ *                to /probe<same query string> (a failure is sent to /probe-error instead). For a
+ *                browser with no console or DOM dump to read (Firefox 10 in a virtual machine);
+ *                nothing else changes.
  * The probe record (one ASCII JSON line, loomora_probe_record) is written in <pre id="probe">
  * and to console.log, and document.title becomes LOOMORA_PROBE_DONE, or
  * "LOOMORA_PROBE_ERROR: <message>" when something failed. '+' in a value is a plus sign.
@@ -291,6 +295,23 @@
 
   /* ---- probe ------------------------------------------------------------------------- */
 
+  /* post=1: sends `body` to `path` on the same origin, with the query string of the page. Plain
+     XMLHttpRequest, no reply is read; a failure to send is ignored (the title tells the result). */
+  function postToServer(path, body) {
+    var xhr;
+    try {
+      if (param("post") !== "1" || typeof XMLHttpRequest === "undefined") {
+        return;
+      }
+      xhr = new XMLHttpRequest();
+      xhr.open("POST", path + (window.location.search || ""), true);
+      xhr.setRequestHeader("Content-Type", "text/plain; charset=us-ascii");
+      xhr.send(body);
+    } catch (e) {
+      /* nothing more to do */
+    }
+  }
+
   function two(n) {
     return n < 10 ? "0" + n : "" + n;
   }
@@ -324,6 +345,7 @@
       console.log(line);
     }
     document.title = "LOOMORA_PROBE_DONE";
+    postToServer("/probe", line);
   }
 
   /* ---- errors ------------------------------------------------------------------------ */
@@ -336,6 +358,7 @@
     failed = true;
     if (probeMode) {
       document.title = "LOOMORA_PROBE_ERROR: " + message;
+      postToServer("/probe-error", "LOOMORA_PROBE_ERROR: " + message);
     }
     if (statusEl) {
       setText(statusEl, "Error: " + message);
