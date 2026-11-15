@@ -44,10 +44,10 @@ Loomora automatically turns a digital image (photo, logo, illustration, silhouet
 | Windows | x86_64 | MSVC (`loomora.dll` called from C#, spike S8) | **Windows 10 version 1809+** (build 17763, the minimum of WinUI 3 on the Windows App SDK); WinUI 3 UI, framework-dependent (the .NET Desktop Runtime and the Windows App Runtime must be installed) |
 | Windows | **ARM64** | MSVC (ARM64 `loomora.dll`) | Full native support (Surface, Copilot+, Snapdragon X); WinUI 3 UI |
 | Windows **legacy** | x86 (Windows 2000 and later), x86_64 (XP x64 and later) | MinGW-w64 GCC, cross-compiled from WSL (ADR 0012) | **Windows 2000 minimum** (validated on build 2195 without service pack, §2.1.2); plain **Win32** UI, no MFC (ADR 0009); restricted features (§2.1.2) |
-| macOS | ARM64 + x86_64 | To be chosen (spikes S2 and S7 open) | macOS 11+, Universal 2 binary |
-| Linux | x86_64 + AArch64 | The C++11 compiler and CMake of the target machine: binaries are built on the machine that runs them (ADR 0007) | **Legacy UI (Xlib)**: any distribution with a C++11 compiler, CMake and the libX11 development files; the lowest userland tried is CentOS 5.11 (manylinux1 image, glibc 2.5). **Modern UI (gtkmm)**: GTK 3.10 API as the floor (§2.2.1). Plain executables: no AppImage, no Flatpak |
+| macOS | ARM64 + x86_64 | To be chosen (spikes S2 and S7 open) | macOS 11+, Universal 2 binary (the spec 001 target macOS 10.6 is untried: no trial yet) |
+| Linux | x86_64 + AArch64 (AArch64 outside the probe scope) | The C++11 compiler and CMake of the target machine: binaries are built on the machine that runs them (ADR 0007) | **Legacy UI (Xlib)**: any distribution with a C++11 compiler, CMake and the libX11 development files; the lowest userland tried is CentOS 5.11 (manylinux1 image, glibc 2.5). **Modern UI (gtkmm)**: GTK 3.10 API as the floor (§2.2.1). Plain executables: no AppImage, no Flatpak |
 | Android | armeabi (ARMv5TE), ARMv7, ARM64, x86, x86_64 | Legacy UI: NDK r15c driven by a CMake toolchain file (ADR 0016); Modern UI: a current NDK with the Android Gradle plugin | **Legacy UI: minSdk = API 9 (Android 2.3)**, built for API 9 and run on API 16 (ADR 0016); **Modern UI: minSdk = API 24 (Android 7.0)**, native Kotlin UI (the pinned Compose and AndroidX libraries need API 23, spike S8); targetSdk according to the Google Play requirement at the time of publication (§2.2) |
-| iOS / iPadOS | ARM64 | To be chosen (spikes S2 and S7 open) | **iOS 15.0 minimum**, with functional restrictions if an API is missing; native SwiftUI UI (§2.2) |
+| iOS / iPadOS | ARM64 | To be chosen (spikes S2 and S7 open) | **iOS 15.0 minimum**, with functional restrictions if an API is missing (the spec 001 target iOS 5 is untried: no trial yet); native SwiftUI UI (§2.2) |
 | Web (PWA) **[P2, in scope]** | WebAssembly; JavaScript for the browsers without WebAssembly | Emscripten 7.0.0 (WebAssembly path); Emscripten 1.39.20 fastcomp (JavaScript path, ADR 0017) | Chrome, Safari, Firefox with WebAssembly: dedicated TypeScript web UI (Modern), bound to the WebAssembly engine; Legacy page in ECMAScript 3 JavaScript, down to Firefox 10.0 on Windows 2000 through the JavaScript path; Internet Explorer up to 9 is dropped; Safari is covered by inference (ADR 0017); WebGPU if available, otherwise CPU engine; engine in Web Workers; OPFS / IndexedDB storage; no embedded server and no BLE on Safari (the browser is a client of a Loomora server) |
 
 Guiding principle: target the oldest devices accepted by the stores. **It is acceptable to disable features** on those devices (§2.3) rather than raise the floor.
@@ -57,7 +57,7 @@ Support is organized in tiers, according to the availability of a C++11 compiler
 
 | Tier | Deliverable | Architectures |
 |---|---|---|
-| **A** | Complete packaged application (native UI) | The table in §2.1 |
+| **A** | Complete packaged application (native UI); not confirmed for any platform as a packaged application: the phase 0 probe built plain executables only (V20, validation report) | The table in §2.1 |
 | **B** | Complete application if the UI toolkit exists on the target (WinUI 3, GTK), otherwise tier C | Windows x86 32-bit (WinUI 3 or Win32 Legacy UI); Linux x86 32-bit; **Linux ARM 32-bit** (ARMv7, ARMv6); Linux RISC-V 64; **Linux PowerPC 64 little-endian** |
 | **C** | CPU engine + CLI + embedded server; the UI is the PWA served to a local or remote browser (§9.2) | **Linux PowerPC 32-bit and 64-bit big-endian**; s390x; LoongArch64; FreeBSD; other targets with a C++11 compiler |
 
@@ -66,6 +66,7 @@ Cross-cutting constraints:
 - **Big-endian**: all serialization (files, BLE, database) is explicitly little-endian; CI tests under emulation (QEMU).
 - **SIMD**: a portable scalar path is mandatory; NEON, SSE / AVX, AltiVec / VSX are optional optimizations.
 - **GPU**: absent or unsupported on these targets → CPU engine.
+- **Outside the probe scope** (owner decision 2026-11-15): PowerPC, MIPS, Itanium, Linux AArch64, Linux ARM 32-bit and RISC-V stay in the targets of this document, but the phase 0 probe does not build or test them (spec 001 Clarifications 2026-11-12).
 - "Best-effort" support outside tier A, with CI building and testing the engine on every declared target that a GitHub-hosted runner can run; the other targets (old systems, virtual machines, emulators) are local runs recorded in the validation records (ADR 0018).
 
 #### 2.1.2 Windows legacy (Windows 2000 and later) — Win32 UI
@@ -83,7 +84,7 @@ Windows has **two UIs**: **WinUI 3** (modern) and a plain **Win32** UI (Windows 
   - Voice: SAPI 5 if installed, otherwise the feature is disabled (decision 16.1 no. 4).
   - No PWA and no embedded webview.
   - Recorded by the trials on Windows 2000: no DPI awareness and no dark theme (§2.3).
-- **Drawing and themes**: GDI+ for path drawing; light / dark themes drawn by the application (Win32 *owner-draw*); high contrast follows the Windows contrast scheme.
+- **Drawing and themes**: plain GDI for path drawing; GDI+ is an optional improvement, looked up at run time and skipped on systems without it (a plain-GDI path always exists); light / dark themes drawn by the application (Win32 *owner-draw*); high contrast follows the Windows contrast scheme.
 - **Security**: Windows 2000 and XP are no longer maintained by Microsoft. The application displays an end-of-life warning (shown on Windows 2000) and exposes nothing outside the local network.
 
 ### 2.2 Technical stack
@@ -774,6 +775,7 @@ Reading after the probe (rows keep their numbers; the text as worded is also in 
 - **Deliverables**: validation report (matrix of §15.1.4 filled in: OK, OK with restrictions, KO), decision log (ADR), versioned reference dataset, reproducible test bench, PoC kept as a non-regression baseline.
 - **Update of the requirements document**: tiers A / B / C (§2.1.1) reclassified, decisions of §16 confirmed or revised, features disabled per platform (§2.3) specified.
 - **Milestone G0 (move to phase 1)**: all hypotheses for the tier A platforms are validated, and the go / no-go decision is made for **Windows XP (V1, V9)**. The tier B and C targets can continue in parallel, their decision having to be made before phase 7.
+- **Status of G0 (2026-11-15)**: pending the owner's explicit decision, for each of the 15 hypotheses not covered by the probe, whether it is covered or explicitly not covered; G0 is not declared reached.
 - **Go / no-go for the old Windows systems** (2026-11-15): Windows 2000 is *go* (OK with restrictions, verdict `windows-2000-x86-legacy`); Windows XP is *go by inference*, no XP system was run (spec Clarifications 2026-11-15).
 
 ---
@@ -787,12 +789,12 @@ These decisions remain **provisional** until they are validated by the phase 0 P
 | # | Item | Decision |
 |---|---|---|
 | 1 | UI | **Native UI per platform**, two per platform (Legacy and Modern, ADR 0008): Kotlin and Java views (Android), SwiftUI and Objective-C (iOS, iPadOS, macOS; not built), PWA / WebAssembly (web); Windows: WinUI 3 + Win32 (no. 8); Linux: see no. 9. **Tauri ruled out** (§2.2) |
-| 2 | Minimum iOS | **iOS 15.0**, with possible functional restrictions on missing APIs |
+| 2 | Minimum iOS | **iOS 15.0**, with possible functional restrictions on missing APIs (the spec 001 target iOS 5 is untried until a trial; owner decision 2026-11-15) |
 | 3 | Persistence | **SQLite (`rusqlite`, embedded SQLite)** — chosen by default, the user having no preference: transactional, portable across 32 / 64-bit and little / big-endian, mature tooling. `redb` ruled out (less proven on exotic architectures) |
 | 4 | Speech recognition | **System API only**; feature disabled if it is absent (§10.1) |
 | 5 | `.loomora` format | Validated; specified in §9.1 |
 | 6 | PWA / WebAssembly | **In scope** (P2) |
-| 7 | Architectures | **As many as possible**, including Linux ARM 32-bit and PowerPC; tiers A / B / C (§2.1.1) |
+| 7 | Architectures | **As many as possible**, including Linux ARM 32-bit and PowerPC; tiers A / B / C (§2.1.1). PowerPC, MIPS, Itanium, Linux AArch64, ARM 32-bit and RISC-V are outside the probe scope (not built or tested by the phase 0 probe) |
 | 8 | Windows UI | **Two UIs**: **WinUI 3** (Windows 10 version 1809+, x86 / x64 / ARM64) and plain **Win32** in C++11 (Windows 2000 and later, x86 / x64); **MFC dropped** (ADR 0009); §2.1.2 |
 | 9 | Linux desktop UI | **Two UIs**: Modern = GTK 3 with gtkmm (C++, CMake), GTK 3.10 API as the floor, GTK 4 with gtkmm-4.0 as a build option, each newer feature behind a compile-time macro; Legacy = Xlib with Xft (C++11, CMake). Plain executables built on the machine that runs them, no Flatpak, no AppImage, no libadwaita (owner decisions 2026-11-12 and 2026-11-14; ADR 0005, 0006, 0007, 0010). Slint was not tried |
 | 13 | Android UI | **Two UIs**: Legacy in Java views (API 9 to 23), Modern in Kotlin and Jetpack Compose (API 24+, the pinned Compose and AndroidX libraries need API 23, spike S8); ADR 0008, ADR 0016 |
@@ -876,3 +878,8 @@ Note (2026-11-15): the requests "Rust and not C++" and "Windows MFC version comp
 | 2026-11-15 | V6.5 | Disabled features recorded by the trials added to §2.3 (Windows 2000: DPI awareness, dark theme; Linux Legacy: missing glyph, text shaping and bidi, glyph substitution; Android Modern: `uimode-contrast`; Web Legacy: peak memory) | Verdicts `windows-2000-x86-legacy`, `linux-*-legacy`, `android-7.0-x86_64-modern`, `web-firefox-10-windows-2000-x86-legacy`; report section 10 |
 | 2026-11-15 | V6.5 | Phase 0 as run (minimal probe, PoC scope rule, reduced test bench), reading of the hypotheses matrix, go / no-go for Windows 2000 and XP; §15.1.3, §15.1.4, §15.1.5 | Spec Clarifications 2026-11-15 (fourth session) and Assumptions; report sections 2 and 9 |
 | 2026-11-15 | V6.5 | Decisions of §16: no. 1 and 8 updated; no. 9, 13 and 14 settled and moved from §16.2 to §16.1; requirement identifiers and rows V1 to V20 unchanged | As the rows above |
+| 2026-11-15 | V6.5 | macOS 11 and iOS 15 kept as the floors until a trial; the spec 001 targets macOS 10.6 and iOS 5 noted as untried (§2.1, §16.1 no. 2) | Owner decision 2026-11-15 |
+| 2026-11-15 | V6.5 | PowerPC, MIPS, Itanium, Linux AArch64, ARM 32-bit and RISC-V kept and marked "outside the probe scope" (§2.1, §2.1.1, §16.1 no. 7) | Owner decision 2026-11-15 |
+| 2026-11-15 | V6.5 | Tier A noted as not confirmed for any platform as a packaged application (§2.1.1) | Owner decision 2026-11-15; V20, validation report section 10 |
+| 2026-11-15 | V6.5 | Win32 Legacy path drawing: plain GDI required, GDI+ optional and skipped where absent (§2.1.2) | Owner decision 2026-11-15 |
+| 2026-11-15 | V6.5 | Milestone G0 left pending the owner's decision on each of the 15 uncovered hypotheses (§15.1.5); Rust-named library roles left to the reading note | Owner decision 2026-11-15 |
