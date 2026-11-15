@@ -1,0 +1,195 @@
+# Continuous integration, quality gates (T128): the checks on the validation records and on the
+# tools that read them. See ADR 0018 in docs/implementation/adr/ and docs/building/README.md
+# (section "Continuous integration") for what each workflow does and which artifact it makes.
+#
+# GitHub-hosted runners only, no secret, no self-hosted runner (both repositories are public).
+#
+# What this workflow runs, on one `ubuntu-24.04` runner, in about a minute:
+#   - `python3 tools/validate_records.py`: the records in docs/implementation/validation/ against
+#     data-model.md, the evidence hashes, the fallbacks against the macros of the code;
+#   - `python3 tools/report.py --check`: the generated validation/report.md is up to date and the
+#     success criteria it prints are read from the records;
+#   - `python3 tools/diff_verdicts.py <baseline>`: the verdicts compared with the verdicts of the
+#     TARGET branch (FR-018). The baseline is the docs revision that the target branch points to:
+#     the base of a pull request, or, on a push, the merge base of the branch and `master` (the
+#     commit before the push when the branch is `master`). The comparison is a report, written to
+#     the job summary; it does not fail on a changed status (a change of verdict is a decision of
+#     the owner, not a defect), it fails only when the baseline cannot be read;
+#   - the self-tests of the tools: validate_records, report, diff_verdicts, check_probe,
+#     check_imports and run_vectors (the platform id rules). None needs a submodule.
+# Every check runs even if an earlier one failed, and the step then fails; the logs are the
+# artifact `quality-logs` (also on failure).
+#
+# What this workflow does NOT do: it builds nothing. The executables, probe lines and vector logs
+# are made by the other workflows and are their artifacts (table in docs/building/README.md):
+# ci.yml (verify-logs-*), windows.yml (windows-legacy-exe, vectors-logs-*, verify-logs-windows-host),
+# winui3.yml (winui3-zips, winui3-vectors-logs-*), web.yml (web-*-dist, web-logs, web-chrome-logs),
+# android.yml (android-*-apk, android-*-build-log, android-*-emulator-logs) and manylinux1.yml
+# (manylinux1-logs).
+#
+# Replaying the procedures (FR-016, FR-018): the jobs of those workflows replay the procedures that
+# a hosted runner can run (the reference vectors through each UI, the Linux window run on a private
+# Xvfb, the manylinux1 L.11 steps). Whatever needs a virtual machine or Apple hardware is a local
+# run (docs/building/README.md, "Local runs (not CI)"). A log is stored as evidence only when it
+# proves something new (ADR 0014): the artifacts expire after 14 days and are not evidence.
+#
+# Rules kept in every workflow of this repository (T129), see ci.yml: third-party actions pinned
+# by full commit SHA, a read-only token, `persist-credentials: false`, cancelled outdated runs, a
+# timeout on every job, a `changes` job, and a `gate (quality)` job as the one check to require.
+
+name: quality
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Finds the baseline of the comparison of the verdicts. Pull requests from this repository are
+  # already checked by the `push` event of their branch, so only pull requests from forks run here.
+  changes:
+    name: changes
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      target: ${{ steps.baseline.outputs.target }}
+      docs: ${{ steps.baseline.outputs.docs }}
+    steps:
+      - name: Check out (history, no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: false
+          persist-credentials: false
+      - name: Find the target branch and its docs revision
+        id: baseline
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          target=""
+          if [ "$EVENT" = pull_request ]; then
+            target="$PR_BASE"
+          elif [ "$REF" = refs/heads/master ] && [ -n "$BEFORE" ] && [ "${BEFORE#0000000}" = "$BEFORE" ] \
+              && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            target="$BEFORE"
+          elif git rev-parse --verify --quiet refs/remotes/origin/master >/dev/null; then
+            target="$(git merge-base HEAD refs/remotes/origin/master || true)"
+          fi
+          docs=""
+          if [ -n "$target" ]; then
+            docs="$(git ls-tree "$target" docs/implementation | awk '$2 == "commit" { print $3 }')"
+          fi
+          echo "target commit: ${target:-(none: no master and no base)}"
+          echo "docs revision of the target: ${docs:-(none)}"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "docs=$docs" >> "$GITHUB_OUTPUT"
+
+  quality:
+    name: quality gates
+    needs: changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out (submodules)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # docs/implementation (../loomora-docs, resolved by git against the URL of this
+          # repository, so the sibling repository on GitHub) holds the records.
+          submodules: recursive
+          persist-credentials: false
+      - name: Install python3-jsonschema (tools/check_probe.py)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-jsonschema
+      - name: Run the quality checks
+        env:
+          DOCS_BASE: ${{ needs.changes.outputs.docs }}
+          TARGET: ${{ needs.changes.outputs.target }}
+        run: |
+          logs="$RUNNER_TEMP/quality-logs"
+          mkdir -p "$logs"
+          test -d docs/implementation/validation
+          failed=0
+          summary="$GITHUB_STEP_SUMMARY"
+          printf '| check | result |\n|---|---|\n' >> "$summary"
+          check() { # label, then the command
+            local label="$1" rc
+            shift
+            echo "::group::$label"
+            set +e
+            "$@" > "$logs/$label.log" 2>&1
+            rc=$?
+            set -e
+            cat "$logs/$label.log"
+            echo "::endgroup::"
+            if [ "$rc" -eq 0 ]; then
+              printf '| %s | passed |\n' "$label" >> "$summary"
+            else
+              printf '| %s | FAILED (status %s) |\n' "$label" "$rc" >> "$summary"
+              echo "::error::$label failed with status $rc"
+              failed=1
+            fi
+          }
+          check validate_records python3 tools/validate_records.py
+          check report_check python3 tools/report.py --check
+          for tool in validate_records report diff_verdicts check_probe check_imports run_vectors; do
+            check "selftest_$tool" python3 "tools/$tool.py" --self-test
+          done
+          if [ -z "$DOCS_BASE" ]; then
+            echo "no baseline (no master branch and no base commit): diff_verdicts not run"
+            printf '| diff_verdicts | not run: no target branch to compare with |\n' >> "$summary"
+          else
+            # The submodule checkout is shallow: fetch the docs revision of the target branch
+            # (a commit of the public loomora-docs repository) when it is not there.
+            if ! git -C docs/implementation cat-file -e "$DOCS_BASE^{commit}" 2>/dev/null; then
+              git -C docs/implementation fetch --no-tags --quiet origin "$DOCS_BASE" || true
+            fi
+            check diff_verdicts python3 tools/diff_verdicts.py "$DOCS_BASE"
+            {
+              printf '\n### Verdicts compared with the target branch (%s, docs %s)\n\n```\n' "${TARGET:0:7}" "${DOCS_BASE:0:7}"
+              cat "$logs/diff_verdicts.log"
+              printf '```\n'
+            } >> "$summary"
+          fi
+          exit "$failed"
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: quality-logs
+          path: ${{ runner.temp }}/quality-logs
+          if-no-files-found: warn
+          retention-days: 14
+
+  # The single check to require in the branch protection rule for this workflow: it passes when
+  # every job that had to run passed (a skipped job is fine, a failed or cancelled one is not).
+  gate:
+    name: gate (quality)
+    needs: [changes, quality]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check the results
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          case " $RESULTS " in
+            *" failure "*|*" cancelled "*) exit 1 ;;
+          esac
