@@ -99,6 +99,7 @@ Date: 2026-11-12. Rewritten after the backend moved from Rust to C++11 (spec, se
 | S7 | Can the 10.6 SDK and Xcode 5.1.1 be obtained legitimately? | R4, R5 |
 | S8 | Can WinUI 3 call a C++11 `loomora.dll`, and does Compose accept `minSdk` 21? | R6, R3 |
 | S9 | Do Windows 7 → 11 accept the Windows 2000-targeted Win32 executable (all versions)? | R6 |
+| S10 | What do GitHub-hosted runners provide for the continuous integration (images, KVM, Docker, ARM64, submodule checkout, caching), and what stays a local run? (ADR 0018) | FR-030 |
 
 ## Sources
 
