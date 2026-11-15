@@ -1,0 +1,267 @@
+# Continuous integration, Windows Legacy UI (T123). See ADR 0018 in docs/implementation/adr/ for
+# what the GitHub-hosted runners provide and why this file is shaped this way.
+#
+# What runs here: the MinGW-w64 cross build of the Windows Legacy UI on an Ubuntu runner (the
+# toolchain of the product, the import allowlist check of tools/check_imports.py), the 15 reference
+# vectors through the x64 and x86 executables on Windows runners (x86 under WOW64; the ARM runner
+# runs both under its emulation), and the clang + Ninja host build with ctest on a Windows runner.
+#
+# What does NOT run here, and is not CI: the Windows 2000, XP, Vista, 7, 8.1 and 10 ladders. They
+# are local runs in VirtualBox virtual machines (guest-control launcher of tools/run_vectors.py),
+# recorded in the validation records. GitHub-hosted runners only; never add a self-hosted runner
+# (both repositories are public: it would run the code of pull requests from forks on the owner's
+# machine).
+#
+# Same rules as ci.yml (T129): actions pinned by full commit SHA with the tag in a comment, a
+# read-only token, `persist-credentials: false`, outdated runs cancelled, a timeout on every job,
+# a documentation-only (or unrelated) change skips the heavy jobs through the `changes` job, and
+# the `gate` job is the one check that branch protection should require.
+
+name: Windows
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  schedule:
+    # Mondays 03:47 UTC, on the default branch: catches the drift of the runner images.
+    - cron: "47 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.event_name == 'schedule' && 'schedule' || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Decides which jobs run. Pull requests from this repository are already built by the `push`
+  # event of their branch, so only pull requests from forks run here.
+  changes:
+    name: changes
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - name: Check out (history, no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: false
+          persist-credentials: false
+      - name: List the changed files
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          base="$BEFORE"
+          if [ "$EVENT" = pull_request ]; then base="$PR_BASE"; fi
+          code=true
+          # Unknown base (new branch, scheduled run, forced push): run everything.
+          if [ "$EVENT" != schedule ] && [ -n "$base" ] && [ "${base#0000000}" = "$base" ] \
+              && git cat-file -e "$base^{commit}" 2>/dev/null; then
+            files="$(git diff --name-only "$base" "$HEAD_SHA")"
+            printf 'changed files:\n%s\n' "$files"
+            # Only what the Windows Legacy build and run read: the backend, the build files, the
+            # tools, the Win32 UI and this workflow. Another UI or documentation does not run it.
+            if ! printf '%s\n' "$files" | grep -Eq '^(core/|cmake/|third_party/|CMakeLists\.txt|CMakePresets\.json|tools/|ui/legacy/windows-win32/|\.github/workflows/windows\.yml)'; then
+              code=false
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+  # `python tools/build.py windows legacy` on Linux: both executables (i686 for Windows 2000 to 11,
+  # x86_64 for XP x64 to 11) with the -win32 thread model and the msvcrt runtime, then the import
+  # allowlist check (build.py exits with an error when an import is not on the allowlist of its
+  # floor). Building never needs the docs repository, so no submodule is fetched: build.py then
+  # prints a warning and writes no deliverable record, which is the intended behaviour.
+  cross-build:
+    name: cross build (MinGW-w64 on ubuntu-24.04)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out (no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: Install MinGW-w64 (win32 thread model), CMake and Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build python3 \
+            g++-mingw-w64-i686-win32 g++-mingw-w64-x86-64-win32
+          # docs/building/README.md: select the -win32 variants (Windows 2000 has no pthreads).
+          for triplet in i686-w64-mingw32 x86_64-w64-mingw32; do
+            for tool in gcc g++; do
+              sudo update-alternatives --set "$triplet-$tool" "/usr/bin/$triplet-$tool-win32"
+            done
+          done
+      - name: Check the toolchains
+        run: |
+          for triplet in i686-w64-mingw32 x86_64-w64-mingw32; do
+            "$triplet-g++" -v 2>&1 | grep -E '^(Thread model|gcc version)'
+            "$triplet-g++" -v 2>&1 | grep -q '^Thread model: win32$'
+          done
+      - name: Build both executables and check their imports
+        env:
+          LOOMORA_BUILD_DIR: ${{ runner.temp }}/loomora-build
+        run: python3 tools/build.py windows legacy
+      - name: Upload the executables
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-legacy-exe
+          path: out/windows-legacy
+          if-no-files-found: error
+          retention-days: 14
+
+  # The 15 reference vectors through the cross-built executables, on a real Windows system:
+  # `python tools/run_vectors.py <platform id> legacy --arch <x64|x86>`. The probe line of the
+  # executable carries windows-<system>-<native architecture>, so the platform id on the command
+  # line is the one the system reports (a Windows Server 2025 image reports 11, as a client of the
+  # same build number would).
+  run-vectors:
+    name: vectors (${{ matrix.os }})
+    needs: [changes, cross-build]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            platform: windows-11-x64
+            # the x86 executable runs under WOW64 and reports the architecture of the system
+            runs: "x64:windows-11-x64 x86:windows-11-x64"
+          - os: windows-11-arm
+            platform: windows-11-arm64
+            # x64 and x86 under the emulation of Windows on ARM: both report windows-11-x64
+            # (GetNativeSystemInfo shows the emulated architecture), measured on the first run
+            runs: "x64:windows-11-x64 x86:windows-11-x64"
+    steps:
+      - name: Check out (no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: Download the executables
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-legacy-exe
+          path: out/windows-legacy
+      - name: Install jsonschema (tools/check_probe.py)
+        run: python -m pip install --disable-pip-version-check jsonschema
+      - name: System facts
+        shell: pwsh
+        run: |
+          $PSVersionTable.PSVersion.ToString()
+          [System.Environment]::OSVersion.VersionString
+          $env:PROCESSOR_ARCHITECTURE
+          Get-ChildItem out/windows-legacy -Recurse -File | ForEach-Object { "{0} {1}" -f $_.FullName, $_.Length }
+          python --version
+      - name: Run the reference vectors
+        env:
+          RUNS: ${{ matrix.runs }}
+        run: |
+          status=0
+          for run in $RUNS; do
+            arch="${run%%:*}"
+            platform="${run#*:}"
+            echo "::group::run_vectors $platform legacy --arch $arch"
+            python tools/run_vectors.py "$platform" legacy --arch "$arch" \
+              --evidence-dir "$RUNNER_TEMP/evidence/$arch" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+      - name: Diagnose a failure (one probe run of each executable)
+        if: failure()
+        run: |
+          for arch in x64 x86; do
+            dir="$RUNNER_TEMP/diag-$arch"
+            mkdir -p "$dir"
+            cp "out/windows-legacy/$arch/loomora.exe" "$dir/"
+            (cd "$dir" && ./loomora.exe --probe; echo "exit status $?"; cat loomora-probe.json) || true
+          done
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vectors-logs-${{ matrix.os }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: warn
+          retention-days: 14
+
+  # `python tools/verify.py quick` on a Windows image: the clang + Ninja host build of the backend
+  # and of the Win32 UI (CMakePresets.json host-clang), ctest (selftest and Catch2), the vectors
+  # through the executable it built, check_ui_logic, validate_records and the self-tests. The
+  # strict C++11 check (`std`) is left out: it needs GCC and runs on the Linux jobs of ci.yml.
+  host-build:
+    name: host build (clang, windows-2025)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 40
+    steps:
+      - name: Check out with the Catch2 and docs submodules
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Install jsonschema (tools/check_probe.py, tools/validate_records.py)
+        run: python -m pip install --disable-pip-version-check jsonschema
+      - name: Tool versions
+        run: |
+          clang --version
+          cmake --version
+          ninja --version
+      - name: Verify (quick, without the strict C++11 check)
+        run: |
+          python tools/verify.py quick --only build,ctest,vectors,ui-logic,records,diff \
+            --build-dir "$RUNNER_TEMP/loomora-build" --jobs 4 2>&1 | tee "$RUNNER_TEMP/verify.log"
+          # A skipped check is a check that did not run: in CI it is an error. The Modern UI run
+          # is skipped here by design (it needs the WinUI build of winui3.yml).
+          if grep '^SKIP' "$RUNNER_TEMP/verify.log" | grep -v 'windows modern'; then
+            echo "::error::a verify.py check was skipped"
+            exit 1
+          fi
+      - name: Self-test of the vector runner (platform id rules)
+        run: python tools/run_vectors.py --self-test
+      - name: Upload the logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verify-logs-windows-host
+          path: |
+            ${{ runner.temp }}/loomora-build/logs
+            ${{ runner.temp }}/verify.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  # The single check to require in the branch protection rule: it passes when every job that had to
+  # run passed (a skipped job is fine, a failed or cancelled one is not).
+  gate:
+    name: gate (windows)
+    needs: [changes, cross-build, run-vectors, host-build]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check the results
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          case " $RESULTS " in
+            *" failure "*|*" cancelled "*) exit 1 ;;
+          esac

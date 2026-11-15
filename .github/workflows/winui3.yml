@@ -1,0 +1,230 @@
+# Continuous integration, Windows Modern UI, WinUI 3 (T127). See ADR 0018 in
+# docs/implementation/adr/ for what the GitHub-hosted runners provide and why this file is shaped
+# this way.
+#
+# What runs here: `python tools/build.py windows modern` on a Visual Studio 2026 image (loomora.dll
+# by MSVC, then `dotnet publish` of ui/modern/windows-winui3 for net8.0 and net10.0
+# windows10.0.19041.0, x64 and ARM64, four zips), then the 15 reference vectors through the x64
+# folders on a Windows x64 runner and through the ARM64 folders on a Windows ARM64 runner. The
+# executable is a GUI (a WinUI 3 window shown for about 2 seconds in --probe mode): the hosted
+# Windows runners give the job an interactive desktop session, which these runs show or refute.
+# The Windows App Runtime that the unpackaged executable needs is installed from the MSIX files
+# of the NuGet package the project pins (.github/scripts/install-windows-app-runtime.ps1).
+#
+# GitHub-hosted runners only; never add a self-hosted runner (both repositories are public).
+# Windows 10 1809 (the net8 fallback target) has no hosted runner: it stays a local run.
+#
+# Same rules as ci.yml (T129): actions pinned by full commit SHA with the tag in a comment, a
+# read-only token, `persist-credentials: false`, outdated runs cancelled, a timeout on every job,
+# a documentation-only (or unrelated) change skips the heavy jobs through the `changes` job, and
+# the `gate` job is the one check that branch protection should require.
+
+name: WinUI 3
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  schedule:
+    # Mondays 04:17 UTC, on the default branch: catches the drift of the runner images and of the
+    # NuGet packages.
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: winui3-${{ github.event_name == 'schedule' && 'schedule' || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Decides which jobs run. Pull requests from this repository are already built by the `push`
+  # event of their branch, so only pull requests from forks run here.
+  changes:
+    name: changes
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - name: Check out (history, no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: false
+          persist-credentials: false
+      - name: List the changed files
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          base="$BEFORE"
+          if [ "$EVENT" = pull_request ]; then base="$PR_BASE"; fi
+          code=true
+          # Unknown base (new branch, scheduled run, forced push): run everything.
+          if [ "$EVENT" != schedule ] && [ -n "$base" ] && [ "${base#0000000}" = "$base" ] \
+              && git cat-file -e "$base^{commit}" 2>/dev/null; then
+            files="$(git diff --name-only "$base" "$HEAD_SHA")"
+            printf 'changed files:\n%s\n' "$files"
+            # Only what the WinUI build and run read: the backend, the build files, the tools, the
+            # WinUI project and this workflow. Another UI or documentation does not run it.
+            if ! printf '%s\n' "$files" | grep -Eq '^(core/|cmake/|third_party/|CMakeLists\.txt|CMakePresets\.json|tools/|ui/modern/windows-winui3/|\.github/workflows/winui3\.yml|\.github/scripts/install-windows-app-runtime\.ps1)'; then
+              code=false
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+  # `python tools/build.py windows modern`: cmake --preset host-msvc and host-msvc-arm64
+  # (Visual Studio 18 2026 generator, loomora.dll with the static C runtime, checked to export the
+  # loomora_* functions only and to import KERNEL32 only), then dotnet publish for each .NET target
+  # and architecture, the machine type of the native files checked, each folder zipped. The
+  # windows-2025-vs2026 image has Visual Studio 2026 with the MSVC x64 and ARM64 tools and CMake
+  # 4.4; the .NET SDK is the one pinned by global.json (the image has 10.0.403, the pin is
+  # 10.0.404). The Windows App SDK and the .NET targeting packs come from nuget.org.
+  build:
+    name: build (WinUI 3, x64 + ARM64, net8 + net10)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 45
+    steps:
+      - name: Check out (no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: Install the .NET SDK pinned by global.json
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: ui/modern/windows-winui3/global.json
+      - name: Tool versions
+        run: |
+          python --version
+          cmake --version
+          (cd ui/modern/windows-winui3 && dotnet --version)
+          dotnet --list-sdks
+          "C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath -property installationVersion
+      - name: Build the four published folders and zips
+        run: python tools/build.py windows modern
+      - name: Check that the four zips are there
+        run: |
+          ls -l out/windows-modern
+          for tf in net8 net10; do
+            for arch in x64 arm64; do
+              test -f "out/windows-modern/loomora-winui-$tf-$arch.zip" \
+                || { echo "::error::loomora-winui-$tf-$arch.zip is missing (a build was skipped)"; exit 1; }
+            done
+          done
+      - name: Upload the zips
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: winui3-zips
+          path: out/windows-modern/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  # The 15 reference vectors through the published folders: `python tools/run_vectors.py <platform
+  # id> modern --exe <folder>\Loomora.WinUI.exe`. The WinUI process reports the architecture of the
+  # operating system, so the ARM64 folders run on the ARM64 runner and report windows-11-arm64.
+  run-vectors:
+    name: vectors (${{ matrix.arch }}, ${{ matrix.os }})
+    needs: [changes, build]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            arch: x64
+            platform: windows-11-x64
+          - os: windows-11-arm
+            arch: arm64
+            platform: windows-11-arm64
+    steps:
+      - name: Check out (no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: Download the zips
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: winui3-zips
+          path: ${{ runner.temp }}/zips
+      - name: Unpack the folders of this architecture
+        shell: pwsh
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          foreach ($tf in 'net8', 'net10') {
+            Expand-Archive -Path "$env:RUNNER_TEMP/zips/loomora-winui-$tf-$env:ARCH.zip" `
+              -DestinationPath "$env:RUNNER_TEMP/winui/$tf-$env:ARCH"
+          }
+          Get-ChildItem "$env:RUNNER_TEMP/winui" | ForEach-Object { "{0} {1} files" -f $_.FullName, (Get-ChildItem $_.FullName -Recurse -File).Count }
+          [System.Environment]::OSVersion.VersionString
+          $env:PROCESSOR_ARCHITECTURE
+          Get-ChildItem "$env:ProgramFiles\dotnet\shared\Microsoft.WindowsDesktop.App" | ForEach-Object Name
+      - name: Install the Windows App Runtime
+        shell: powershell
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: ./.github/scripts/install-windows-app-runtime.ps1 -Arch $env:ARCH
+      - name: Install jsonschema (tools/check_probe.py)
+        run: python -m pip install --disable-pip-version-check jsonschema
+      - name: Run the reference vectors
+        env:
+          ARCH: ${{ matrix.arch }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          status=0
+          for tf in net10 net8; do
+            echo "::group::run_vectors $PLATFORM modern ($tf-$ARCH)"
+            python tools/run_vectors.py "$PLATFORM" modern --jobs 1 \
+              --exe "$RUNNER_TEMP/winui/$tf-$ARCH/Loomora.WinUI.exe" \
+              --evidence-dir "$RUNNER_TEMP/evidence/$tf-$ARCH" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+      - name: Diagnose a failure (one probe run, output kept)
+        if: failure()
+        run: |
+          dir="$RUNNER_TEMP/winui/net10-$ARCH"
+          (cd "$dir" && timeout 60 ./Loomora.WinUI.exe --probe; echo "exit status $?"; cat loomora-probe.json) || true
+        env:
+          ARCH: ${{ matrix.arch }}
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: winui3-vectors-logs-${{ matrix.arch }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: warn
+          retention-days: 14
+
+  # The single check to require in the branch protection rule: it passes when every job that had to
+  # run passed (a skipped job is fine, a failed or cancelled one is not).
+  gate:
+    name: gate (winui3)
+    needs: [changes, build, run-vectors]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check the results
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          case " $RESULTS " in
+            *" failure "*|*" cancelled "*) exit 1 ;;
+          esac

@@ -53,6 +53,14 @@ set_target_properties(loomora_win32 PROPERTIES
   OUTPUT_NAME loomora CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_definitions(loomora_win32 PRIVATE UNICODE _UNICODE)
 target_link_libraries(loomora_win32 PRIVATE loomora user32 gdi32)
+if(LOOMORA_WIN32_MSVC_ABI)
+  # loomora.manifest already has the trustInfo (asInvoker). Without this the linker adds its own
+  # trustInfo and merges the two: lld-link 20.1.8 writes the merged manifest with attributes
+  # prefixed ms_asmv1:, which Windows rejects ("required attribute level is missing", the exe
+  # does not start; seen on the GitHub windows-2025 image). The merge is the same on every
+  # linker, so the manifest the linker embeds is exactly loomora.manifest.
+  target_link_options(loomora_win32 PRIVATE "LINKER:/MANIFESTUAC:NO")
+endif()
 
 if(NOT LOOMORA_WIN32_MSVC_ABI)
   target_compile_options(loomora_win32 PRIVATE -Wall -Wextra -pedantic)
