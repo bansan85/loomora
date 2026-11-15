@@ -278,21 +278,39 @@ jobs:
           avdmanager="$sdk/cmdline-tools/latest/bin/avdmanager"
           yes | JAVA_HOME="$JAVA_HOME_17_X64" "$sdkmanager" --sdk_root="$sdk" --licenses > /dev/null || true
           JAVA_HOME="$JAVA_HOME_17_X64" "$sdkmanager" --sdk_root="$sdk" "cmdline-tools;latest" platform-tools emulator "system-images;android-$API;default;$ABI"
+          # The folder of the virtual device is named, not guessed (the runner image sets its own).
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
           echo "no" | JAVA_HOME="$JAVA_HOME_17_X64" "$avdmanager" create avd -n loomora -k "system-images;android-$API;default;$ABI" -d pixel
-          config="$HOME/.android/avd/loomora.avd/config.ini"
+          config="$ANDROID_AVD_HOME/loomora.avd/config.ini"
           sed -i '/^hw\.ramSize=/d;/^hw\.sdCard=/d' "$config"
           printf 'hw.ramSize=1536\nhw.sdCard=no\n' >> "$config"
-          echo "LOOMORA_ANDROID_SDK=$sdk" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=$sdk" >> "$GITHUB_ENV"
-      - name: Start the emulator and wait for the boot
+          {
+            echo "LOOMORA_ANDROID_SDK=$sdk"
+            echo "ANDROID_SDK_ROOT=$sdk"
+            echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME"
+          } >> "$GITHUB_ENV"
+      # One step for the boot and the run: the emulator is a child of this shell and ends with it.
+      - name: Boot the emulator and run the vectors
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          UI: ${{ matrix.ui }}
+          UI_ABI: ${{ matrix.ui_abi }}
         run: |
           sdk="$LOOMORA_ANDROID_SDK"
+          adb="$sdk/platform-tools/adb"
           nohup "$sdk/emulator/emulator" -avd loomora -no-window -no-audio -no-snapshot -no-boot-anim -no-metrics \
             -gpu swiftshader_indirect -accel on > "$RUNNER_TEMP/emulator.log" 2>&1 &
-          adb="$sdk/platform-tools/adb"
+          emulator_pid=$!
+          trap 'kill "$emulator_pid" 2> /dev/null || true' EXIT
           "$adb" start-server
           start=$SECONDS
           until [ "$("$adb" shell getprop sys.boot_completed 2> /dev/null | tr -d '\r')" = 1 ]; do
+            if ! kill -0 "$emulator_pid" 2> /dev/null; then
+              echo "::error::the emulator process ended before the boot finished"
+              tail -n 40 "$RUNNER_TEMP/emulator.log"
+              exit 1
+            fi
             if [ $((SECONDS - start)) -gt 900 ]; then
               echo "::error::the emulator did not finish booting in 15 minutes"
               tail -n 40 "$RUNNER_TEMP/emulator.log"
@@ -303,12 +321,6 @@ jobs:
           echo "booted in $((SECONDS - start)) s"
           "$adb" shell getprop ro.build.version.release
           "$adb" shell getprop ro.product.cpu.abilist
-      - name: Vectors on the emulator
-        env:
-          PLATFORM: ${{ matrix.platform }}
-          UI: ${{ matrix.ui }}
-          UI_ABI: ${{ matrix.ui_abi }}
-        run: |
           args=()
           if [ -n "$UI_ABI" ]; then args+=(--ui-abi "$UI_ABI"); fi
           python3 tools/run_vectors.py "$PLATFORM" "$UI" "${args[@]}" --exe "$RUNNER_TEMP/apk/loomora.apk" --timeout 60 2>&1 | tee "$RUNNER_TEMP/vectors-android-$UI.log"
