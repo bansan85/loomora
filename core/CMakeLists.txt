@@ -20,6 +20,14 @@ if(LOOMORA_BUILD_SHARED)
   set_target_properties(loomora_shared PROPERTIES
     OUTPUT_NAME loomora CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF
     CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+  # MSVC (host-msvc preset, loomora.dll of the WinUI 3 UI): the C runtime is linked statically
+  # (/MT, /MTd in Debug), so the DLL needs no Visual C++ redistributable. MSVC has no /std:c++11:
+  # CXX_STANDARD 11 adds no flag and cl.exe compiles in its default, /std:c++14, the lowest it
+  # accepts; the sources stay strict C++11 (checked by the GCC and Clang builds).
+  if(MSVC)
+    set_target_properties(loomora_shared PROPERTIES
+      MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  endif()
   if(NOT MSVC OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     target_compile_options(loomora_shared PRIVATE -Wall -Wextra -pedantic)
   endif()
