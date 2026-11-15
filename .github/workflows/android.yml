@@ -1,0 +1,342 @@
+# Continuous integration, Android jobs (T124). See ADR 0016 (the Legacy UI, NDK r15c) and ADR 0018 (the
+# GitHub-hosted runners); the conventions are the ones of ci.yml (T129): third-party actions pinned
+# by full commit SHA with the tag in a comment, a read-only token, `persist-credentials: false`,
+# cancelled outdated runs, a timeout on every job, a `changes` job that skips the build for a change
+# that cannot affect it, and one `gate` job to require in the branch protection rule.
+#
+# What it runs:
+#   - `python3 tools/build.py android legacy` with the NDK r15c (downloaded from Google, size and
+#     checksum verified: r15c is the last NDK with platforms/android-9 and is not on the runner image);
+#   - `python3 tools/build.py android modern` with the NDK r30, CMake 3.22.1, build-tools 36.0.0 and
+#     platform 37.0 of the SDK, the Gradle 9.9.1 wrapper and AGP 9.5.1 of the project, on a Temurin
+#     JDK 25 (the versions of ui/modern/android-compose and of procedures/android.md);
+#   - the reference vectors through each APK on an emulator (hardware-accelerated by KVM, which the
+#     Linux runners give): API 16 x86 for the Legacy UI (built for API 9, the lowest system an
+#     emulator can run) and API 24 x86_64 for the Modern UI. `tools/run_vectors.py` drives it with adb.
+#
+# Not run here: the ARM libraries (no ARM system, ADR 0016) and the systems below API 16 stay
+# `not_tested`; the APKs of those ABIs are built and checked, never run.
+#
+# The emulator job is NOT part of the `gate`: booting an emulator on a hosted runner is the least
+# reliable thing of this repository's CI, and a flaky boot must not block a merge. It is a separate
+# job that really runs and really fails when the vectors fail; it is never marked
+# `continue-on-error`. See ADR 0018 for what the first runs showed.
+
+name: Android
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  schedule:
+    # Mondays 04:17 UTC, on the default branch: catches the drift of the runner images, of the SDK
+    # packages and of the emulator.
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.event_name == 'schedule' && 'schedule' || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # NDK r15c (Legacy UI): the official download of Google, and the checksums it is verified against.
+  # The SHA-1 and the size are the ones Google publishes on
+  # https://developer.android.com/ndk/downloads/older_releases (read 2026-11-15); the SHA-256 was
+  # computed on that same download and is what pins it from now on.
+  NDK_R15C_URL: https://dl.google.com/android/repository/android-ndk-r15c-linux-x86_64.zip
+  NDK_R15C_SIZE: "974976754"
+  NDK_R15C_SHA1: 0bf02d4e8b85fd770fd7b9b2cdec57f9441f27a2
+  NDK_R15C_SHA256: f01788946733bf6294a36727b99366a18369904eb068a599dde8cca2c1d2ba3c
+  # The Android SDK is a folder of this job (the image's SDK is left alone); the packages are the
+  # ones of the project (tools/build.py, procedures/android.md).
+  SDK_PACKAGES_LEGACY: platforms;android-9 build-tools;36.0.0
+  SDK_PACKAGES_MODERN: platforms;android-37.0 build-tools;36.0.0 cmake;3.22.1 ndk;30.0.16248370
+
+jobs:
+  # Decides whether the Android jobs run. Pull requests from this repository are already built by
+  # the `push` event of their branch, so only pull requests from forks run here.
+  changes:
+    name: changes
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - name: Check out (history, no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: false
+          persist-credentials: false
+      - name: List the changed files
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          base="$BEFORE"
+          if [ "$EVENT" = pull_request ]; then base="$PR_BASE"; fi
+          code=true
+          # Unknown base (new branch, scheduled run, forced push): run everything.
+          if [ "$EVENT" != schedule ] && [ -n "$base" ] && [ "${base#0000000}" = "$base" ] \
+              && git cat-file -e "$base^{commit}" 2>/dev/null; then
+            files="$(git diff --name-only "$base" "$HEAD_SHA")"
+            printf 'changed files:\n%s\n' "$files"
+            # What the Android builds and runs read: the backend, the JNI glue, both UIs, the CMake
+            # files and toolchains, the tools of the build and of the launcher, the probe schema and
+            # the vectors (under core/ and specs/), and this file.
+            if ! printf '%s\n' "$files" | grep -Eq '^(core/|bridge/jni/|ui/legacy/android-views/|ui/modern/android-compose/|cmake/|CMakeLists\.txt|third_party/|specs/.*\.json$|tools/(build|run_vectors|common|check_probe)\.py$|\.github/workflows/android\.yml$)'; then
+              code=false
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+  # `tools/build.py android legacy`: the four ABIs with the NDK r15c, the APK of ui/legacy/android-views.
+  build-legacy:
+    name: build Legacy (NDK r15c)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out (no submodule, building never needs the docs)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: Install the JDK (Temurin 25)
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: "25"
+      - name: Install the NDK r15c (checksum verified)
+        run: |
+          curl -fsSL --retry 5 --retry-delay 10 -o "$RUNNER_TEMP/ndk-r15c.zip" "$NDK_R15C_URL"
+          test "$(stat -c %s "$RUNNER_TEMP/ndk-r15c.zip")" = "$NDK_R15C_SIZE"
+          echo "$NDK_R15C_SHA1  $RUNNER_TEMP/ndk-r15c.zip" | sha1sum -c -
+          echo "$NDK_R15C_SHA256  $RUNNER_TEMP/ndk-r15c.zip" | sha256sum -c -
+          mkdir "$RUNNER_TEMP/ndk"
+          unzip -q "$RUNNER_TEMP/ndk-r15c.zip" -d "$RUNNER_TEMP/ndk"
+          rm "$RUNNER_TEMP/ndk-r15c.zip"
+          grep Pkg.Revision "$RUNNER_TEMP/ndk/android-ndk-r15c/source.properties"
+          echo "LOOMORA_ANDROID_NDK=$RUNNER_TEMP/ndk/android-ndk-r15c" >> "$GITHUB_ENV"
+      # The clang of the NDK r15c links libncurses.so.5 and libtinfo.so.5, which Ubuntu 24.04 no longer
+      # packages (it has version 6). The last Ubuntu packages of version 5 (18.04) are unpacked in a
+      # folder of this job, without installing anything system-wide, after a checksum check.
+      - name: Install libncurses.so.5 and libtinfo.so.5 for the r15c clang
+        run: |
+          url=https://archive.ubuntu.com/ubuntu/pool/main/n/ncurses
+          mkdir "$RUNNER_TEMP/ncurses5"
+          for pair in libncurses5:7374b0d1bf39a7b250dcf18251bba9dbf548d90ddcfa66d31670d73d667abaeb libtinfo5:f7a59966bba0f997dd1bee0994c43cd563026a81e791cacc6540a2a8c9a49e53; do
+            deb="${pair%%:*}_6.1-1ubuntu1.18.04.1_amd64.deb"
+            curl -fsSL --retry 5 --retry-delay 10 -o "$RUNNER_TEMP/$deb" "$url/$deb"
+            echo "${pair##*:}  $RUNNER_TEMP/$deb" | sha256sum -c -
+            dpkg-deb -x "$RUNNER_TEMP/$deb" "$RUNNER_TEMP/ncurses5"
+          done
+          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/ncurses5/lib/x86_64-linux-gnu" >> "$GITHUB_ENV"
+      - name: Install the SDK packages
+        run: |
+          sdk="$RUNNER_TEMP/android-sdk"
+          mkdir -p "$sdk"
+          read -r -a packages <<< "$SDK_PACKAGES_LEGACY"
+          yes | JAVA_HOME="$JAVA_HOME_17_X64" "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$sdk" --licenses > /dev/null || true
+          JAVA_HOME="$JAVA_HOME_17_X64" "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$sdk" "${packages[@]}"
+          echo "LOOMORA_ANDROID_SDK=$sdk" >> "$GITHUB_ENV"
+      - name: Build the Legacy UI
+        run: |
+          LOOMORA_BUILD_DIR="$RUNNER_TEMP/loomora-build" python3 tools/build.py android legacy 2>&1 | tee "$RUNNER_TEMP/build-android-legacy.log"
+          ls -l out/android-legacy
+      - name: Upload the APK
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-legacy-apk
+          path: out/android-legacy/loomora.apk
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload the log
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-legacy-build-log
+          path: ${{ runner.temp }}/build-android-legacy.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  # `tools/build.py android modern`: Gradle (wrapper 9.9.1) and AGP 9.5.1 drive the NDK r30 and CMake.
+  build-modern:
+    name: build Modern (NDK r30, AGP)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out (no submodule, building never needs the docs)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: Install the JDK (Temurin 25)
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: "25"
+      - name: Install the SDK packages
+        run: |
+          sdk="$RUNNER_TEMP/android-sdk"
+          mkdir -p "$sdk"
+          read -r -a packages <<< "$SDK_PACKAGES_MODERN"
+          yes | JAVA_HOME="$JAVA_HOME_17_X64" "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$sdk" --licenses > /dev/null || true
+          JAVA_HOME="$JAVA_HOME_17_X64" "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$sdk" "${packages[@]}"
+          # The image sets ANDROID_HOME and ANDROID_SDK_ROOT to its own SDK: point both at this one.
+          {
+            echo "LOOMORA_ANDROID_SDK=$sdk"
+            echo "ANDROID_HOME=$sdk"
+            echo "ANDROID_SDK_ROOT=$sdk"
+          } >> "$GITHUB_ENV"
+      - name: Build the Modern UI
+        run: |
+          LOOMORA_BUILD_DIR="$RUNNER_TEMP/loomora-build" python3 tools/build.py android modern 2>&1 | tee "$RUNNER_TEMP/build-android-modern.log"
+          ls -l out/android-modern
+      - name: Upload the APK
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-modern-apk
+          path: out/android-modern/loomora.apk
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload the log
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-modern-build-log
+          path: ${{ runner.temp }}/build-android-modern.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  # The vectors through each APK on an emulator with KVM acceleration. `-accel on` makes the emulator
+  # refuse to start without KVM instead of silently running in software. Not part of the `gate`.
+  emulator:
+    name: emulator ${{ matrix.ui }} (API ${{ matrix.api }} ${{ matrix.abi }})
+    needs: [build-legacy, build-modern]
+    # Needs the build jobs to have succeeded (they are skipped when `changes` says so).
+    if: needs.build-legacy.result == 'success' && needs.build-modern.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The Legacy UI is built for API 9 and run on API 16 (the lowest an emulator starts), with
+          # the x86 build, as on the owner's machine.
+          - ui: legacy
+            api: 16
+            abi: x86
+            platform: android-4.1.2-x86
+            ui_abi: x86
+          # The Modern UI (minSdk 24) on API 24, the x86_64 build.
+          - ui: modern
+            api: 24
+            abi: x86_64
+            platform: android-7.0-x86_64
+            ui_abi: ""
+    steps:
+      - name: Check out (no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: Download the APK
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: android-${{ matrix.ui }}-apk
+          path: ${{ runner.temp }}/apk
+      - name: Give the runner user access to KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+      - name: Install the emulator and the system image
+        env:
+          API: ${{ matrix.api }}
+          ABI: ${{ matrix.abi }}
+        run: |
+          sdk="$RUNNER_TEMP/android-sdk"
+          mkdir -p "$sdk"
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | JAVA_HOME="$JAVA_HOME_17_X64" "$sdkmanager" --sdk_root="$sdk" --licenses > /dev/null || true
+          JAVA_HOME="$JAVA_HOME_17_X64" "$sdkmanager" --sdk_root="$sdk" platform-tools emulator "system-images;android-$API;default;$ABI"
+          echo "no" | JAVA_HOME="$JAVA_HOME_17_X64" "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n loomora -k "system-images;android-$API;default;$ABI" -d pixel
+          config="$HOME/.android/avd/loomora.avd/config.ini"
+          sed -i '/^hw\.ramSize=/d;/^hw\.sdCard=/d' "$config"
+          printf 'hw.ramSize=1536\nhw.sdCard=no\n' >> "$config"
+          echo "LOOMORA_ANDROID_SDK=$sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$sdk" >> "$GITHUB_ENV"
+      - name: Start the emulator and wait for the boot
+        run: |
+          sdk="$LOOMORA_ANDROID_SDK"
+          nohup "$sdk/emulator/emulator" -avd loomora -no-window -no-audio -no-snapshot -no-boot-anim -no-metrics \
+            -gpu swiftshader_indirect -accel on > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          adb="$sdk/platform-tools/adb"
+          "$adb" start-server
+          start=$SECONDS
+          until [ "$("$adb" shell getprop sys.boot_completed 2> /dev/null | tr -d '\r')" = 1 ]; do
+            if [ $((SECONDS - start)) -gt 900 ]; then
+              echo "::error::the emulator did not finish booting in 15 minutes"
+              tail -n 40 "$RUNNER_TEMP/emulator.log"
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "booted in $((SECONDS - start)) s"
+          "$adb" shell getprop ro.build.version.release
+          "$adb" shell getprop ro.product.cpu.abilist
+      - name: Vectors on the emulator
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          UI: ${{ matrix.ui }}
+          UI_ABI: ${{ matrix.ui_abi }}
+        run: |
+          args=()
+          if [ -n "$UI_ABI" ]; then args+=(--ui-abi "$UI_ABI"); fi
+          python3 tools/run_vectors.py "$PLATFORM" "$UI" "${args[@]}" --exe "$RUNNER_TEMP/apk/loomora.apk" --timeout 60 2>&1 | tee "$RUNNER_TEMP/vectors-android-$UI.log"
+      - name: Stop the emulator
+        if: always()
+        run: |
+          "$LOOMORA_ANDROID_SDK/platform-tools/adb" emu kill || true
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-${{ matrix.ui }}-emulator-logs
+          path: ${{ runner.temp }}/*.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  # The single check to require in the branch protection rule: it passes when every job that had to
+  # run passed (a skipped job is fine, a failed or cancelled one is not). The emulator job is
+  # deliberately not in this list, see the header.
+  gate:
+    name: gate
+    needs: [changes, build-legacy, build-modern]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check the results
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          case " $RESULTS " in
+            *" failure "*|*" cancelled "*) exit 1 ;;
+          esac
