@@ -1,6 +1,6 @@
 # Build and run
 
-How to build, verify and run the Loomora probe. It covers what works today; the macOS, iOS, Android and Web builds and the Windows Modern UI are not written yet.
+How to build, verify and run the Loomora probe. It covers what works today; the macOS, iOS and Web builds are not written yet.
 
 Commands start with `PS>` on the Windows host and `wsl$` inside WSL.
 
@@ -15,6 +15,7 @@ git submodule update --init
 ## Prerequisites
 
 - Windows host: Python 3.8+ with `pip install -r tools/requirements.txt`, CMake 3.13+, Ninja, clang, and WSL2 with Ubuntu-24.04.
+- Windows Modern UI (WinUI 3): Visual Studio 2026 with the C++ desktop workload (and, for ARM64, "MSVC Build Tools for ARM64/ARM64EC (Latest)"), CMake 4.2 or later (generator `Visual Studio 18 2026`), the .NET SDK 10.0.404 pinned by `ui/modern/windows-winui3/global.json`, and NuGet access (Windows App SDK 2.6.5, the .NET 8 and 10 targeting packs). To run the result the machine needs the .NET Desktop Runtime (8 or 10) and the Windows App Runtime 2.6 of its architecture. No Visual Studio GUI is used.
 - WSL Ubuntu-24.04 (installed on the machine where these commands were run): `sudo apt install cmake ninja-build g++ pkg-config python3-jsonschema libx11-dev libxft-dev libfontconfig-dev libgtkmm-3.0-dev xvfb g++-mingw-w64-i686 g++-mingw-w64-x86-64`. The MinGW-w64 compilers must be the `-win32` thread-model variants (`sudo update-alternatives --config i686-w64-mingw32-g++`, then `i686-w64-mingw32-gcc`, `x86_64-w64-mingw32-g++`, `x86_64-w64-mingw32-gcc`). `tools/build.py` prints what is missing.
 - A Linux machine builds its own binaries: it needs a C++11 compiler, CMake and the development files of the libraries listed above (libX11; libXft and fontconfig for the Xft text; gtkmm 3 for the Modern UI).
 
@@ -85,13 +86,23 @@ PS> python tools/run_vectors.py android-4.1.2-x86 legacy
 
 **Scenario 3: one platform, Modern UI**
 
-Only Linux exists (Windows 11 WinUI 3 is not written):
+Linux (built on the machine that runs it):
 
 ```
 wsl$ python3 tools/build.py linux modern
 wsl$ python3 tools/run_vectors.py linux-ubuntu-24.04-x86_64 modern
 wsl$ out/linux-modern/loomora-gtk3 --probe
 ```
+
+Windows 11 (WinUI 3, C#; built on the Windows host, not in WSL): `loomora.dll` by MSVC (`cmake --preset host-msvc`, and `host-msvc-arm64` when the ARM64 tools are installed), then `dotnet publish` of `ui/modern/windows-winui3` for `net8.0-windows10.0.19041.0` (the Windows 10 1809 fallback) and `net10.0-windows10.0.19041.0`, x64 and ARM64, each zipped:
+
+```
+PS> python tools/build.py windows modern
+PS> python tools/run_vectors.py windows-11-x64 modern
+PS> build\windows-modern\net10-x64\Loomora.WinUI.exe --probe
+```
+
+The zips are `out\windows-modern\loomora-winui-<net8|net10>-<x64|arm64>.zip`; the published folders stay in `build\windows-modern\`. The ARM64 build is built, never run on an x64 machine. `run_vectors.py ... modern --exe <folder>\Loomora.WinUI.exe` runs another published folder (for example the net8 one).
 
 `build.py` writes the deliverable record of each build into `docs/implementation/validation/deliverables/` (only when the submodule is checked out); do not commit those records unless the build is the one a verdict refers to.
 
