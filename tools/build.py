@@ -70,9 +70,9 @@ Implemented targets:
                  $HOME/loomora-build/web-legacy/dist/ (index.html, app.js, loomora.js,
                  loomora-wasm.js, loomora.wasm), outside the repository tree; that folder is the
                  deliverable. Checks that app.js and the JavaScript build parse as ECMAScript 3
-                 (tools/trials/web-node/es-level.js, acorn of the fastcomp emsdk). Writes NO
-                 deliverable record yet: a record names a platform record, and the Web platforms
-                 (a browser on an operating system) are added with the browser runs (T093).
+                 (tools/trials/web-node/es-level.js, acorn of the fastcomp emsdk). Writes one
+                 deliverable record per Web platform of WEB_PLATFORM_PATH that has a platform
+                 record (a browser on an operating system, T093), naming the files of its path.
 
   android legacy CMake + Ninja with cmake/toolchains/android-ndk-r15c.cmake (T029, T081, T082) for
                  the JNI glue bridge/jni/loomora_jni.cpp and the C++11 backend, once per ABI
@@ -775,8 +775,11 @@ def windows_legacy_records(built, platforms):
 def write_deliverable(record, artifact):
     name = "%s-%s.json" % (record["platform_id"], record["ui_variant"])
     path = common.VALIDATION / "deliverables" / name
-    print("artifact: %s (%d bytes)" % (artifact.relative_to(common.ROOT).as_posix(),
-                                       record["artifact"]["size"]))
+    try:
+        shown = artifact.relative_to(common.ROOT).as_posix()
+    except ValueError:  # the Web dist/ folder is in the build folder, outside the repository
+        shown = str(artifact)
+    print("artifact: %s (%d bytes)" % (shown, record["artifact"]["size"]))
     if not common.docs_present():
         print("WARNING: deliverable record %s NOT written: %s"
               % (name, common.docs_missing_message("the record is skipped, the build itself is complete")))
@@ -1443,6 +1446,9 @@ def windows_modern_records(built, platforms, msvc_toolset, msvc_version, dotnet_
 WEB_LEGACY_UI = Path("ui") / "legacy" / "web"
 WEB_LEGACY_PAGE_FILES = ("index.html", "app.js")
 ES_LEVEL = Path("tools") / "trials" / "web-node" / "es-level.js"
+# Web platform records (a browser on an operating system) and the path the Legacy page takes there:
+# a browser with no WebAssembly runs the JavaScript build (loomora.js), the others the wasm one.
+WEB_PLATFORM_PATH = {"web-firefox-10-windows-2000-x86": "js"}
 
 
 def web_emsdk_dirs():
@@ -1554,8 +1560,36 @@ def run_web_legacy(args):
     if problems:
         sys.exit("web legacy: " + "; ".join(problems))
     print("dist: %s" % dist)
-    print("NOTE: no deliverable record written: a record names a platform record and no Web platform "
-          "(browser + operating system) exists yet (T093).")
+    for platform_id, path in sorted(WEB_PLATFORM_PATH.items()):
+        if not common.docs_present() or not (common.VALIDATION / "platforms" / (platform_id + ".json")).is_file():
+            print("no platform record for %s: no deliverable record written for it" % platform_id)
+            continue
+        names = ("index.html", "app.js", "loomora.js") if path == "js" else (
+            "index.html", "app.js", "loomora-wasm.js", "loomora.wasm")
+        compiler = ("emscripten-1.39.20-fastcomp (clang 6.0.1)" if path == "js"
+                    else "emscripten-7.0.0")
+        record = {
+            "platform_id": platform_id, "ui_variant": "legacy", "cpp_std": "c++11",
+            "compiler": compiler,
+            "target": "asmjs-unknown-emscripten" if path == "js" else "wasm32-unknown-emscripten",
+            "output": path,
+            "ui_language": "javascript (ECMAScript 3 syntax), html",
+            "ui_toolkit": "one HTML page (a text field and a div) and one script, DOM only, no framework; "
+                          "the backend is called through ccall / cwrap",
+            "ui_compiler": "none: ui/legacy/web/app.js is served as written (tools/build.py checks "
+                           "that it parses as ECMAScript 3)",
+            "artifact": {"name": "dist/ (%s)" % ", ".join(names),
+                         "size": sum((dist / n).stat().st_size for n in names)},
+            "disabled_features": [],
+            "fallbacks": fallbacks_of(platform_id),
+            "notes": ("Deliverable of platform %s (validation/platforms/%s.json), the %s path of the "
+                      "page. Built by python tools/build.py web legacy; the files are in "
+                      "$HOME/loomora-build/web-legacy/dist/ (never in the repository tree); sha256 %s. "
+                      "The same dist/ folder also holds the files of the other path; the page picks "
+                      "one at run time (typeof WebAssembly)."
+                      % (platform_id, platform_id, path,
+                         ", ".join("%s %s" % (n, common.sha256(dist / n)) for n in names)))}
+        write_deliverable(record, dist / names[-1])
 
 
 TARGETS = {
