@@ -65,8 +65,12 @@ page script ui/legacy/web/app.js and the module of `python tools/build.py web le
 ($HOME/loomora-build/web-legacy/dist, or the folder of --exe) in tools/trials/web-node/page-harness.js,
 in a minimal DOM stub and without any browser, with the URL `?probe=1&input=<percent-encoded>&platform=<id>`
 (ASCII, passed on standard input). The page decides by itself between the JavaScript build and the
-WebAssembly one; the id says which one the harness makes possible. A real browser is another launcher
-(not implemented yet).
+WebAssembly one; the id says which one the harness makes possible.
+Web legacy in a real browser in a VirtualBox guest (platform id web-firefox-10-windows-2000-x86, see
+WebFirefoxVmLauncher): the dist folder is served over HTTP by this process, Firefox 10 in the VM
+"Windows 2000" opens `http://10.0.2.2:<port>/index.html?probe=1&input=<text>&platform=<id>&post=1&run=<n>`
+(a long text through a redirect), the page POSTs its probe record back (post=1) and the window is
+closed with Alt+F4; the leftover firefox.exe processes are counted. Same VM rules as the Windows guest.
 Every other family exits with status 1 and "launcher not implemented yet" until the tasks that
 add the UIs (T060-T093) add theirs: they only have to implement Launcher.run().
 Linux modern: the executable built by `python tools/build.py linux modern`
@@ -235,6 +239,7 @@ class RunResult(object):
         self.error = error  # the launcher could not even start the UI
         self.leftover = None  # UI processes still alive after the run (None: not measured)
         self.guest_wall_ms = None  # process lifetime measured inside the guest (None: not measured)
+        self.page_ms = None  # Web in a browser: start of the browser to the posted record (None: not measured)
 
 
 class Launcher(object):
@@ -260,6 +265,10 @@ class Launcher(object):
         (the id of the platform record). Only a launcher whose UI can run as another ABI than the
         platform's overrides it."""
         return platform_id
+
+    def extra_evidence(self):
+        """Other text files for --evidence-dir, as {file name suffix: text} (after the runs)."""
+        return {}
 
     def close(self):
         """Release what prepare() acquired."""
@@ -1256,6 +1265,370 @@ class WebNodeLauncher(Launcher):
                          res.stderr.decode("utf-8", "replace"), time.time() - start)
 
 
+# ---- Web legacy page in Firefox 10 in a VirtualBox guest (T093, spike S5) -------------------------
+
+# Browser platforms run in a VirtualBox guest: platform id -> (default VM name, firefox.exe in the guest).
+WEB_FIREFOX_VM_PLATFORMS = {
+    "web-firefox-10-windows-2000-x86": ("Windows 2000", "C:\\Program Files\\Mozilla Firefox\\firefox.exe"),
+}
+WEB_HOST_ADDRESS = "10.0.2.2"      # the host as seen from a VirtualBox NAT guest
+WEB_DIRECT_URL_MAX = 1500          # longer URLs go through a redirect: cmd.exe cuts a line at 8,191
+WEB_CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
+                     ".wasm": "application/wasm"}
+FIREFOX_PROFILE_PREFS = (
+    # Only what removes first-run pages, update and default-browser questions and the restore-session
+    # page after a close: nothing here touches JavaScript, the cache or the network.
+    ('browser.shell.checkDefaultBrowser', 'false'),
+    ('browser.startup.homepage', '"about:blank"'),
+    ('browser.startup.page', '0'),
+    ('startup.homepage_welcome_url', '""'),
+    ('browser.startup.homepage_override.mstone', '"ignore"'),
+    ('browser.rights.3.shown', 'true'),
+    ('browser.sessionstore.resume_from_crash', 'false'),
+    ('browser.tabs.warnOnClose', 'false'),
+    ('browser.warnOnQuit', 'false'),
+    ('toolkit.telemetry.prompted', '2'),
+    ('toolkit.telemetry.rejected', 'true'),
+    ('app.update.enabled', 'false'),
+    ('app.update.auto', 'false'),
+    ('extensions.update.enabled', 'false'),
+    ('extensions.blocklist.enabled', 'false'),
+    ('browser.search.update', 'false'),
+)
+GUEST_FF_PROCS = "ffprocs.exe"
+FF_HELPER_SOURCE = "tools/guest/ffprocs.c"
+FF_HELPER_BUILD = "tools/guest/build_ffprocs.sh"
+GUEST_FF_COUNT_BAT = "ffcount.bat"
+GUEST_FF_KILL_BAT = "ffkill.bat"
+GUEST_FF_LAUNCH_BAT = "fflaunch.bat"
+TAG_FF_COUNT = "FIREFOX-PROCESSES "
+TAG_FF_KILLED = "FIREFOX-KILLED "
+
+
+class WebProbeServer(object):
+    """The HTTP server of the Firefox runs: serves the dist folder of `python tools/build.py web
+    legacy` on every address of the host (the guest reaches it at 10.0.2.2), logs every request,
+    and stores what the page sends with post=1: POST /probe (the probe record) and POST
+    /probe-error (a failure message). `redirects` maps /v/<run> to a long URL; `posts` maps the
+    `run` query field of a POST to (path, body, time). Nothing is cached (Cache-Control: no-store),
+    so every run fetches every file again."""
+
+    def __init__(self, dist_dir, port=0):
+        import http.server
+        self.dist = Path(dist_dir)
+        self.requests = []       # (utc time text, client, method, path, status, bytes, user agent)
+        self.posts = {}
+        self.events = {}
+        self.redirects = {}
+        self.lock = threading.Lock()
+        owner = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.0"
+            server_version = "loomora-probe-server"
+
+            def log_message(self, fmt, *a):  # the log is ours (record)
+                pass
+
+            def _done(self, status, size):
+                owner.record(self.client_address[0], self.command, self.path, status, size,
+                             self.headers.get("User-Agent", ""))
+
+            def _send(self, status, body, ctype="text/plain; charset=us-ascii", extra=()):
+                self.send_response(status)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                for k, v in extra:
+                    self.send_header(k, v)
+                self.end_headers()
+                if self.command != "HEAD":
+                    self.wfile.write(body)
+                self._done(status, len(body))
+
+            def do_HEAD(self):
+                self.do_GET()
+
+            def do_GET(self):
+                parsed = urllib.parse.urlsplit(self.path)
+                name = parsed.path
+                if name.startswith("/v/") and name[3:].isdigit() and int(name[3:]) in owner.redirects:
+                    self._send(302, b"", extra=(("Location", owner.redirects[int(name[3:])]),))
+                    return
+                if name == "/":
+                    name = "/index.html"
+                target = owner.dist / name.lstrip("/")
+                if "/" in name.lstrip("/") or not target.is_file():
+                    self._send(404, b"not found")
+                    return
+                self._send(200, target.read_bytes(), WEB_CONTENT_TYPES.get(target.suffix, "application/octet-stream"))
+
+            def do_POST(self):
+                parsed = urllib.parse.urlsplit(self.path)
+                length = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(length) if length else b""
+                if parsed.path not in ("/probe", "/probe-error"):
+                    self._send(404, b"not found")
+                    return
+                query = urllib.parse.parse_qs(parsed.query)
+                run = int((query.get("run") or ["0"])[0] or 0)
+                with owner.lock:
+                    owner.posts[run] = (parsed.path, body, time.time())
+                    event = owner.events.get(run)
+                self._send(204, b"")
+                if event is not None:
+                    event.set()
+
+        import socketserver
+
+        class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+            daemon_threads = True
+            allow_reuse_address = True
+
+        self.httpd = Server(("0.0.0.0", port), Handler)
+        self.port = self.httpd.server_address[1]
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+
+    def start(self):
+        self.thread.start()
+
+    def stop(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+    def record(self, client, method, path, status, size, agent):
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with self.lock:
+            self.requests.append((stamp, client, method, path, status, size, agent))
+
+    def expect(self, run):
+        event = threading.Event()
+        with self.lock:
+            self.events[run] = event
+            self.posts.pop(run, None)
+        return event
+
+    def log_text(self):
+        lines = []
+        for stamp, client, method, path, status, size, agent in self.requests:
+            shown = path if len(path) <= 160 else path[:160] + "...(%d chars)" % len(path)
+            lines.append("%s %s %s %s -> %d (%d bytes) UA=%s" % (stamp, client, method, shown, status, size, agent))
+        return "".join(l + "\n" for l in lines)
+
+
+class WebFirefoxVmLauncher(Launcher):
+    """The Web Legacy page in Firefox 10 in a VirtualBox guest (Windows 2000), JavaScript path.
+
+    The dist folder of `python tools/build.py web legacy` (--exe DIR, $LOOMORA_WEB_DIST, or the
+    build folder of WSL) is served over HTTP by this process (WebProbeServer, any free port). Each
+    run starts firefox.exe in the guest through a .bat file (the old Guest Additions pass no
+    argument to a program) with `-no-remote -profile <guest folder>\\ff-profile` and the URL
+    http://10.0.2.2:<port>/index.html?probe=1&input=<text>&platform=<id>&post=1&run=<n>; the page
+    posts its probe record back (post=1), which is what is checked. Then the window is closed with
+    Alt+F4 (VBoxManage controlvm keyboardputscancode) and the firefox.exe processes still alive
+    are counted (tools/guest/ffprocs.c, tool help library), terminated if any. A long text (a URL of
+    more than WEB_DIRECT_URL_MAX characters) is reached through a redirect of the server.
+    The profile is new, in the guest folder, with only the preferences of FIREFOX_PROFILE_PREFS.
+    Settings: LOOMORA_VM_NAME, LOOMORA_VM_USER (default "name"), LOOMORA_VM_PASSWORD (default
+    empty), LOOMORA_VM_DIR (default "C:\\Documents and Settings\\<user>\\loomora-web"),
+    LOOMORA_VBOXMANAGE, LOOMORA_WEB_DIST. The VM must be running with the user logged on; this
+    never starts, stops, snapshots or restores it. Serial runs."""
+
+    length_unit = "utf16"  # the field limit counts UTF-16 units (JavaScript)
+    max_jobs = 1
+
+    def __init__(self, args):
+        Launcher.__init__(self, args)
+        default_vm, self.firefox = WEB_FIREFOX_VM_PLATFORMS[args.platform_id]
+        self.vm = os.environ.get("LOOMORA_VM_NAME") or default_vm
+        self.user = os.environ.get("LOOMORA_VM_USER") or "name"
+        password = os.environ.get("LOOMORA_VM_PASSWORD") or ""
+        self.guest_dir = (os.environ.get("LOOMORA_VM_DIR")
+                          or "C:\\Documents and Settings\\%s\\loomora-web" % self.user)
+        self.profile = self.guest_dir + "\\ff-profile"
+        self.guest = VBoxGuest(VBoxGuest.find_vboxmanage(), self.vm, self.user, password)
+        self.scratch = os.path.join(tempfile.gettempdir(), "loomora-webvm-%d" % os.getpid())
+        os.makedirs(self.scratch)
+        self.server = None
+        self.run_number = 0
+        self.dist = None
+
+    def close(self):
+        if self.server is not None:
+            self.server.stop()
+            self.server = None
+        self.guest.close()
+        shutil.rmtree(self.scratch, ignore_errors=True)
+
+    def guest_path(self, name):
+        return self.guest_dir + "\\" + name
+
+    def _host_file(self, name, data):
+        path = os.path.join(self.scratch, name)
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+
+    def _put(self, name, data):
+        self.guest.copyto(self._host_file(name, data), self.guest_path(name))
+
+    def dist_dir(self):
+        if self.args.exe:
+            return Path(self.args.exe)
+        if os.environ.get("LOOMORA_WEB_DIST"):
+            return Path(os.environ["LOOMORA_WEB_DIST"])
+        if sys.platform == "win32":  # the build folder of WSL, as a UNC path
+            distro = self.args.wsl_distro or os.environ.get("LOOMORA_WSL_DISTRO") or DEFAULT_WSL_DISTRO
+            res = subprocess.run(["wsl", "-d", distro, "--", "sh", "-c",
+                                  'wslpath -w "${LOOMORA_BUILD_DIR:-$HOME/loomora-build}/web-legacy/dist"'],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if res.returncode == 0:
+                return Path(res.stdout.decode("utf-8", "replace").strip())
+        return Path.home() / "loomora-build" / "web-legacy" / "dist"
+
+    def ff_count(self, kill=False):
+        """The number of firefox.exe processes alive in the guest (None: unknown); kill=True
+        terminates them first-counted (the count is the one before the termination)."""
+        bat = GUEST_FF_KILL_BAT if kill else GUEST_FF_COUNT_BAT
+        try:
+            _rc, out, _err = self.guest.run_program(self.guest_path(bat), 60)
+        except VBoxError:
+            return None
+        for line in out.splitlines():
+            if line.startswith(TAG_FF_COUNT):
+                try:
+                    return int(line[len(TAG_FF_COUNT):])
+                except ValueError:
+                    return None
+        return None
+
+    def prepare(self):
+        info = self.guest.state()
+        if info.get("VMState") != "running":
+            raise VBoxError("VM %r is not running (state: %s): start it and log on first, this "
+                            "launcher never starts, stops or restores a VM"
+                            % (self.vm, info.get("VMState", "unknown")))
+        self.dist = self.dist_dir()
+        for name in ("index.html", "app.js", "loomora.js"):
+            if not (self.dist / name).is_file():
+                raise VBoxError("%s not found in %s (python tools/build.py web legacy, then "
+                                "--exe DIR or LOOMORA_WEB_DIST)" % (name, self.dist))
+        rc, _out, err = self.guest.guestcontrol("stat", [self.firefox])
+        if rc != 0:
+            raise VBoxError("%s not found in the guest: %s" % (self.firefox, err.strip()[:200]))
+        self.guest.mkdir(self.guest_dir)
+        self.guest.mkdir(self.profile)
+        prefs = "".join('user_pref("%s", %s);\n' % kv for kv in FIREFOX_PROFILE_PREFS)
+        self.guest.copyto(self._host_file("user.js", prefs.encode("ascii")), self.profile + "\\user.js")
+        helper = common.ROOT / "out" / "windows-legacy" / "guest" / GUEST_FF_PROCS
+        source = common.ROOT / FF_HELPER_SOURCE
+        if not helper.is_file() or helper.stat().st_mtime < source.stat().st_mtime:
+            distro = self.args.wsl_distro or os.environ.get("LOOMORA_WSL_DISTRO") or DEFAULT_WSL_DISTRO
+            res = subprocess.run(["wsl", "-d", distro, "--cd", str(common.ROOT), "--", "sh",
+                                  FF_HELPER_BUILD], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 timeout=600)
+            if res.returncode != 0 or not helper.is_file():
+                raise VBoxError("cannot build the guest helper %s in WSL (%s):\n%s"
+                                % (FF_HELPER_SOURCE, distro, res.stdout.decode("utf-8", "replace")[-1500:]))
+        self.guest.copyto(helper, self.guest_path(GUEST_FF_PROCS))
+        for name, option in ((GUEST_FF_COUNT_BAT, ""), (GUEST_FF_KILL_BAT, " --kill")):
+            bat = "@echo off\r\ncd /d \"%s\"\r\n\"%s\"%s\r\n" % (
+                self.guest_dir, self.guest_path(GUEST_FF_PROCS), option)
+            self._put(name, bat.encode("ascii"))
+        before = self.ff_count(kill=True)
+        if before is None:
+            raise VBoxError("cannot count the firefox.exe processes of the guest (WMI)")
+        self.server = WebProbeServer(self.dist)
+        self.server.start()
+        version = self.firefox_version()
+        digests = ", ".join("%s sha256 %s" % (n, common.sha256(self.dist / n)[:16])
+                            for n in ("index.html", "app.js", "loomora.js"))
+        return ("Firefox %s in VirtualBox VM %r (%s MB RAM), guest user %r, folder %s, server http://%s:%d/ "
+                "serving %s (%s); %d firefox.exe process(es) terminated before the series"
+                % (version, self.vm, info.get("memory", "?"), self.user, self.guest_dir,
+                   WEB_HOST_ADDRESS, self.server.port, self.dist, digests, before))
+
+    def firefox_version(self):
+        ini = os.path.join(self.scratch, "application.ini")
+        folder = self.firefox.rsplit("\\", 1)[0]
+        if self.guest.copyfrom(folder + "\\application.ini", ini):
+            try:
+                with open(ini, "r", encoding="utf-8", errors="replace") as f:
+                    m = re.search(r"^Version=(\S+)", f.read(), re.M)
+                if m:
+                    return m.group(1)
+            except OSError:
+                pass
+        return "?"
+
+    def page_url(self, query):
+        return "http://%s:%d/index.html%s" % (WEB_HOST_ADDRESS, self.server.port, query)
+
+    def open_url(self, url):
+        """Starts firefox.exe on `url` without waiting (a window on the guest desktop)."""
+        safe = url.replace("%", "%%")
+        bat = ("@echo off\r\ncd /d \"%s\"\r\nstart \"\" \"%s\" -no-remote -profile \"%s\" \"%s\"\r\n"
+               % (self.firefox.rsplit("\\", 1)[0], self.firefox, self.profile, safe))
+        self._put(GUEST_FF_LAUNCH_BAT, bat.encode("ascii"))
+        # `start`, not `run`: firefox.exe inherits the output of the .bat, so a `run` would wait
+        # for the browser to exit
+        rc, _out, err = self.guest.guestcontrol("start", ["--exe", self.guest_path(GUEST_FF_LAUNCH_BAT)])
+        if rc != 0:
+            raise VBoxError("cannot start %s in the guest: %s" % (GUEST_FF_LAUNCH_BAT, err.strip()[:300]))
+
+    def send_scancodes(self, codes):
+        rc, _out, err = self.guest.vbm(["controlvm", self.vm, "keyboardputscancode"]
+                                       + ["%02x" % c for c in codes], 60)
+        if rc != 0:
+            raise VBoxError("keyboardputscancode failed: %s" % err.strip()[:200])
+
+    def close_window(self, wait=20):
+        """Alt+F4 on the Firefox window, then waits for the firefox.exe processes to end; returns
+        the number still alive after `wait` seconds (they are then terminated), None if unknown."""
+        self.send_scancodes([0x38, 0x3E, 0x3E | 0x80, 0x38 | 0x80])
+        deadline = time.time() + wait
+        count = self.ff_count()
+        while count and time.time() < deadline:
+            time.sleep(1.5)
+            count = self.ff_count()
+        if count:
+            self.ff_count(kill=True)
+        return count
+
+    def extra_evidence(self):
+        return {"server-requests.txt": self.server.log_text()}
+
+    def run(self, text, timeout):
+        start = time.time()
+        self.run_number += 1
+        n = self.run_number
+        query = web_probe_query(text, self.args.platform_id) + "&post=1&run=%d" % n
+        url = self.page_url(query)
+        launch_url = url
+        if len(url) > WEB_DIRECT_URL_MAX:
+            self.server.redirects[n] = url
+            launch_url = "http://%s:%d/v/%d" % (WEB_HOST_ADDRESS, self.server.port, n)
+        event = self.server.expect(n)
+        try:
+            self.open_url(launch_url)
+        except VBoxError as e:
+            self.ff_count(kill=True)
+            return RunResult(None, "", "", time.time() - start, str(e))
+        launched = time.time()
+        if not event.wait(timeout):
+            self.ff_count(kill=True)
+            return RunResult(None, "", "", time.time() - start,
+                             "no probe record posted in %s s (firefox.exe processes terminated)" % timeout)
+        path, body, posted = self.server.posts[n]
+        leftover = self.close_window()
+        result = RunResult(0 if path == "/probe" else 1, body.decode("ascii", "replace") + "\n",
+                           "" if path == "/probe" else body.decode("ascii", "replace"),
+                           time.time() - start)
+        result.leftover = leftover
+        result.page_ms = int((posted - launched) * 1000)  # start of firefox.exe to the posted record
+        return result
+
+
 LAUNCHERS = {("linux", "modern"): LinuxModernLauncher,
              ("linux", "legacy"): LinuxLegacyLauncher,
              ("windows", "legacy"): WindowsLegacyLauncher,
@@ -1271,6 +1644,8 @@ def select_launcher(family, variant, platform_id):
         return WindowsVirtualBoxLauncher
     if (family, variant) == ("web", "legacy") and platform_id in WEB_NODE_PLATFORMS:
         return WebNodeLauncher
+    if (family, variant) == ("web", "legacy") and platform_id in WEB_FIREFOX_VM_PLATFORMS:
+        return WebFirefoxVmLauncher
     return LAUNCHERS.get((family, variant))
 
 
@@ -1287,7 +1662,7 @@ def check_run(vector, result, platform_id, variant):
         return ["launch: " + result.error], None
     problems = []
     if result.leftover:
-        problems.append("%d loomora.exe process(es) still alive after the run" % result.leftover)
+        problems.append("%d UI process(es) still alive after the run" % result.leftover)
     if result.returncode != 0:
         problems.append("exit status %s, stderr: %s" % (result.returncode, result.stderr.strip()[:300]))
     line, problem = check_probe.find_probe_line(result.stdout)
@@ -1391,7 +1766,10 @@ def self_test():
                True)
     expect("web launcher for web-node-js", select_launcher("web", "legacy", "web-node-js"), WebNodeLauncher)
     expect("web launcher for web-node-wasm", select_launcher("web", "legacy", "web-node-wasm"), WebNodeLauncher)
-    expect("no launcher yet for a browser platform", select_launcher("web", "legacy", "web-firefox-12-windows-2000-x86"), None)
+    expect("no launcher for a browser platform that was not run", select_launcher("web", "legacy", "web-firefox-12-windows-2000-x86"), None)
+    expect("web launcher for Firefox 10 in the Windows 2000 VM",
+           select_launcher("web", "legacy", "web-firefox-10-windows-2000-x86"), WebFirefoxVmLauncher)
+    expect("Firefox VM launcher counts UTF-16 units", WebFirefoxVmLauncher.length_unit, "utf16")
     expect("web launcher counts UTF-16 units", WebNodeLauncher.length_unit, "utf16")
     print("self-test %s" % ("FAILED" if failures else "passed"))
     return 1 if failures else 0
@@ -1524,9 +1902,11 @@ def main(argv=None):
         problems, line = check_run(vector, result, expected_id, args.variant)
         return vector, result, problems, line
 
+    extra = {}
     try:
         with ThreadPoolExecutor(max_workers=jobs) as pool:
             outcomes = list(pool.map(one, runs))  # keeps the order of vectors.json
+        extra = launcher.extra_evidence()
     except VBoxError as e:  # the guest stopped accepting the credentials in the middle of a run
         print("run_vectors: %s" % e, file=sys.stderr)
         return 1
@@ -1545,7 +1925,8 @@ def main(argv=None):
                 say("       " + p)
         else:
             passed += 1
-            say("ok   %s  %.1fs" % (vector.describe(), result.elapsed))
+            say("ok   %s  %.1fs%s" % (vector.describe(), result.elapsed,
+                                       "" if result.page_ms is None else " (browser start to record %d ms)" % result.page_ms))
     total = time.time() - started
     say("summary: %d vector(s) run, %d passed, %d failed, %d skipped; %d truncated to %d %s; "
         "%.1f s with %d worker(s)"
@@ -1564,6 +1945,9 @@ def main(argv=None):
             f.write("".join(l + "\n" for l in lines))
         with open(str(out / (stem + "-log.txt")), "w", encoding="utf-8", newline="\n") as f:
             f.write("".join(l + "\n" for l in log))
+        for suffix, text in sorted(extra.items()):
+            with open(str(out / (stem + "-" + suffix)), "w", encoding="utf-8", newline="\n") as f:
+                f.write(text)
         print("evidence written to %s" % out)
     return 0 if failed == 0 else 1
 
