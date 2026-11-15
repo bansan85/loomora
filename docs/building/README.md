@@ -107,3 +107,71 @@ The zips are `out\windows-modern\loomora-winui-<net8|net10>-<x64|arm64>.zip`; th
 `build.py` writes the deliverable record of each build into `docs/implementation/validation/deliverables/` (only when the submodule is checked out); do not commit those records unless the build is the one a verdict refers to.
 
 **Not available yet**: scenario 4 (Web), scenario 5 (text change across every platform: only three UIs exist), the macOS, iOS and Android builds, and scenario 0 (spikes, manual). Scenario 6 (`tools/measure_sharing.py`, `tools/prefix_check.py`, `tools/report.py`) and scenario 7 (the procedures in `docs/implementation/validation/procedures/`, written for Windows and Linux only) exist in part; run the tools with `--help`. The quickstart still names `tools/build.py windows-2000 legacy` and `windows-11 modern`; the working form is the one above (T118).
+
+## Continuous integration
+
+Seven workflows in `.github/workflows/` build and test on GitHub what a hosted runner can run (decisions and measured facts: ADR 0018, `docs/implementation/adr/0018-ci-github-hosted-runners.md`). Every one of them runs on each push to any branch and on each pull request from a fork (a pull request from this repository is already covered by the push of its branch). Rules common to all: actions pinned by full commit SHA, `permissions: contents: read`, `persist-credentials: false`, outdated runs cancelled, a timeout on every job, a `changes` job that skips what a change cannot affect, and a final `gate` job.
+
+| Workflow file | Trigger | Runner | What it checks | Artifacts (14 days) | Local equivalent |
+|---|---|---|---|---|---|
+| `ci.yml` (CI) | push, fork PR, Mondays 03:17 UTC | `ubuntu-22.04`, `ubuntu-24.04`, `ubuntu-24.04-arm`; variants on `ubuntu-24.04` | `verify.py quick`: backend build, ctest (selftest and Catch2), 15 vectors through the Xlib and gtkmm UIs on a private Xvfb, `check_std`, `check_ui_logic`, `validate_records`, the self-tests; the variants (GTK 3.10 floor, GTK 4, i686 Xlib, Xlib core font) when their files change; a documentation-only change runs the records only | `verify-logs-<runner>`, `verify-logs-variants`: build, vector and probe-line logs of `verify.py` (no executable: a Linux binary is built on the machine that runs it) | `python3 tools/verify.py quick` (`--variants` for the variants) |
+| `windows.yml` (Windows) | push, fork PR, Mondays 03:47 UTC | `ubuntu-24.04` (MinGW-w64 cross build), `windows-2025` and `windows-11-arm` (runs), `windows-2025` (host build) | cross build of the Windows Legacy UI with the import allowlist check; 15 vectors through the x64 and the x86 executable (x86 under WOW64 or emulation); clang + Ninja host build with `verify.py quick --only build,ctest,vectors,ui-logic,records,diff` | `windows-legacy-exe` (`x64` and `x86` `loomora.exe`), `vectors-logs-<runner>` (vector log and probe lines), `verify-logs-windows-host` | `python3 tools/build.py windows legacy` in WSL, then `python tools/run_vectors.py windows-11-x64 legacy [--arch x86]`; `python tools/verify.py quick` |
+| `winui3.yml` (WinUI 3) | push, fork PR, Mondays 04:17 UTC | `windows-2025-vs2026` (build), `windows-2025` (x64 runs), `windows-11-arm` (ARM64 runs) | `loomora.dll` for x64 and ARM64 and the four published folders (net8 and net10); Windows App Runtime 2.6.5 installed from the NuGet package; 15 vectors per folder | `winui3-zips` (the four zips), `winui3-vectors-logs-<arch>` | `python tools/build.py windows modern`, then `python tools/run_vectors.py windows-11-x64 modern` |
+| `web.yml` (Web) | push, fork PR, Mondays 03:47 UTC | `ubuntu-24.04` (builds, node runs), `windows-2025` (Chrome) | Emscripten builds of the Legacy (JavaScript and WebAssembly paths) and Modern pages; 15 vectors under node for `web-node-js legacy`, `web-node-wasm legacy` and `web-node-wasm modern`; the Modern page in the headless Chrome of the image | `web-legacy-dist`, `web-modern-dist` (the pages), `web-logs`, `web-chrome-logs` | `python3 tools/build.py web legacy` and `web modern`, then `python3 tools/run_vectors.py web-node-wasm modern --exe ~/loomora-build/web-modern/dist` (and the other ids) |
+| `android.yml` (Android) | push, fork PR, Mondays 04:17 UTC | `ubuntu-24.04` (builds; emulator jobs with KVM) | Legacy build with the NDK r15c (download checked by size, SHA-1 and SHA-256), Modern build with the NDK r30; 15 vectors for the Legacy UI on an API 16 x86 emulator and for the Modern UI on an API 24 x86_64 emulator | `android-legacy-apk`, `android-modern-apk`, `android-<ui>-build-log`, `android-<ui>-emulator-logs` | `python tools/build.py android legacy` and `android modern` on the Windows host, an emulator started by hand, `python tools/run_vectors.py android-4.1.2-x86 legacy` |
+| `manylinux1.yml` (manylinux1) | push, fork PR, manual | `ubuntu-24.04` with Docker | the Linux Legacy UI built and run in the CentOS 5.11 image (glibc 2.5): kernel and vsyscall probe, 15 vectors, window run on a private Xvfb | `manylinux1-logs` (probes, image and UI builds, vectors, window run) | the commands of procedure L.11 (`docs/implementation/validation/procedures/linux.md`) |
+| `quality.yml` (quality) | push, fork PR | `ubuntu-24.04` | `validate_records.py`, `report.py --check`, `diff_verdicts.py` against the target branch, and the self-tests of the tools | `quality-logs` | `python3 tools/validate_records.py`, `python3 tools/report.py --check`, `python3 tools/diff_verdicts.py <revision of docs/implementation>` |
+
+The `quality` workflow builds nothing: the executables, probe lines and vector logs are the artifacts of the other workflows, listed above. Artifacts expire after 14 days and are not evidence: a log is stored in the records only when it proves something new (ADR 0014). Download one with `gh run download <run id> -n <artifact name> -R bansan85/loomora`.
+
+### What `quality.yml` covers
+
+- `validate_records.py` and `report.py --check` need the docs submodule and fail when a record, an evidence hash or `report.md` is out of date.
+- `diff_verdicts.py` compares the verdicts with those of the target branch: the base of a pull request or, on a push, the merge base with `master` (the previous commit on `master` itself). The baseline is the docs revision that the target commit points to (`git ls-tree <target> docs/implementation`); the job fetches it from `loomora-docs` when the shallow submodule checkout lacks it. The comparison is a report printed in the job summary: a changed status does not fail the job (it is a decision of the owner), an unreadable baseline does.
+- The self-tests of `validate_records`, `report`, `diff_verdicts`, `check_probe`, `check_imports` and `run_vectors` run too; none needs a submodule.
+- Replaying the procedures (FR-016, FR-018): the jobs of the other workflows replay the steps of the procedures that a hosted runner can run (reference vectors through each UI, the Linux window run, the L.11 steps). Everything that needs a virtual machine or Apple hardware is a local run (next section). No job replays a procedure that is not listed here.
+
+### The checks to read: the `gate` jobs
+
+Each workflow ends with a job named `gate`, `gate (windows)`, `gate (winui3)`, `gate (manylinux1)` or `gate (quality)`; it always runs and passes when no job it depends on failed (a skipped job is fine). Read these, not the build jobs. Three workflows (`ci.yml`, `web.yml`, `android.yml`) name their job `gate` without a suffix, so three checks have the same name. In `android.yml` the emulator jobs are outside the gate (a flaky boot must not block a merge) but are never `continue-on-error`: read them in the run.
+
+### Read a run
+
+```
+PS> & "C:\Program Files\GitHub CLI\gh.exe" run list -R bansan85/loomora --branch <branch> -L 10
+PS> & "C:\Program Files\GitHub CLI\gh.exe" run view <run id> -R bansan85/loomora
+PS> & "C:\Program Files\GitHub CLI\gh.exe" run view <run id> -R bansan85/loomora --log-failed
+```
+
+`run view` lists the jobs and the artifacts; `--log-failed` prints the logs of the failed steps only; `--job <job id>` selects one job. The job summary of `quality.yml` shows one line per check and the verdict differences.
+
+### Run the same checks locally
+
+`python tools/verify.py quick` (Windows host or WSL) is the verification of any branch and what `ci.yml` runs on each Linux image; the table above gives the command of each other workflow. `python tools/verify.py full` is never in CI (graphical changes only, see `CLAUDE.md`).
+
+### How the docs submodule is checked out
+
+The workflows that need the records (`ci.yml`, the host build of `windows.yml`, `manylinux1.yml`, `quality.yml`) use `actions/checkout` with `submodules: recursive`. The submodule URL `../loomora-docs` is relative, so git resolves it against the URL of the repository being checked out and gets `https://github.com/bansan85/loomora-docs`, a public repository: no token is needed. The commit that the submodule pointer names must exist there: push `loomora-docs` first, then `loomora`. A job that only builds (the cross build of `windows.yml`, `winui3.yml`, `android.yml`, the builds of `web.yml`) uses `submodules: false`: building never needs the docs.
+
+### No secret, no self-hosted runner
+
+No workflow uses a secret, and none uses a self-hosted runner. Both repositories are public: a self-hosted runner would run, on the owner's machine, the code of a pull request from any fork (GitHub's own guidance is that self-hosted runners should almost never be used for public repositories). Whatever a hosted runner cannot run is a local run, below.
+
+## Local runs (not CI)
+
+What no GitHub-hosted runner can run is run by the owner on the owner's machine and recorded in the validation records (verdicts, procedures, evidence under ADR 0014). Nothing here is a CI job, and no self-hosted runner is ever added to run it (see above).
+
+| Local run | Command or launcher | Needs | Records |
+|---|---|---|---|
+| Windows 2000 (and, when a VM exists, XP, Vista, 7, 8.1, 10, and Windows 10 1809 for the .NET 8 build of WinUI 3) | `python tools/run_vectors.py windows-2000-x86 legacy` (`--arch x86`), helpers in `tools/guest/`, drivers in `tools/trials/windows-2000-x86/` | VirtualBox 7.2 with `VBoxManage` (or `LOOMORA_VBOXMANAGE`); the VM `Windows 2000` already running with the user logged on; `LOOMORA_VM_NAME`, `LOOMORA_VM_USER`, `LOOMORA_VM_PASSWORD`, `LOOMORA_VM_DIR` when they differ from the defaults | `validation/procedures/windows.md` part B, `validation/verdicts/windows-2000-x86-legacy.json` |
+| Firefox 10 (Legacy Web page) | `python tools/run_vectors.py web-firefox-10-windows-2000-x86 legacy --timeout 120 --evidence-dir <folder>` | the same VM; the Legacy page built by `python3 tools/build.py web legacy`, served by the launcher over HTTP to `10.0.2.2` | `validation/procedures/web.md`, `validation/verdicts/web-firefox-10-windows-2000-x86-legacy.json` |
+| Apple legacy (macOS 10.6, iOS 5) | not written yet | Apple hardware or an image supplied by the owner; Xcode 5.1.1 and the 10.6 SDK | none yet: reported `not_tested` |
+| Old Linux distributions in Docker: manylinux2010 (CentOS 6.10), and manylinux1 (CentOS 5.11) on a WSL2 kernel | `docker build -t loomora-manylinux2010 tools/trials/linux-manylinux2010-x86_64` (or `-t loomora-manylinux1 tools/trials/linux-manylinux1-x86_64`), `tools/build.py linux legacy` inside the container, then `python tools/run_vectors.py <platform id> legacy --docker <image> --docker-volume <volume>` | Docker Desktop on the Windows host; for manylinux1 on WSL2, `vsyscall=emulate` in the kernel command line (`kernelCommandLine` of `.wslconfig`, then `wsl --shutdown` and a Docker restart), checked with `docker run --rm quay.io/pypa/manylinux1_x86_64 bash -c "cat /proc/cmdline; echo ok"` (exit 139 means it is missing) | `validation/procedures/linux.md` L.10 and L.11 |
+
+Rules of the VirtualBox runs. The launcher never starts, stops, restores, snapshots or reconfigures a VM: the owner starts it (a desktop visible, the user logged on) and leaves it as found. The only snapshot is the owner's single snapshot `Claude Firefox 10`; nobody creates, restores or deletes another one, and a run that needs a clean state asks the owner to restore that snapshot. The guest has no usable Internet: every file reaches it through `VBoxManage guestcontrol ... copyto` (SHA-256 checked after the copy). Where the system images and installers came from: `validation/procedures/offline-install.md`.
+
+Rules of the Docker runs. `vsyscall=emulate` is a setting of the WSL2 kernel of the owner's machine, needed only for the CentOS 5.11 image there; the hosted `ubuntu-24.04` runners have `CONFIG_LEGACY_VSYSCALL_XONLY=y` and run the same image unmodified, which is why `manylinux1.yml` is a CI job. WSL builds go under `$HOME/loomora-build/<name>`, never in `/tmp`.
+
+Where the results live: `docs/implementation/validation/verdicts/` (one verdict per platform and variant), `procedures/` (how to replay), `evidence/<adr-or-change>/<platform-id>/` (only what proves something new), `deliverables/` (written by `tools/build.py`, committed only when a verdict refers to the build), all under `docs/implementation/validation/`. `python3 tools/report.py --check` and the `quality` workflow check that they agree.
+
+Why no self-hosted runner: both repositories are public, so a pull request from a fork would run its code on the owner's machine, with its files, network and VMs. The local runs above are the replacement; ADR 0018 records the decision.

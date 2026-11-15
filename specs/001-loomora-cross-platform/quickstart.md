@@ -61,3 +61,16 @@ Not available yet: `python tools/build.py web legacy` and `web modern` fail with
 ## Scenario 7 — replayability
 
 A third person follows `docs/implementation/validation/procedures/<family>.md` for an old platform and gets the same verdict (SC-008).
+
+## CI equivalents
+
+What each GitHub workflow of `.github/workflows/` runs (see `docs/building/README.md`, "Continuous integration", for the table and "Local runs (not CI)" for what no hosted runner can run):
+
+- `ci.yml` runs scenario 1 and the Linux UIs of scenarios 2 and 3 on Ubuntu 22.04, 24.04 and 24.04 ARM (`python3 tools/verify.py quick`), and the GTK 3.10, GTK 4, i686 and Xlib core font variants (`--variants`).
+- `windows.yml` runs scenario 2 for Windows: the MinGW-w64 cross build, the vectors on the x64 and x86 executables, and the clang host build.
+- `winui3.yml` runs scenario 3 for Windows 11: the WinUI 3 build for x64 and ARM64 and the vectors on both.
+- `web.yml` runs scenario 4: the Legacy and Modern builds, the vectors under node and in headless Chrome (Firefox 10 is a local run).
+- `android.yml` runs scenarios 2 and 3 for Android: both builds and the vectors on an API 16 and an API 24 emulator.
+- `manylinux1.yml` runs scenario 2 for Linux in the CentOS 5.11 container.
+- `quality.yml` runs the checks of scenario 6 and the verdict comparison with the target branch (FR-018): `validate_records.py`, `report.py --check`, `diff_verdicts.py`, and the self-tests of the tools.
+- Not in CI: scenario 0 (spikes), the Windows 2000 and Firefox 10 virtual machines, the Apple legacy systems, and scenario 7 (a third person replays a procedure).
