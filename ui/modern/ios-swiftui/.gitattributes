@@ -1,0 +1,2 @@
+# Xcode and the Swift sources are read on macOS: keep LF whatever core.autocrlf says on the Windows host.
+* text eol=lf

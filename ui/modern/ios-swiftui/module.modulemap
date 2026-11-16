@@ -1,0 +1,5 @@
+// Exposes the C API of the C++11 backend to Swift (no C++ in the header: c-api.md).
+module CLoomora {
+    header "../../../core/include/loomora.h"
+    export *
+}
