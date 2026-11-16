@@ -2,6 +2,7 @@
 
 	<PropertyGroup>
 		<TargetFrameworks>net11.0-windows10.0.19041.0;net11.0-android</TargetFrameworks>
+		<EmbedAssembliesIntoApk>true</EmbedAssembliesIntoApk>
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
 		<!-- Note for MacCatalyst:
@@ -65,8 +66,8 @@
 
   <ItemGroup>
     <None Condition="$(TargetFramework.StartsWith('net11.0-windows'))" Include="$(MSBuildThisFileDirectory)../../build/host-msvc/core/Release/loomora.dll" Link="loomora.dll" CopyToOutputDirectory="PreserveNewest" />
-    <AndroidNativeLibrary Condition="$(TargetFramework.StartsWith('net11.0-android'))" Include="$(MSBuildThisFileDirectory)../../build/android-arm64-v8a/core/libloomora.so"><Abi>arm64-v8a</Abi></AndroidNativeLibrary>
-    <AndroidNativeLibrary Condition="$(TargetFramework.StartsWith('net11.0-android'))" Include="$(MSBuildThisFileDirectory)../../build/android-x86_64/core/libloomora.so"><Abi>x86_64</Abi></AndroidNativeLibrary>
+    <AndroidNativeLibrary Condition="$(TargetFramework.Contains('-android'))" Include="$(MSBuildThisFileDirectory)../../build/android-arm64-v8a/core/libloomora.so"><Abi>arm64-v8a</Abi></AndroidNativeLibrary>
+    <AndroidNativeLibrary Condition="$(TargetFramework.Contains('-android'))" Include="$(MSBuildThisFileDirectory)../../build/android-x86_64/core/libloomora.so"><Abi>x86_64</Abi></AndroidNativeLibrary>
   </ItemGroup>
 
 </Project>
