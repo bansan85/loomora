@@ -1730,6 +1730,10 @@ def apple_records(family, generic_id, base, artifact, archs=None):
         record = dict(base)
         record["platform_id"] = pid
         record["fallbacks"] = fallbacks_of(pid)
+        if base["ui_variant"] == "modern":
+            # the Legacy fallbacks (Objective-C UIs) are not taken by the Swift deliverable
+            record["fallbacks"] = [f for f in record["fallbacks"]
+                                   if not f.startswith(("macos-legacy-", "ios-legacy-", "apple-legacy-"))]
         if pid != generic_id:
             record["notes"] = ("Deliverable of platform %s (validation/platforms/%s.json), the same "
                                "file for every platform of the family. %s" % (pid, pid, base["notes"]))
