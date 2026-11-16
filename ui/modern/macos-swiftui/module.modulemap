@@ -1,0 +1,6 @@
+// Exposes the C API of the backend to Swift. The header path is relative to this file.
+// The header declares extern "C" functions only: nothing in it needs C++.
+module CLoomora {
+    header "../../../core/include/loomora.h"
+    export *
+}
