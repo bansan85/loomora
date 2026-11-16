@@ -1,0 +1,163 @@
+# Spike S11 (T132): can the Xcode 26 Clang of the `macos-26` runner build an Objective-C + C++11
+# program with -mmacosx-version-min=10.6 for x86_64 only? See the spec Clarifications 2026-11-16 and
+# research R4; the answer decides what T077 (the Legacy macOS UI) can promise.
+#
+# Not part of the gate. It runs on a push that changes the workflow or the program (`gh workflow run`
+# only finds a workflow that is already on the default branch, so a push is the way to start it from
+# a dedicated branch), and by hand once the file is on the default branch:
+#   gh workflow run apple-spike.yml --ref <branch>
+#
+# The program is tools/trials/macos-26/probe.m + probe_cpp.cpp (+ probe_cpp.h). The job prints five
+# labelled blocks in its log, and NEVER fails because a probe fails: every probe that may fail runs
+# with its exit code printed, so all the blocks are always there.
+#   (5) the toolchain: xcodebuild -version, sw_vers, xcrun --show-sdk-path, xcrun --show-sdk-version
+#       (printed first, it is the context of the others);
+#   (1) whether the compile and the link succeed, with the full error if not;
+#   (2) the minimum version of the Mach-O (otool -l: LC_VERSION_MIN_MACOSX / LC_BUILD_VERSION);
+#   (3) the libraries (otool -L): is libc++ linked dynamically, from which dylib path;
+#   (4) the diagnostics of -Werror=partial-availability on a deliberate call to APIs newer than 10.6
+#       (expected to FAIL).
+# The conventions are the ones of ci.yml (T129): a read-only token, `persist-credentials: false`,
+# third-party actions pinned by full commit SHA with the tag in a comment, a timeout.
+
+name: Apple spike S11
+
+on:
+  push:
+    paths:
+      - '.github/workflows/apple-spike.yml'
+      - 'tools/trials/macos-26/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apple-spike-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # The deployment target under test, and the only architecture.
+  MIN_VERSION: "10.6"
+  ARCH: x86_64
+
+jobs:
+  spike:
+    name: spike S11 (macos-26)
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - name: Check out (no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+          persist-credentials: false
+
+      - name: "(5) Toolchain of the runner"
+        run: |
+          # run LABEL COMMAND...: prints the command, its output (stderr included) and its exit
+          # code, and never fails. The exit code stays in $rc.
+          run() { echo "--- $1"; shift; printf '$'; printf ' %q' "$@"; echo; rc=0; "$@" 2>&1 || rc=$?; echo "--- exit code: $rc"; }
+          echo "===== (5) TOOLCHAIN ====="
+          run "xcodebuild -version" xcodebuild -version
+          run "sw_vers" sw_vers
+          run "xcrun --show-sdk-path" xcrun --show-sdk-path
+          run "xcrun --show-sdk-version" xcrun --show-sdk-version
+          run "xcode-select -p" xcode-select -p
+          run "xcrun clang --version" xcrun clang --version
+          run "uname -m (the runner itself)" uname -m
+          run "installed Xcode versions" bash -c 'ls -d /Applications/Xcode*'
+          run "SDKs of the selected Xcode" bash -c 'ls "$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs"'
+
+      - name: "(1) Compile and link"
+        run: |
+          run() { echo "--- $1"; shift; printf '$'; printf ' %q' "$@"; echo; rc=0; "$@" 2>&1 || rc=$?; echo "--- exit code: $rc"; }
+          cd "$GITHUB_WORKSPACE/tools/trials/macos-26"
+          work="$RUNNER_TEMP/spike"
+          mkdir -p "$work"
+          sdk="$(xcrun --show-sdk-path)" || sdk=""
+          common=(-arch "$ARCH" "-mmacosx-version-min=$MIN_VERSION" -isysroot "$sdk")
+          echo "===== (1) COMPILE AND LINK: Objective-C + C++11, $ARCH, -mmacosx-version-min=$MIN_VERSION ====="
+          fail=0
+          run "compile probe.m (Objective-C)" xcrun clang "${common[@]}" -Wall -c probe.m -o "$work/probe.o"
+          [ "$rc" = 0 ] || fail=1
+          run "compile probe_cpp.cpp (C++11, libc++)" xcrun clang++ "${common[@]}" -std=c++11 -stdlib=libc++ -Wall -c probe_cpp.cpp -o "$work/probe_cpp.o"
+          [ "$rc" = 0 ] || fail=1
+          if [ "$fail" = 0 ]; then
+            # The C++ driver links, so that the C++ library is the one of -stdlib=libc++.
+            run "link (clang++ driver, -v shows the linker command)" xcrun clang++ "${common[@]}" -stdlib=libc++ -v "$work/probe.o" "$work/probe_cpp.o" -framework Foundation -framework AppKit -o "$work/probe"
+            [ "$rc" = 0 ] || fail=1
+          else
+            echo "--- link skipped: a compile failed"
+          fi
+          if [ "$fail" = 0 ]; then
+            echo "RESULT (1): compile and link SUCCEEDED"
+          else
+            echo "RESULT (1): compile or link FAILED, the full error is above"
+          fi
+          if [ -x "$work/probe" ]; then
+            echo "--- the runner is $(uname -m): an x86_64 binary needs Rosetta 2 to run, a failure here proves nothing about the build"
+            run "run the binary" "$work/probe"
+          fi
+
+      - name: "(2) Minimum version of the Mach-O"
+        run: |
+          work="$RUNNER_TEMP/spike"
+          echo "===== (2) MINIMUM VERSION (otool -l: LC_VERSION_MIN_MACOSX / LC_BUILD_VERSION) ====="
+          found=0
+          for f in "$work/probe" "$work/probe.o" "$work/probe_cpp.o"; do
+            if [ ! -f "$f" ]; then
+              echo "--- $(basename "$f"): not built, see block (1)"
+              continue
+            fi
+            found=1
+            echo "--- $(basename "$f")"
+            otool -l "$f" > "$work/otool-l-$(basename "$f").txt" 2>&1 || echo "otool -l exit code: $?"
+            grep -A5 -E 'cmd (LC_VERSION_MIN_MACOSX|LC_BUILD_VERSION)' "$work/otool-l-$(basename "$f").txt" || echo "no LC_VERSION_MIN_MACOSX or LC_BUILD_VERSION load command"
+            lipo -info "$f" 2>&1 || echo "lipo -info exit code: $?"
+          done
+          if [ "$found" = 0 ]; then echo "RESULT (2): nothing was built"; fi
+
+      - name: "(3) Libraries of the binary"
+        run: |
+          work="$RUNNER_TEMP/spike"
+          echo "===== (3) LIBRARIES (otool -L) ====="
+          if [ ! -f "$work/probe" ]; then
+            echo "RESULT (3): no binary, the link failed or did not run, see block (1)"
+            exit 0
+          fi
+          otool -L "$work/probe" 2>&1 || echo "otool -L exit code: $?"
+          libcxx="$(otool -L "$work/probe" 2>/dev/null | grep -E 'libc\+\+' || true)"
+          if [ -n "$libcxx" ]; then
+            echo "RESULT (3): libc++ is linked DYNAMICALLY:"
+            echo "$libcxx"
+          else
+            echo "RESULT (3): no libc++ entry in otool -L (not linked dynamically)"
+          fi
+
+      - name: "(4) Deliberate call to an API newer than 10.6"
+        run: |
+          run() { echo "--- $1"; shift; printf '$'; printf ' %q' "$@"; echo; rc=0; "$@" 2>&1 || rc=$?; echo "--- exit code: $rc"; }
+          cd "$GITHUB_WORKSPACE/tools/trials/macos-26"
+          work="$RUNNER_TEMP/spike"
+          mkdir -p "$work"
+          sdk="$(xcrun --show-sdk-path)" || sdk=""
+          common=(-arch "$ARCH" "-mmacosx-version-min=$MIN_VERSION" -isysroot "$sdk")
+          flags=(-Wpartial-availability -Werror=partial-availability -fdiagnostics-show-option)
+          echo "===== (4) -Werror=partial-availability, deployment target $MIN_VERSION ====="
+          run "control: probe.m, only 10.6 APIs (expected to compile)" xcrun clang "${common[@]}" "${flags[@]}" -c probe.m -o "$work/control.o"
+          control_rc=$rc
+          run "deliberate: probe.m -DPROBE_NEW_API, NSJSONSerialization (10.7), -[NSWindow toggleFullScreen:] (10.7), NSByteCountFormatter (10.8) (expected to FAIL)" xcrun clang "${common[@]}" "${flags[@]}" -DPROBE_NEW_API -c probe.m -o "$work/new-api.o"
+          new_rc=$rc
+          if [ "$new_rc" != 0 ]; then
+            echo "RESULT (4): the compile FAILED as expected (exit $new_rc), the diagnostics are above"
+          else
+            echo "RESULT (4): UNEXPECTED, the compile succeeded: -Werror=partial-availability raised nothing for those calls"
+          fi
+          if [ "$control_rc" != 0 ]; then
+            echo "NOTE (4): the control compile (no new API) also failed (exit $control_rc): the flag is too strict for this SDK or the program, see above"
+          fi
