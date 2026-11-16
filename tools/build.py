@@ -860,9 +860,19 @@ def windows_legacy_records(built, platforms):
     return out
 
 
+# Code-sharing metrics of a deliverable are measured by hand (the report of the validation), not by
+# this script: a rewrite of the record keeps them instead of dropping them.
+MEASURED_KEYS = ("shared_loc", "glue_loc", "ui_loc", "sharing_ratio")
+
+
 def write_deliverable(record, artifact):
     name = "%s-%s.json" % (record["platform_id"], record["ui_variant"])
     path = common.VALIDATION / "deliverables" / name
+    if path.is_file():
+        previous = json.loads(path.read_text(encoding="utf-8"))
+        for key in MEASURED_KEYS:
+            if key in previous and key not in record:
+                record[key] = previous[key]
     try:
         shown = artifact.relative_to(common.ROOT).as_posix()
     except ValueError:  # the Web dist/ folder is in the build folder, outside the repository
