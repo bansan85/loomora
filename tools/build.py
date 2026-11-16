@@ -141,6 +141,18 @@ Implemented targets:
                  simulator). Generic record id ios-arm64 while there is no iOS platform record.
                  WRITTEN WITHOUT A MAC, never compiled (see macos modern).
 
+  macos legacy   Clang on ui/legacy/macos-appkit (T077), on a macOS host with Xcode only (the same early
+                 stop elsewhere): Objective-C and AppKit WITHOUT ARC, the sources compiled by the
+                 Xcode 26 Clang with -mmacosx-version-min=10.6 for x86_64 only (the macOS 26 SDK has no
+                 i386), -Werror=partial-availability (APIs newer than 10.6 fail the build; deprecation
+                 warnings are not errors, the SDK 26 headers deprecate the 10.6 names on purpose), and
+                 linked with the C++11 libloomora.a and the libc++ DYLIB of the system (spike S11: Xcode
+                 26 ships no static libc++). Checks slice, minimum version (LC_VERSION_MIN_MACOSX 10.6)
+                 and linked libraries. Writes out/macos-legacy/Loomora.app and a zip made with ditto.
+                 The result is "compiled, NOT RUN on 10.6": a real 10.6 may lack that libc++ dylib.
+                 The 10.6 SDK, osxcross and the i386 slice wait for a real old Mac (spike S2, T067).
+                 WRITTEN WITHOUT A MAC, never compiled (see macos modern).
+
 Platform id of a Linux deliverable: "linux-<os-release ID>-<VERSION_ID>-<machine>" such as
 "linux-ubuntu-24.04-x86_64", the same rule as ui/modern/linux-gtk3/probe.cpp and
 ui/legacy/linux-xlib/probe.c use for the probe record's platform_id (keep them in step). The
@@ -157,6 +169,7 @@ import argparse
 import json
 import os
 import platform
+import plistlib
 import re
 import shutil
 import struct
@@ -175,7 +188,6 @@ DEFAULT_WSL_DISTRO = "Ubuntu-24.04"
 
 # Targets that do not exist yet and the task that will add each of them.
 PENDING = {
-    ("macos", "legacy"): "T077",
     ("ios", "legacy"): "T079",
 }
 
@@ -1512,12 +1524,12 @@ def windows_modern_records(built, platforms, msvc_toolset, msvc_version, dotnet_
     return out
 
 
-# ---- macos modern (T049) and ios modern (T052) ----------------------------------------------
+# ---- macos modern (T049), ios modern (T052), macos legacy (T077), ios legacy (T079) ----------
 #
 # WRITTEN WITHOUT A MAC: the only machine of the author is a Windows PC, so this code has never been
-# run, let alone compiled. It follows the documented behaviour of cmake, lipo, otool, ditto and
-# xcodebuild; the first real run is the Apple CI job (T126, macos-26 runner), and any command line
-# below may need a fix then.
+# run, let alone compiled. It follows the documented behaviour of cmake, lipo, otool, ditto, clang
+# and xcodebuild; the first real run is the Apple CI job (T126, macos-26 runner), and any command
+# line below may need a fix then.
 
 MACOS_MODERN_DIR = common.ROOT / "ui" / "modern" / "macos-swiftui"
 IOS_MODERN_DIR = common.ROOT / "ui" / "modern" / "ios-swiftui"
@@ -1538,10 +1550,18 @@ IOS_MODERN_SDKS = {
 # family; the validator reports them as deliverables without platform until the record exists.
 MACOS_GENERIC_PLATFORM = "macos-universal"
 IOS_GENERIC_PLATFORM = "ios-arm64"
+MACOS_LEGACY_GENERIC_PLATFORM = "macos-x86_64"  # the Legacy macOS build has one slice
+
+# Legacy macOS UI (spec Clarifications, fifth session: compiled on macos-26, never run; the 10.6 SDK
+# build waits for a real old Mac). It is built without Xcode project.
+MACOS_LEGACY_DIR = common.ROOT / "ui" / "legacy" / "macos-appkit"
+MACOS_LEGACY_DEPLOYMENT_TARGET = "10.6"
+MACOS_LEGACY_ARCHS = ("x86_64",)  # the macOS 26 SDK has no i386 slice
+LIBCXX_DYLIB = "/usr/lib/libc++.1.dylib"  # linked dynamically (spike S11: no static libc++ in Xcode 26)
 
 APPLE_HELP = """\
 %s builds only on a macOS host with Xcode (the full application, not only the Command Line Tools):
-xcodebuild, xcrun, lipo, otool and ditto come with it; cmake and ninja must be on PATH (Homebrew,
+xcodebuild, xcrun, lipo, otool, plutil and ditto come with it; cmake and ninja must be on PATH (Homebrew,
 or the GitHub macos-26 runner image). This machine is %s. No Mac was available when the target was
 written, so the code is unchecked: it is built by the Apple CI job (T126)."""
 
@@ -1549,7 +1569,7 @@ written, so the code is unchecked: it is built by the Apple CI job (T126)."""
 def require_apple_host(target):
     if sys.platform != "darwin":
         sys.exit(APPLE_HELP % (target, sys.platform + (" (WSL / Linux)" if in_wsl_or_linux() else "")))
-    require_tools(["cmake", "ninja", "xcodebuild", "xcrun", "lipo", "otool", "ditto"])
+    require_tools(["cmake", "ninja", "xcodebuild", "xcrun", "lipo", "otool", "plutil", "ditto"])
 
 
 def check_apple_deployment_target(project_dir, key, expected):
@@ -1635,9 +1655,10 @@ def xcodebuild_run(project_dir, action, work, destination, lib_dir, extra=()):
     return derived
 
 
-def check_apple_app(exe, arch_list, deployment_target):
+def check_apple_app(exe, arch_list, deployment_target, needs=()):
     """Slices and minimum OS version of the app executable; every library it links must be a system
-    one (/usr/lib: libSystem, libc++, the Swift runtime; /System/Library: frameworks). Returns them."""
+    one (/usr/lib: libSystem, libc++, the Swift runtime; /System/Library: frameworks), and each path
+    of `needs` must be among them. Returns the libraries."""
     if binary_archs(exe) != sorted(arch_list):
         sys.exit("%s holds the slices %s, expected %s" % (exe, binary_archs(exe), sorted(arch_list)))
     check_apple_min_version(exe, deployment_target)
@@ -1645,6 +1666,9 @@ def check_apple_app(exe, arch_list, deployment_target):
     other = [lib for lib in libs if not lib.startswith(("/usr/lib/", "/System/Library/"))]
     if other:
         sys.exit("%s links libraries that are not system ones: %s" % (exe, ", ".join(other)))
+    missing = [lib for lib in needs if lib not in libs]
+    if missing:
+        sys.exit("%s does not link %s (otool -L lists %s)" % (exe, ", ".join(missing), ", ".join(libs)))
     return libs
 
 
@@ -1689,20 +1713,23 @@ def apple_records(family, generic_id, base, artifact, archs=None):
     return out
 
 
-def apple_base_record(compiler, target, toolkit, facts, artifact, notes):
-    """The Deliverable fields the macOS and iOS Modern builds share (platform_id and fallbacks are
-    filled per platform by apple_records)."""
+def apple_base_record(compiler, target, toolkit, facts, artifact, notes, legacy=False):
+    """The Deliverable fields the macOS and iOS builds share (platform_id and fallbacks are filled
+    per platform by apple_records). `legacy`: the Objective-C UI, compiled by clang of the same Xcode
+    (`compiler`), instead of the Swift one."""
     xcode, swift, sdk_version = facts
     return {
-        "ui_variant": "modern",
+        "ui_variant": "legacy" if legacy else "modern",
         "cpp_std": "c++11",
         "compiler": compiler,
         "target": target,
         "output": "native",
-        "ui_language": "swift",
+        "ui_language": "objective-c" if legacy else "swift",
         "ui_toolkit": toolkit,
-        "ui_compiler": "Xcode %s, Apple Swift %s (language mode 5.0, SWIFT_VERSION of the project), "
-                       "SDK %s" % (xcode, swift, sdk_version),
+        "ui_compiler": ("Xcode %s, %s (Objective-C, gnu99, manual retain/release, no ARC), SDK %s"
+                        % (xcode, compiler, sdk_version)) if legacy else
+                       ("Xcode %s, Apple Swift %s (language mode 5.0, SWIFT_VERSION of the project), "
+                        "SDK %s" % (xcode, swift, sdk_version)),
         "artifact": {"name": artifact.name, "size": artifact.stat().st_size},
         "disabled_features": [],
         "notes": notes,
@@ -1793,6 +1820,91 @@ def run_ios_modern(args):
            ("; same build for the simulator: " + "; ".join(others)) if others else ""))
     for record, artifact in apple_records("ios", IOS_GENERIC_PLATFORM, base, archive, archs=("arm64",)):
         write_deliverable(record, artifact)
+
+
+def check_macos_legacy_plist(plist):
+    """The Info.plist copied into the bundle must name the executable Loomora and the 10.6 floor."""
+    with open(str(plist), "rb") as handle:
+        data = plistlib.load(handle)
+    wanted = {"CFBundleExecutable": "Loomora", "LSMinimumSystemVersion": MACOS_LEGACY_DEPLOYMENT_TARGET}
+    for key, value in sorted(wanted.items()):
+        if data.get(key) != value:
+            sys.exit("%s sets %s to %r, the Legacy macOS build expects %r"
+                     % (plist, key, data.get(key), value))
+
+
+def build_macos_legacy_app(work, lib):
+    """Compiles the Objective-C sources of ui/legacy/macos-appkit with the Xcode Clang (no Xcode
+    project, no ARC, x86_64, -mmacosx-version-min=10.6, partial availability is an error, deprecation
+    warnings are not: the SDK 26 headers deprecate the 10.6 names on purpose), links them with the
+    backend library and libc++ (the system dylib) and the Cocoa framework, and assembles
+    <work>/Loomora.app (Contents/MacOS/Loomora, Contents/Info.plist). Returns the bundle."""
+    check_macos_legacy_plist(MACOS_LEGACY_DIR / "Info.plist")
+    sources = sorted(MACOS_LEGACY_DIR.glob("*.m"))
+    if not sources:
+        sys.exit("no Objective-C source in %s" % MACOS_LEGACY_DIR)
+    sdk_path = capture(["xcrun", "--sdk", "macosx", "--show-sdk-path"]).strip()
+    target = ["-arch", MACOS_LEGACY_ARCHS[0], "-mmacosx-version-min=" + MACOS_LEGACY_DEPLOYMENT_TARGET,
+              "-isysroot", sdk_path]
+    objects_dir = work / "obj"
+    if objects_dir.exists():
+        shutil.rmtree(str(objects_dir))
+    objects_dir.mkdir(parents=True)
+    objects = []
+    for source in sources:
+        obj = objects_dir / (source.stem + ".o")
+        common.run(["xcrun", "clang"] + target +
+                   ["-std=gnu99", "-fno-objc-arc", "-Wall", "-Wpartial-availability",
+                    "-Werror=partial-availability", "-O2", "-I", common.ROOT / "core" / "include",
+                    "-c", source, "-o", obj])
+        objects.append(obj)
+    app = work / "Loomora.app"
+    if app.exists():
+        shutil.rmtree(str(app))
+    (app / "Contents" / "MacOS").mkdir(parents=True)
+    exe = app / "Contents" / "MacOS" / "Loomora"
+    # clang (not clang++) drives the link: libc++ is named by hand, it is the system dylib
+    common.run(["xcrun", "clang"] + target + objects +
+               ["-L", lib.parent, "-lloomora", "-lc++", "-framework", "Cocoa", "-o", exe])
+    shutil.copyfile(str(MACOS_LEGACY_DIR / "Info.plist"), str(app / "Contents" / "Info.plist"))
+    common.run(["plutil", "-lint", app / "Contents" / "Info.plist"])
+    return app
+
+
+def run_macos_legacy(args):
+    require_apple_host("macos legacy")
+    build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (common.ROOT / "build"))
+    work = build_root / "macos-legacy"
+    lib, (compiler, _path) = build_apple_library(work / "lib", MACOS_LEGACY_ARCHS, "macosx",
+                                                 MACOS_LEGACY_DEPLOYMENT_TARGET)
+    app = build_macos_legacy_app(work, lib)
+    exe = app / "Contents" / "MacOS" / "Loomora"
+    libs = check_apple_app(exe, MACOS_LEGACY_ARCHS, MACOS_LEGACY_DEPLOYMENT_TARGET, (LIBCXX_DYLIB,))
+    out_dir = common.ROOT / "out" / "macos-legacy"
+    archive = apple_publish(app, out_dir, "loomora-macos-legacy-%s.zip" % "-".join(MACOS_LEGACY_ARCHS))
+    facts = apple_tool_facts("macosx")
+    base = apple_base_record(
+        compiler,
+        "x86_64-apple-macos10.6 (Xcode %s Clang, -mmacosx-version-min=10.6), Loomora.app; COMPILED, "
+        "NOT RUN on 10.6" % facts[0],
+        "AppKit (Cocoa), Objective-C without ARC (manual retain/release), 10.6 APIs only "
+        "(-Werror=partial-availability); libloomora.a (C++11) linked through core/include/loomora.h",
+        facts, archive,
+        "python tools/build.py macos legacy: cmake + ninja builds libloomora.a from core/src for x86_64 "
+        "(-std=c++11 checked in compile_commands.json, -mmacosx-version-min=%s), then Xcode Clang "
+        "compiles ui/legacy/macos-appkit/*.m (-fno-objc-arc, -Wpartial-availability "
+        "-Werror=partial-availability, deprecation warnings left as warnings) and links with "
+        "-lloomora -lc++ -framework Cocoa; slice x86_64 and minimum OS %s checked with lipo and otool; "
+        "the app links only system libraries (%s), libc++ DYNAMICALLY (spike S11: Xcode 26 has no "
+        "static libc++, a real 10.6 may lack %s); SDK %s; artifact sha256 %s. COMPILED, NOT RUN on 10.6 "
+        "(not_tested): no 10.6 machine, the macos-26 runner is Apple silicon; the 10.6 SDK build "
+        "and the i386 slice wait for a real old Mac (spike S2, T067); copied to out/macos-legacy/."
+        % (MACOS_LEGACY_DEPLOYMENT_TARGET, MACOS_LEGACY_DEPLOYMENT_TARGET, ", ".join(libs),
+           LIBCXX_DYLIB, facts[2], common.sha256(archive)),
+        legacy=True)
+    for record, artifact in apple_records("macos", MACOS_LEGACY_GENERIC_PLATFORM, base, archive):
+        write_deliverable(record, artifact)
+    print("app: %s" % (out_dir / "Loomora.app" / "Contents" / "MacOS" / "Loomora"))
 
 
 # ---- web legacy (T085, T086) ---------------------------------------------------------------
@@ -2057,6 +2169,7 @@ TARGETS = {
     ("android", "legacy"): run_android_legacy,
     ("macos", "modern"): run_macos_modern,
     ("ios", "modern"): run_ios_modern,
+    ("macos", "legacy"): run_macos_legacy,
     ("android", "modern"): run_android_modern,
     ("linux", "modern"): run_linux_modern,
     ("linux", "legacy"): run_linux_legacy,
