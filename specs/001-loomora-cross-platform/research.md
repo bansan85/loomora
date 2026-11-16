@@ -29,6 +29,7 @@ Date: 2026-11-12. Rewritten after the backend moved from Rust to C++11 (spec, se
 - **Legacy UI**: **Objective-C / AppKit** (`NSWindow`, `NSTextField` for input, `NSTextField` label) compiled against `MacOSX10.6.sdk`, linked with the static `libloomora.a`. Architectures: `i386` and `x86_64` in one fat binary (spec: x86 and x64). Older macOS (10.5 and earlier, PowerPC) is out of scope; best-effort attempts below 10.6 are recorded only if a machine is at hand.
 - **Modern UI** (decided): **Swift + SwiftUI** (`App` lifecycle), deployment target **macOS 11**, Universal 2 (x86_64 + arm64), current Xcode; the C header is imported through a module map.
 - **To verify (S2)**: modern Clang + the 10.6 SDK produces a binary that launches on a 10.6 machine or VM; the license of the 10.6 SDK/VM requires Apple hardware (build and test on a Mac).
+- **Update 2026-11-16 (spec Clarifications, fifth session)**: no macOS VM runs on the owner's PC (QEMU/KVM and VMware failed, ADR 0019, and the Windows hypervisor stays on), so the Legacy UI is **compiled on the `macos-26` runner** with `-mmacosx-version-min=10.6`, `x86_64` only (the macOS 26 SDK has no i386), `-Werror=partial-availability` (or the equivalent), without the 10.6 SDK (Apple's, not redistributable in a public repository). Risks to settle by spike S11: whether the Xcode 26 linker accepts a 10.6 deployment target; macOS 10.6 has no `libc++`, and Xcode 26 ships no static one, so a backend linked to the system `libc++` would build but not run on 10.6; APIs removed from the 26 SDK but present in 10.6 cannot be used. Result recorded as "compiled, not run on 10.6" (`not_tested`). The 10.6 SDK build (S2) and the i386 slice wait for a real old Mac. Modern UI: built with the newest SDK, run on macOS 26 only; the macOS 11 floor is compiled, not run.
 
 ## R5 — iOS (5 → current)
 
@@ -36,6 +37,7 @@ Date: 2026-11-12. Rewritten after the backend moved from Rust to C++11 (spec, se
 - **Legacy UI**: **Objective-C / UIKit** (`UITextField` + `UILabel` in a `UIViewController`), deployment target **5.0**, slices `armv7`, `armv7s`, `arm64` (the `arm64` slice only runs on iOS 7+ devices, which is a property of the hardware, not a restriction). ARC with `weak` is available from iOS 5; the UI uses manual retain/release to stay safe on 5.0.
 - **Modern UI** (decided): **Swift + SwiftUI**, deployment target **iOS 15** (requirements document decision no. 2), `arm64`, current Xcode.
 - **To verify (S2)**: Xcode 5.1.1 installs and signs on a supported build Mac; an iOS 5.x simulator or device is available (otherwise verdict "not tested" with the reason); how code signing for iOS 5 devices still works today.
+- **Update 2026-11-16 (spec Clarifications, fifth session)**: without a Mac able to run Xcode 5.1.1, the Legacy UI is written in Objective-C / UIKit limited to the APIs of iOS 5 and **compiled on `macos-26` for arm64 with an iOS 12 deployment target** (Xcode 26 builds nothing below iOS 12 and no 32-bit slice): a partial check only. The iOS 5 build (`armv7`, `armv7s`, `arm64`) and every run wait for a real machine; verdict "compiled for arm64 at iOS 12, iOS 5 `not_tested`". Modern UI: built for iOS 15, run on the iOS 26 simulator of `macos-26` only.
 
 ## R6 — Windows (2000 → 11)
 
@@ -100,6 +102,7 @@ Date: 2026-11-12. Rewritten after the backend moved from Rust to C++11 (spec, se
 | S8 | Can WinUI 3 call a C++11 `loomora.dll`, and does Compose accept `minSdk` 21? | R6, R3 |
 | S9 | Do Windows 7 → 11 accept the Windows 2000-targeted Win32 executable (all versions)? | R6 |
 | S10 | What do GitHub-hosted runners provide for the continuous integration (images, KVM, Docker, ARM64, submodule checkout, caching), and what stays a local run? (ADR 0018) | FR-030 |
+| S11 | On the `macos-26` runner, does a tiny Objective-C + C++11 program link with `-mmacosx-version-min=10.6` (x86_64), what minimum version does `otool -l` show, and is `libc++` linked dynamically? (decides whether the Legacy macOS UI can be "compiled, not run" there, spec 2026-11-16) | R4 |
 
 ## Sources
 
