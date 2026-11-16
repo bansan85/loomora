@@ -61,18 +61,27 @@ static uint32_t MillisecondsBetween(uint64_t from, uint64_t to) {
 }
 
 // Resident size of the process in kB from task_info, or -1 when it cannot be read.
-// TASK_BASIC_INFO_64 exists on 10.6; MACH_TASK_BASIC_INFO (10.8 and later) is only the fallback.
+// TASK_BASIC_INFO_64 exists on 10.6; MACH_TASK_BASIC_INFO (10.8 and later) is only the fallback, and
+// it is a plain constant, so naming it creates no link-time dependency (the #ifdef covers an SDK
+// that does not define it). Each call is checked: a return code other than KERN_SUCCESS, a count
+// shorter than the structure, or a resident size of zero (no real process has none) makes the
+// answer unusable and the next source is tried, then -1. This is written for x86_64 under Rosetta
+// as well, but it has never run there: no Mac was available.
 static int64_t ResidentSizeKb(void) {
     task_basic_info_64_data_t info;
     mach_msg_type_number_t count = TASK_BASIC_INFO_64_COUNT;
+    memset(&info, 0, sizeof(info));
     if (task_info(mach_task_self(), TASK_BASIC_INFO_64, (task_info_t)&info, &count) ==
-        KERN_SUCCESS)
+            KERN_SUCCESS &&
+        count >= TASK_BASIC_INFO_64_COUNT && info.resident_size > 0)
         return (int64_t)(info.resident_size / 1024);
 #ifdef MACH_TASK_BASIC_INFO
     mach_task_basic_info_data_t basic;
     count = MACH_TASK_BASIC_INFO_COUNT;
+    memset(&basic, 0, sizeof(basic));
     if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&basic, &count) ==
-        KERN_SUCCESS)
+            KERN_SUCCESS &&
+        count >= MACH_TASK_BASIC_INFO_COUNT && basic.resident_size > 0)
         return (int64_t)(basic.resident_size / 1024);
 #endif
     return -1;
@@ -123,23 +132,48 @@ void LMProbeMarkDisplayed(void) {
     }
 }
 
-// SystemVersion.plist is read instead of Gestalt (deprecated) or NSProcessInfo (10.10 and later).
-// Real version only when the program is linked with the macOS 11 SDK or later (the macos-26
-// build is); older SDKs are told 10.16.
+// "major.minor[.patch]" to major and minor (minor 0 when absent). NO when it is not a version.
+static BOOL ParseVersion(const char *text, int32_t *major, int32_t *minor) {
+    int parsedMajor = 0;
+    int parsedMinor = 0;
+    if (text == NULL)
+        return NO;
+    int fields = sscanf(text, "%d.%d", &parsedMajor, &parsedMinor);
+    if (fields < 1 || parsedMajor <= 0)
+        return NO;
+    if (fields < 2)
+        parsedMinor = 0;
+    // 10.16 is what a program linked with an SDK older than macOS 11 is told on macOS 11 and later;
+    // no real macOS 10.16 exists, so it can only be macOS 11.
+    if (parsedMajor == 10 && parsedMinor == 16) {
+        parsedMajor = 11;
+        parsedMinor = 0;
+    }
+    *major = parsedMajor;
+    *minor = parsedMinor;
+    return YES;
+}
+
+// Version of the running system, without Gestalt (deprecated) or NSProcessInfo (10.10 and later).
+// First choice: sysctlbyname("kern.osproductversion") (macOS 10.13.4 and later). It is looked up by
+// name at run time, so there is no link-time dependency: on 10.6 to 10.13.3 the call fails and the
+// next source is used. SystemVersion.plist is the fallback; it can say 10.16 instead of the real
+// version to a program linked with an SDK older than macOS 11 (the macos-26 build links the macOS 26
+// SDK, which is told the truth, but the plist is only a fallback). Neither path has run on a Mac.
 BOOL LMSystemVersion(int32_t *major, int32_t *minor) {
+    char buffer[64];
+    size_t size = sizeof(buffer) - 1;
+    memset(buffer, 0, sizeof(buffer));
+    if (sysctlbyname("kern.osproductversion", buffer, &size, NULL, 0) == 0 &&
+        ParseVersion(buffer, major, minor))
+        return YES;
+
     NSDictionary *plist = [NSDictionary
         dictionaryWithContentsOfFile:@"/System/Library/CoreServices/SystemVersion.plist"];
     NSString *version = [plist objectForKey:@"ProductVersion"];
-    int parsedMajor = 0;
-    int parsedMinor = 0;
     if (![version isKindOfClass:[NSString class]])
         return NO;
-    int fields = sscanf([version UTF8String], "%d.%d", &parsedMajor, &parsedMinor);
-    if (fields < 1)
-        return NO;
-    *major = parsedMajor;
-    *minor = fields >= 2 ? parsedMinor : 0;
-    return YES;
+    return ParseVersion([version UTF8String], major, minor);
 }
 
 // "macos-<version>-<arch>", for example macos-10.6-x86_64; matches ^[a-z0-9][a-z0-9._-]*$.
