@@ -177,7 +177,7 @@ T069 (spike S4, the manylinux2010 build) was removed on 2026-11-14: Linux binari
 
 ### macOS Legacy UI (Objective-C, AppKit)
 
-- [ ] T076 [P] [US2] Write `ui/legacy/macos-appkit/main.m`, `AppDelegate.h`, `AppDelegate.m` (an `NSWindow` with an `NSTextField` pre-filled "Coucou" and a label showing the greeting from `loomora_greet`, 1,000-character limit, end-of-life banner), `Probe.m` (`--probe`, `--probe-input`, `task_info`, stdout line, exit after 2 seconds) and `Info.plist` (`LSMinimumSystemVersion` 10.6)
+- [X] T076 [P] [US2] Write `ui/legacy/macos-appkit/main.m`, `AppDelegate.h`, `AppDelegate.m` (an `NSWindow` with an `NSTextField` pre-filled "Coucou" and a label showing the greeting from `loomora_greet`, 1,000-character limit, end-of-life banner), `Probe.m` (`--probe`, `--probe-input`, `task_info`, stdout line, exit after 2 seconds) and `Info.plist` (`LSMinimumSystemVersion` 10.6) (done 2026-11-16, branch feat/macos-legacy-ui: written, NOT compiled, no Mac available; the compile is checked by T077 on macos-26; also adds `Probe.h`, the declarations shared by `main.m`, `AppDelegate.m` and `Probe.m`)
 - [ ] T077 [US2] Add the `macos-legacy` target to `tools/build.py`: **on `macos-26` (default)** Xcode 26 Clang with `-mmacosx-version-min=10.6`, `x86_64` only, `-Werror=partial-availability`, `.app` bundle, the backend linked as T132 finds possible, result "compiled, not run on 10.6"; **later, on a real Mac**, Clang + osxcross + 10.6 SDK, `i386` and `x86_64` fat binary (reworded 2026-11-16, spec Clarifications fifth session; needs T132)
 
 ### iOS Legacy UI (Objective-C, UIKit)
