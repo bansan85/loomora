@@ -36,7 +36,7 @@ UNLOCKER_ZIP = "unlocker428.zip"
 UNLOCKER_SHA256 = "7ec212696981a95f7bbf9b04b7d33e644a8a808c88a39db897b16487be456af4"
 UNLOCKER_URL = "https://github.com/DrDonk/unlocker/releases/download/v4.2.8/unlocker428.zip"
 VMWARE_DIR = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "VMware" / "VMware Workstation"
-VMWARE_PROCESSES = ("vmware.exe", "vmware-vmx.exe", "vmware-tray.exe", "vmplayer.exe")
+VMWARE_PROCESSES = ("vmware.exe", "vmware-vmx.exe", "vmplayer.exe")  # the tray icon may stay
 
 
 class SetupError(Exception):
@@ -116,7 +116,7 @@ def flat_descriptor(image, size_bytes):
     return ('# Disk DescriptorFile\nversion=1\nencoding="UTF-8"\nCID=fffffffe\nparentCID=ffffffff\n'
             'createType="monolithicFlat"\n\n# Extent description\nRW %d FLAT "%s" 0\n\n# The Disk Data Base\n#DDB\n'
             'ddb.virtualHWVersion = "21"\nddb.geometry.cylinders = "%d"\nddb.geometry.heads = "255"\n'
-            'ddb.geometry.sectors = "63"\nddb.adapterType = "lsilogic"\n' % (sectors, str(image).replace("\\", "/"), cyl))
+            'ddb.geometry.sectors = "63"\nddb.adapterType = "lsilogic"\n' % (sectors, image, cyl))
 
 
 def unlocker_exe(name):
@@ -222,8 +222,17 @@ def cmd_vmx(args):
     if r.returncode != 0 or not (folder / disks[0]).exists():
         raise SetupError("vmware-vdiskmanager failed (status %d)" % r.returncode)
     if install:
+        # VMware refuses an absolute extent path ("file name syntax is incorrect", 2026-11-16): the extent
+        # must sit in the VM folder under a relative name. A hard link costs no space on the same volume.
+        local = folder / "install-flat.img"
+        try:
+            os.link(str(install), str(local))
+        except OSError:
+            import shutil
+            print("hard link impossible (another volume?): copying %.1f GB" % (install.stat().st_size / 2 ** 30))
+            shutil.copyfile(str(install), str(local))
         disks.append("install.vmdk")
-        (folder / "install.vmdk").write_text(flat_descriptor(install, install.stat().st_size))
+        (folder / "install.vmdk").write_text(flat_descriptor(local.name, local.stat().st_size))
     vmx = folder / ("%s.vmx" % args.name)
     vmx.write_text(build_vmx(args.name, args.guest_os, args.ram_mb, args.cpus, disks))
     print("created %s (guestOS %s, %d MB, %d vCPU, disk %d GB growable%s)\nOpen it with VMware; the Unlocker must be applied first."
@@ -244,8 +253,8 @@ def selftest():
         vmx = build_vmx("t", "darwin25-64", 8192, 4, ["t.vmdk", "install.vmdk"])
         ok('guestOS = "darwin25-64"' in vmx and 'smc.version = "0"' in vmx and 'firmware = "efi"' in vmx, "vmx: guest, SMC, EFI")
         ok('sata0:1.fileName = "install.vmdk"' in vmx, "vmx: install disk on sata0:1")
-        d = flat_descriptor(r"C:\x\install.img", 512 * 1000)
-        ok('RW 1000 FLAT "C:/x/install.img" 0' in d, "descriptor: sectors and forward-slash path")
+        d = flat_descriptor("install-flat.img", 512 * 1000)
+        ok('RW 1000 FLAT "install-flat.img" 0' in d, "descriptor: sectors and a relative extent name")
         z = Path(tmp) / UNLOCKER_ZIP
         z.write_bytes(b"not the unlocker")
         try:
