@@ -66,6 +66,7 @@
   <ItemGroup>
     <None Condition="$(TargetFramework.StartsWith('net11.0-windows'))" Include="$(MSBuildThisFileDirectory)../../build/host-msvc/core/Release/loomora.dll" Link="loomora.dll" CopyToOutputDirectory="PreserveNewest" />
     <AndroidNativeLibrary Condition="$(TargetFramework.StartsWith('net11.0-android'))" Include="$(MSBuildThisFileDirectory)../../build/android-arm64-v8a/core/libloomora.so"><Abi>arm64-v8a</Abi></AndroidNativeLibrary>
+    <AndroidNativeLibrary Condition="$(TargetFramework.StartsWith('net11.0-android'))" Include="$(MSBuildThisFileDirectory)../../build/android-x86_64/core/libloomora.so"><Abi>x86_64</Abi></AndroidNativeLibrary>
   </ItemGroup>
 
 </Project>
