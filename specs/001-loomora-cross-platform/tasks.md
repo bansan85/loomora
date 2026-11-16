@@ -122,7 +122,7 @@ description: "Task list for Loomora across 15 years of platforms (C++11 backend,
 ### iOS Modern UI (Swift, SwiftUI)
 
 - [X] T050 [P] [US1] Create `ui/modern/ios-swiftui/Loomora.xcodeproj` (deployment target iOS 15, arm64) with the same `module.modulemap` (done 2026-11-16, branch feat/ios-modern: written, NOT compiled, no Mac available; the compile is checked by T126 on macos-26)
-- [ ] T051 [US1] Write `ui/modern/ios-swiftui/Native.swift`, `LoomoraApp.swift`, `ContentView.swift` and `Probe.swift` (launch arguments `-probe` and `-probe_input <utf8>`, `NSLog` probe line, `task_info`) mirroring T048
+- [X] T051 [US1] Write `ui/modern/ios-swiftui/Native.swift`, `LoomoraApp.swift`, `ContentView.swift` and `Probe.swift` (launch arguments `-probe` and `-probe_input <utf8>`, `NSLog` probe line, `task_info`) mirroring T048 (done 2026-11-16, branch feat/ios-modern: written, NOT compiled, no Mac available; the compile is checked by T126 on macos-26)
 - [ ] T052 [US1] Add the `ios-modern` target to `tools/build.py` (static library `aarch64-apple-ios` with the current Xcode, `xcodebuild archive`)
 
 ### Android Modern UI (Kotlin, Jetpack Compose)
