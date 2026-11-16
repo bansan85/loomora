@@ -1,0 +1,393 @@
+# Continuous integration, Apple jobs (T126). See ADR 0018 (the GitHub-hosted runners), ADR 0019 (no macOS
+# virtual machine) and the spec Clarifications of the fifth session: everything runs on the `macos-26`
+# runner (Apple silicon, the newest Xcode, macOS 26 and the iOS 26 simulator), nothing else. The
+# conventions are the ones of ci.yml (T129): third-party actions pinned by full commit SHA with the tag in
+# a comment, a read-only token, `persist-credentials: false`, cancelled outdated runs, a timeout on every
+# job, a `changes` job that skips the jobs for a change that cannot affect them, and one `gate` job to
+# require in the branch protection rule.
+#
+# STATUS: WRITTEN WITHOUT A MAC, NEVER RUN. The Apple build targets of tools/build.py and the Apple UIs
+# were written without any Apple hardware, so the first real run is expected to show what breaks; every
+# step is labelled with what it proves, so the log says precisely which one failed:
+#   BUILD  a compile and link check (the floor deployment targets are compiled, never run);
+#   RUN    the app is started and its probe line is checked (macOS 26 and the iOS 26 simulator only);
+#   INFO   a diagnostic that never fails the job (`continue-on-error`): it shows facts the first run needs.
+#
+# Jobs (each on its own runner, so that one failure does not hide another):
+#   macos-modern         BUILD `tools/build.py macos modern` (Universal 2, deployment target macOS 11),
+#                        RUN the 15 reference vectors through the app on macOS 26 (`--probe`,
+#                        `--probe-input`, tools/run_vectors.py);
+#   ios-modern-simulator BUILD `ios modern --ios-sdk iphonesimulator`, boot an iOS 26 simulator, install
+#                        and launch with `xcrun simctl` (`-probe`, `-probe_input`, the NSLog line is read
+#                        from the console, then from `log show`), RUN the vectors the same way;
+#   ios-modern-device    BUILD `ios modern --ios-sdk iphoneos`: the compile check of the floor iOS 15
+#                        (arm64, unsigned: it cannot be installed on a device, never run);
+#   macos-legacy         BUILD `macos legacy` (x86_64, -mmacosx-version-min=10.6): "compiled, NOT RUN on
+#                        10.6" (`not_tested`); an INFO step starts it under Rosetta 2 on macOS 26, which
+#                        proves nothing about 10.6;
+#   ios-legacy           BUILD `ios legacy` for arm64 at iOS 12 (iphoneos, then iphonesimulator): "compiled
+#                        for arm64 at iOS 12, iOS 5 `not_tested`", never run.
+# macOS 10.6 and iOS 5 need a real old Mac (T067, ADR 0019) and are not CI.
+#
+# Every job prints the runner image, macOS, Xcode (all those installed), clang, Swift, SDK and simulator
+# runtime versions first (tools/ci/apple-setup.sh; toolchain.txt in the logs artifact), which the procedures
+# macos.md and ios.md need. The build does not need the docs repository: no submodule is fetched, so
+# tools/build.py prints a warning and writes no deliverable record, as in windows.yml.
+#
+# The jobs ARE part of the `gate`: each one is a claim of T126, a failure is a real failure. Only the INFO
+# steps and the diagnostics never fail a job.
+
+name: Apple
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  schedule:
+    # Mondays 05:07 UTC, on the default branch: catches the drift of the runner image (Xcode, SDKs).
+    - cron: "7 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apple-${{ github.event_name == 'schedule' && 'schedule' || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Decides whether the Apple jobs run. Pull requests from this repository are already built by the
+  # `push` event of their branch, so only pull requests from forks run here.
+  changes:
+    name: changes
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - name: Check out (history, no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: false
+          persist-credentials: false
+      - name: List the changed files
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          base="$BEFORE"
+          if [ "$EVENT" = pull_request ]; then base="$PR_BASE"; fi
+          code=true
+          # Unknown base (new branch, scheduled or manual run, forced push): run everything.
+          if [ "$EVENT" != schedule ] && [ "$EVENT" != workflow_dispatch ] && [ -n "$base" ] \
+              && [ "${base#0000000}" = "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+            files="$(git diff --name-only "$base" "$HEAD_SHA")"
+            printf 'changed files:\n%s\n' "$files"
+            # Only what the Apple builds and runs read: the backend, the build files, the tools, the
+            # four Apple UIs and this workflow. Another UI or documentation does not run it.
+            if ! printf '%s\n' "$files" | grep -Eq '^(core/|cmake/|third_party/|CMakeLists\.txt|CMakePresets\.json|tools/|ui/modern/macos-swiftui/|ui/modern/ios-swiftui/|ui/legacy/macos-appkit/|ui/legacy/ios-uikit/|\.github/workflows/apple\.yml)'; then
+              code=false
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+  # Modern macOS: built with the newest SDK (deployment target macOS 11, Universal 2) and run on macOS 26.
+  macos-modern:
+    name: Modern macOS (macos-26)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Check out (no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: "INFO toolchain versions and Python environment"
+        run: bash tools/ci/apple-setup.sh "$RUNNER_TEMP/apple-logs"
+      - name: "BUILD Modern macOS (tools/build.py macos modern)"
+        run: python tools/build.py macos modern 2>&1 | tee "$RUNNER_TEMP/apple-logs/build-macos-modern.log"
+      - name: "INFO what was built (slices, minimum version, libraries, signature)"
+        continue-on-error: true
+        run: |
+          set +e
+          exe=out/macos-modern/Loomora.app/Contents/MacOS/Loomora
+          ls -l out/macos-modern
+          lipo -info "$exe"
+          otool -l "$exe" | grep -A5 -E 'cmd (LC_VERSION_MIN_MACOSX|LC_BUILD_VERSION)'
+          otool -L "$exe"
+          codesign -dv --verbose=2 "$exe" 2>&1 || true
+          plutil -p out/macos-modern/Loomora.app/Contents/Info.plist
+      - name: "INFO probe once on macOS 26 (raw output, exit status, 30 s limit)"
+        continue-on-error: true
+        run: |
+          exe=out/macos-modern/Loomora.app/Contents/MacOS/Loomora
+          sw_vers
+          # perl: macOS has no timeout(1); the alarm survives the exec
+          rc=0
+          perl -e 'alarm shift; exec @ARGV' 30 "$exe" --probe 2>&1 | tee "$RUNNER_TEMP/apple-logs/probe-once-macos-modern.txt" || rc=$?
+          echo "exit status of the pipeline: $rc"
+      - name: "RUN the reference vectors through Modern macOS on macOS 26"
+        run: |
+          major="$(sw_vers -productVersion | cut -d. -f1)"
+          platform="macos-$major-$(uname -m)"
+          echo "platform id: $platform"
+          python tools/run_vectors.py "$platform" modern --jobs 1 --evidence-dir "$RUNNER_TEMP/apple-logs/evidence" \
+            2>&1 | tee "$RUNNER_TEMP/apple-logs/run-vectors-macos-modern.log"
+      - name: Upload the logs, the probe lines and the toolchain versions
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: apple-logs-macos-modern
+          path: ${{ runner.temp }}/apple-logs
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload the app (zip made with ditto)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-modern-app
+          path: out/macos-modern/*.zip
+          if-no-files-found: warn
+          retention-days: 14
+
+  # Modern iOS on the iOS 26 simulator: the simulator build is installed and launched with xcrun simctl.
+  ios-modern-simulator:
+    name: Modern iOS, iOS 26 simulator (macos-26)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: macos-26
+    timeout-minutes: 75
+    steps:
+      - name: Check out (no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: "INFO toolchain versions and Python environment"
+        run: bash tools/ci/apple-setup.sh "$RUNNER_TEMP/apple-logs"
+      - name: "BUILD Modern iOS for the simulator (tools/build.py ios modern --ios-sdk iphonesimulator)"
+        run: python tools/build.py ios modern --ios-sdk iphonesimulator 2>&1 | tee "$RUNNER_TEMP/apple-logs/build-ios-modern-simulator.log"
+      - name: "INFO boot an iOS 26 simulator"
+        id: sim
+        run: python tools/ci/ios_simulator.py --major 26 2>&1 | tee "$RUNNER_TEMP/apple-logs/simulator-boot.log"
+      - name: "INFO install and launch once with simctl (raw console, then log show)"
+        continue-on-error: true
+        env:
+          UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          app=out/ios-modern/iphonesimulator/Loomora.app
+          bundle="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")"
+          echo "bundle id: $bundle"
+          xcrun simctl install "$UDID" "$app"
+          echo "--- simctl launch --console (30 s limit)"
+          rc=0
+          perl -e 'alarm shift; exec @ARGV' 30 xcrun simctl launch --console --terminate-running-process \
+            "$UDID" "$bundle" -probe -probe_input Coucou 2>&1 | tee "$RUNNER_TEMP/apple-logs/launch-once-ios-modern.txt" || rc=$?
+          echo "exit status of the pipeline: $rc"
+          echo "--- simctl spawn log show, last 2 minutes, process Loomora"
+          xcrun simctl spawn "$UDID" log show --last 2m --style compact --predicate 'process == "Loomora"' \
+            2>&1 | tee "$RUNNER_TEMP/apple-logs/log-show-ios-modern.txt" | tail -n 40
+      - name: "RUN the reference vectors through Modern iOS in the iOS 26 simulator"
+        env:
+          UDID: ${{ steps.sim.outputs.udid }}
+          PLATFORM_ID: ${{ steps.sim.outputs.platform_id }}
+        run: |
+          echo "platform id: $PLATFORM_ID, simulator $UDID"
+          python tools/run_vectors.py "$PLATFORM_ID" modern --udid "$UDID" --jobs 1 \
+            --evidence-dir "$RUNNER_TEMP/apple-logs/evidence" 2>&1 | tee "$RUNNER_TEMP/apple-logs/run-vectors-ios-modern.log"
+      - name: Upload the logs, the probe lines and the toolchain versions
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: apple-logs-ios-modern-simulator
+          path: ${{ runner.temp }}/apple-logs
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload the simulator app (zip made with ditto)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-modern-simulator-app
+          path: out/ios-modern/iphonesimulator/*.zip
+          if-no-files-found: warn
+          retention-days: 14
+
+  # Modern iOS for a device: the compile check of the floor iOS 15 (deployment target 15.0, arm64). The
+  # archive is unsigned, so it cannot be installed on a device; it is never run.
+  ios-modern-device:
+    name: Modern iOS, device SDK, floor iOS 15 (macos-26)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Check out (no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: "INFO toolchain versions and Python environment"
+        run: bash tools/ci/apple-setup.sh "$RUNNER_TEMP/apple-logs"
+      - name: "BUILD Modern iOS for devices, deployment target 15.0 (tools/build.py ios modern --ios-sdk iphoneos)"
+        run: python tools/build.py ios modern --ios-sdk iphoneos 2>&1 | tee "$RUNNER_TEMP/apple-logs/build-ios-modern-device.log"
+      - name: "INFO what was built (slices, minimum version, libraries)"
+        continue-on-error: true
+        run: |
+          set +e
+          exe=out/ios-modern/iphoneos/Loomora.app/Loomora
+          ls -l out/ios-modern/iphoneos
+          lipo -info "$exe"
+          otool -l "$exe" | grep -A5 -E 'cmd (LC_VERSION_MIN_IPHONEOS|LC_BUILD_VERSION)'
+          otool -L "$exe"
+      - name: Upload the logs and the toolchain versions
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: apple-logs-ios-modern-device
+          path: ${{ runner.temp }}/apple-logs
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload the unsigned app (zip made with ditto)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-modern-device-app
+          path: out/ios-modern/iphoneos/*.zip
+          if-no-files-found: warn
+          retention-days: 14
+
+  # Legacy macOS: compiled with -mmacosx-version-min=10.6 for x86_64, NOT run on 10.6 (S11, T077). The
+  # build is the claim; the run on macOS 26 is information only.
+  macos-legacy:
+    name: Legacy macOS, compiled for 10.6, not run on 10.6 (macos-26)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Check out (no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: "INFO toolchain versions and Python environment"
+        run: bash tools/ci/apple-setup.sh "$RUNNER_TEMP/apple-logs"
+      - name: "BUILD Legacy macOS, x86_64, -mmacosx-version-min=10.6 (tools/build.py macos legacy)"
+        run: python tools/build.py macos legacy 2>&1 | tee "$RUNNER_TEMP/apple-logs/build-macos-legacy.log"
+      - name: "INFO what was built (slice, minimum version, libraries)"
+        continue-on-error: true
+        run: |
+          set +e
+          exe=out/macos-legacy/Loomora.app/Contents/MacOS/Loomora
+          ls -l out/macos-legacy
+          lipo -info "$exe"
+          otool -l "$exe" | grep -A5 -E 'cmd (LC_VERSION_MIN_MACOSX|LC_BUILD_VERSION)'
+          otool -L "$exe"
+      - name: "INFO launch the x86_64 app under Rosetta 2 on macOS 26 (NOT a run on 10.6, proves nothing about it)"
+        continue-on-error: true
+        run: |
+          # The runner is arm64: an x86_64 binary needs Rosetta 2.
+          softwareupdate --install-rosetta --agree-to-license || echo "softwareupdate exit status $?"
+          arch -x86_64 /usr/bin/true && echo "Rosetta 2 works"
+          major="$(sw_vers -productVersion | cut -d. -f1)"
+          platform="macos-$major-$(uname -m)"
+          echo "platform id: $platform"
+          python tools/run_vectors.py "$platform" legacy --jobs 1 --evidence-dir "$RUNNER_TEMP/apple-logs/evidence" \
+            2>&1 | tee "$RUNNER_TEMP/apple-logs/run-vectors-macos-legacy-rosetta.log"
+      - name: Upload the logs and the toolchain versions
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: apple-logs-macos-legacy
+          path: ${{ runner.temp }}/apple-logs
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload the app (zip made with ditto)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-legacy-app
+          path: out/macos-legacy/*.zip
+          if-no-files-found: warn
+          retention-days: 14
+
+  # Legacy iOS: compiled for arm64 at iOS 12 (the lowest Xcode 26 deploys to), iOS 5 `not_tested` (T079),
+  # never run. Each SDK is its own step, so that the log says which one broke.
+  ios-legacy:
+    name: Legacy iOS, compiled for arm64 at iOS 12, not run (macos-26)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Check out (no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: "INFO toolchain versions and Python environment"
+        run: bash tools/ci/apple-setup.sh "$RUNNER_TEMP/apple-logs"
+      - name: "BUILD Legacy iOS, device SDK (tools/build.py ios legacy --ios-sdk iphoneos)"
+        run: python tools/build.py ios legacy --ios-sdk iphoneos 2>&1 | tee "$RUNNER_TEMP/apple-logs/build-ios-legacy-iphoneos.log"
+      - name: "BUILD Legacy iOS, simulator SDK (tools/build.py ios legacy --ios-sdk iphonesimulator)"
+        # still runs when the device SDK step failed, so that one run shows both
+        if: ${{ !cancelled() }}
+        run: python tools/build.py ios legacy --ios-sdk iphonesimulator 2>&1 | tee "$RUNNER_TEMP/apple-logs/build-ios-legacy-iphonesimulator.log"
+      - name: "INFO what was built (slices, minimum versions, libraries)"
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          set +e
+          for sdk in iphoneos iphonesimulator; do
+            exe="out/ios-legacy/$sdk/Loomora.app/Loomora"
+            [ -f "$exe" ] || { echo "$sdk: no executable"; continue; }
+            echo "--- $sdk"
+            lipo -info "$exe"
+            otool -l "$exe" | grep -A5 -E 'cmd (LC_VERSION_MIN_IPHONEOS|LC_BUILD_VERSION)'
+            otool -L "$exe"
+          done
+      - name: Upload the logs and the toolchain versions
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: apple-logs-ios-legacy
+          path: ${{ runner.temp }}/apple-logs
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload the unsigned apps (zips made with ditto)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-legacy-apps
+          path: out/ios-legacy/*/*.zip
+          if-no-files-found: warn
+          retention-days: 14
+
+  # The single check to require in the branch protection rule: it passes when every job that had to
+  # run passed (a skipped job is fine, a failed or cancelled one is not).
+  gate:
+    name: gate (apple)
+    needs: [changes, macos-modern, ios-modern-simulator, ios-modern-device, macos-legacy, ios-legacy]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check the results
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          case " $RESULTS " in
+            *" failure "*|*" cancelled "*) exit 1 ;;
+          esac

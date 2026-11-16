@@ -1,0 +1,260 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 46;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		7C41A5E20000000020A00001 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 7C41A5E20000000020A00011 /* main.m */; };
+		7C41A5E20000000020A00002 /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = 7C41A5E20000000020A00012 /* AppDelegate.m */; };
+		7C41A5E20000000020A00003 /* ViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 7C41A5E20000000020A00013 /* ViewController.m */; };
+		7C41A5E20000000020A00004 /* Probe.m in Sources */ = {isa = PBXBuildFile; fileRef = 7C41A5E20000000020A00014 /* Probe.m */; };
+		7C41A5E20000000020A00005 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7C41A5E20000000020A00019 /* Foundation.framework */; };
+		7C41A5E20000000020A00006 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7C41A5E20000000020A0001A /* UIKit.framework */; };
+		7C41A5E20000000020A00007 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7C41A5E20000000020A0001B /* CoreGraphics.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		7C41A5E20000000020A00011 /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
+		7C41A5E20000000020A00012 /* AppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AppDelegate.m; sourceTree = "<group>"; };
+		7C41A5E20000000020A00013 /* ViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ViewController.m; sourceTree = "<group>"; };
+		7C41A5E20000000020A00014 /* Probe.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = Probe.m; sourceTree = "<group>"; };
+		7C41A5E20000000020A00015 /* AppDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppDelegate.h; sourceTree = "<group>"; };
+		7C41A5E20000000020A00016 /* ViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ViewController.h; sourceTree = "<group>"; };
+		7C41A5E20000000020A00017 /* Probe.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Probe.h; sourceTree = "<group>"; };
+		7C41A5E20000000020A00018 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		7C41A5E20000000020A00019 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
+		7C41A5E20000000020A0001A /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		7C41A5E20000000020A0001B /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		7C41A5E20000000020A0001C /* Loomora.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Loomora.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		7C41A5E20000000020A00021 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7C41A5E20000000020A00005 /* Foundation.framework in Frameworks */,
+				7C41A5E20000000020A00006 /* UIKit.framework in Frameworks */,
+				7C41A5E20000000020A00007 /* CoreGraphics.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		7C41A5E20000000020A00031 = {
+			isa = PBXGroup;
+			children = (
+				7C41A5E20000000020A00011 /* main.m */,
+				7C41A5E20000000020A00015 /* AppDelegate.h */,
+				7C41A5E20000000020A00012 /* AppDelegate.m */,
+				7C41A5E20000000020A00016 /* ViewController.h */,
+				7C41A5E20000000020A00013 /* ViewController.m */,
+				7C41A5E20000000020A00017 /* Probe.h */,
+				7C41A5E20000000020A00014 /* Probe.m */,
+				7C41A5E20000000020A00018 /* Info.plist */,
+				7C41A5E20000000020A00033 /* Frameworks */,
+				7C41A5E20000000020A00032 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		7C41A5E20000000020A00032 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				7C41A5E20000000020A0001C /* Loomora.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		7C41A5E20000000020A00033 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				7C41A5E20000000020A00019 /* Foundation.framework */,
+				7C41A5E20000000020A0001A /* UIKit.framework */,
+				7C41A5E20000000020A0001B /* CoreGraphics.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		7C41A5E20000000020A00034 /* Loomora */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7C41A5E20000000020A00037 /* Build configuration list for PBXNativeTarget "Loomora" */;
+			buildPhases = (
+				7C41A5E20000000020A00022 /* Sources */,
+				7C41A5E20000000020A00021 /* Frameworks */,
+				7C41A5E20000000020A00023 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Loomora;
+			productName = Loomora;
+			productReference = 7C41A5E20000000020A0001C /* Loomora.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		7C41A5E20000000020A00035 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastUpgradeCheck = 0510;
+			};
+			buildConfigurationList = 7C41A5E20000000020A00036 /* Build configuration list for PBXProject "Loomora" */;
+			compatibilityVersion = "Xcode 3.2";
+			developmentRegion = English;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+			);
+			mainGroup = 7C41A5E20000000020A00031;
+			productRefGroup = 7C41A5E20000000020A00032 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				7C41A5E20000000020A00034 /* Loomora */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		7C41A5E20000000020A00023 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		7C41A5E20000000020A00022 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7C41A5E20000000020A00001 /* main.m in Sources */,
+				7C41A5E20000000020A00002 /* AppDelegate.m in Sources */,
+				7C41A5E20000000020A00003 /* ViewController.m in Sources */,
+				7C41A5E20000000020A00004 /* Probe.m in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		7C41A5E20000000020A00038 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = "armv7 armv7s arm64";
+				"ARCHS[sdk=iphoneos*]" = "armv7 armv7s arm64";
+				"ARCHS[sdk=iphonesimulator*]" = "i386 x86_64";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = NO;
+				CLANG_ENABLE_OBJC_ARC = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "";
+				COPY_PHASE_STRIP = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu99;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_SYMBOLS_PRIVATE_EXTERN = NO;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/../../../core/include";
+				IPHONEOS_DEPLOYMENT_TARGET = 5.0;
+				LOOMORA_LIB_DIR = "$(PROJECT_DIR)/build";
+				ONLY_ACTIVE_ARCH = NO;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				WARNING_CFLAGS = "-Wall";
+			};
+			name = Debug;
+		};
+		7C41A5E20000000020A00039 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = "armv7 armv7s arm64";
+				"ARCHS[sdk=iphoneos*]" = "armv7 armv7s arm64";
+				"ARCHS[sdk=iphonesimulator*]" = "i386 x86_64";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = NO;
+				CLANG_ENABLE_OBJC_ARC = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "";
+				COPY_PHASE_STRIP = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu99;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/../../../core/include";
+				IPHONEOS_DEPLOYMENT_TARGET = 5.0;
+				LOOMORA_LIB_DIR = "$(PROJECT_DIR)/build";
+				ONLY_ACTIVE_ARCH = NO;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+				WARNING_CFLAGS = "-Wall";
+			};
+			name = Release;
+		};
+		7C41A5E20000000020A0003A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				INFOPLIST_FILE = Info.plist;
+				LIBRARY_SEARCH_PATHS = "$(LOOMORA_LIB_DIR)/$(PLATFORM_NAME)";
+				OTHER_LDFLAGS = (
+					"-lloomora",
+					"-lc++",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = fr.bansan.loomora.probe.legacy;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				WRAPPER_EXTENSION = app;
+			};
+			name = Debug;
+		};
+		7C41A5E20000000020A0003B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				INFOPLIST_FILE = Info.plist;
+				LIBRARY_SEARCH_PATHS = "$(LOOMORA_LIB_DIR)/$(PLATFORM_NAME)";
+				OTHER_LDFLAGS = (
+					"-lloomora",
+					"-lc++",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = fr.bansan.loomora.probe.legacy;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				WRAPPER_EXTENSION = app;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		7C41A5E20000000020A00036 /* Build configuration list for PBXProject "Loomora" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7C41A5E20000000020A00038 /* Debug */,
+				7C41A5E20000000020A00039 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7C41A5E20000000020A00037 /* Build configuration list for PBXNativeTarget "Loomora" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7C41A5E20000000020A0003A /* Debug */,
+				7C41A5E20000000020A0003B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 7C41A5E20000000020A00035 /* Project object */;
+}

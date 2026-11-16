@@ -4,7 +4,7 @@
 Usage:
   python tools/run_vectors.py <platform-id> <variant> [--vectors FILE] [--jobs N] [--timeout S]
                               [--evidence-dir DIR] [--wsl-distro NAME] [--arch x64|x86]
-                              [--exe PATH] [--ui-abi ABI] [--dry-run]
+                              [--exe PATH] [--ui-abi ABI] [--udid UDID] [--dry-run]
 
   platform-id  for example linux-ubuntu-24.04-x86_64, windows-11-x64 or windows-2000-x86 (the id
                the UI itself puts in its probe line)
@@ -81,6 +81,11 @@ WebChromeHostLauncher): the dist folder of `python tools/build.py web modern` is
 127.0.0.1, headless Chrome (`--headless=new --dump-dom`, a throw-away --user-data-dir per run) opens
 `http://127.0.0.1:<port>/index.html?probe=1&input=<text>&platform=<id>`, and the probe record is read from
 <pre id="probe"> of the dumped DOM (the title must be LOOMORA_PROBE_DONE); leftover chrome.exe are counted.
+macOS (Modern and Legacy) and iOS Modern (platform ids macos-<major>-<arch>, for example macos-26-arm64, and
+ios-<major.minor>-arm64-simulator, for example ios-26.5-arm64-simulator), on a macOS host only (the `macos-26`
+runner, T126): see MacOSModernLauncher and IOSSimulatorLauncher. The app of `python tools/build.py macos
+modern|legacy` or `ios modern --ios-sdk iphonesimulator` is started with the probe arguments of
+ui-contract.md; the simulator one through `xcrun simctl launch --console`, on the simulator --udid.
 Every other family exits with status 1 and "launcher not implemented yet" until the tasks that
 add the UIs (T060-T093) add theirs: they only have to implement Launcher.run().
 Linux modern: the executable built by `python tools/build.py linux modern`
@@ -1824,12 +1829,185 @@ class WebChromeHostLauncher(Launcher):
         return result
 
 
+# ---- macOS and the iOS simulator on a macOS host (T126, the `macos-26` runner) ------------------
+
+APPLE_PROCESS = "Loomora"  # CFBundleExecutable of the four Apple UIs
+SIMCTL_INSTALL_TIMEOUT = 180  # seconds `simctl install` may take (once, in prepare)
+
+
+def apple_probe_line(text):
+    """The probe record in a text that may hold other output (the log prefix of NSLog, simctl's
+    own lines): the last line that holds `{"schema"`, from that `{` on; "" when there is none."""
+    found = ""
+    for row in text.splitlines():
+        at = row.find('{"schema"')
+        if at >= 0:
+            found = row[at:].strip()
+    return found
+
+
+class MacOSModernLauncher(Launcher):
+    """The macOS UI (Modern: SwiftUI, out/macos-modern/Loomora.app of `python tools/build.py macos
+    modern`; Legacy: AppKit, out/macos-legacy/Loomora.app, an x86_64 binary that needs Rosetta 2 on
+    Apple silicon) run on the macOS host itself: the executable inside the bundle is started with
+    `--probe --probe-input <text>` and an argument list (no shell), the probe line is read from
+    standard output (ui-contract.md). Runs are serial (one window at a time); the UI exits by itself
+    after 2 seconds, a process of the same name still alive after the run is a failure. The field
+    limit counts Unicode scalars (code points). Needs a logged-in GUI session (the hosted macOS
+    runner has one)."""
+
+    max_jobs = 1
+    variant = "modern"
+    build_command = "python tools/build.py macos modern"
+
+    def __init__(self, args):
+        Launcher.__init__(self, args)
+        self.exe = Path(args.exe) if args.exe else (
+            common.ROOT / "out" / ("macos-" + self.variant) / "Loomora.app" / "Contents" / "MacOS" / APPLE_PROCESS)
+
+    def prepare(self):
+        if sys.platform != "darwin":
+            raise RuntimeError("the macOS UI runs on a macOS host only (this host is %s)" % sys.platform)
+        if not self.exe.is_file():
+            raise RuntimeError("executable not found: %s (run '%s')" % (self.exe, self.build_command))
+        version = subprocess.run(["sw_vers", "-productVersion"], stdout=subprocess.PIPE).stdout.decode().strip()
+        return "macOS %s UI on macOS %s: %s (%d bytes, sha256 %s)" % (
+            self.variant, version, self.exe, self.exe.stat().st_size, common.sha256(self.exe))
+
+    @staticmethod
+    def _alive():
+        res = subprocess.run(["pgrep", "-x", APPLE_PROCESS], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        return len(res.stdout.split())
+
+    def run(self, text, timeout):
+        start = time.time()
+        try:
+            res = subprocess.run([str(self.exe), "--probe", "--probe-input", text],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            subprocess.run(["pkill", "-x", APPLE_PROCESS], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+            return RunResult(None, "", "", time.time() - start,
+                             "timeout after %s s (the UI should exit by itself after 2 s)" % timeout)
+        except OSError as e:
+            return RunResult(None, "", "", time.time() - start, "cannot start %s: %s" % (self.exe, e))
+        result = RunResult(res.returncode, res.stdout.decode("utf-8", "replace"),
+                           res.stderr.decode("utf-8", "replace"), time.time() - start)
+        result.leftover = self._alive()
+        return result
+
+
+class MacOSLegacyLauncher(MacOSModernLauncher):
+    """The macOS Legacy UI: the same protocol, out/macos-legacy/Loomora.app. Run on macOS 26 under
+    Rosetta 2 it proves nothing about macOS 10.6 (that stays `not_tested`)."""
+
+    variant = "legacy"
+    build_command = "python tools/build.py macos legacy"
+
+
+class IOSSimulatorLauncher(Launcher):
+    """The iOS Modern UI in a booted iOS simulator, driven with `xcrun simctl`: the app
+    out/ios-modern/iphonesimulator/Loomora.app (or --exe) is installed in prepare() on the simulator
+    --udid (or $LOOMORA_SIM_UDID, or the only booted one); this tool never boots or erases it. A run
+    launches the bundle with `simctl launch --console --terminate-running-process <udid> <bundle id>
+    -probe -probe_input <text>` (an argument list, no shell): the UI exits by itself after 2
+    seconds and its NSLog line comes back on the console (stderr), prefixed by NSLog's date and
+    process; the record is cut out of it. When the console holds none, `simctl spawn <udid> log
+    show` of the last minute is read instead. The raw output of every run goes to the evidence
+    (suffix console.txt). Runs are serial. The field limit counts Unicode scalars."""
+
+    max_jobs = 1
+    variant = "modern"
+    build_command = "python tools/build.py ios modern --ios-sdk iphonesimulator"
+
+    def __init__(self, args):
+        Launcher.__init__(self, args)
+        self.app = Path(args.exe) if args.exe else (
+            common.ROOT / "out" / ("ios-" + self.variant) / "iphonesimulator" / "Loomora.app")
+        self.udid = getattr(args, "udid", None) or os.environ.get("LOOMORA_SIM_UDID")
+        self.bundle_id = None
+        self.console = []
+
+    def _simctl(self, *cmd, **kwargs):
+        timeout = kwargs.pop("timeout", 120)
+        res = subprocess.run(["xcrun", "simctl"] + [str(c) for c in cmd], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        return res.returncode, res.stdout.decode("utf-8", "replace"), res.stderr.decode("utf-8", "replace")
+
+    def prepare(self):
+        import plistlib
+        if sys.platform != "darwin":
+            raise RuntimeError("the iOS simulator runs on a macOS host only (this host is %s)" % sys.platform)
+        plist = self.app / "Info.plist"
+        if not plist.is_file():
+            raise RuntimeError("app not found: %s (run '%s')" % (self.app, self.build_command))
+        with open(str(plist), "rb") as f:
+            self.bundle_id = plistlib.load(f).get("CFBundleIdentifier")
+        if not self.bundle_id:
+            raise RuntimeError("%s has no CFBundleIdentifier" % plist)
+        code, out, err = self._simctl("list", "devices", "booted", "-j")
+        if code != 0:
+            raise RuntimeError("simctl list failed: %s %s" % (out.strip(), err.strip()))
+        booted = [(rt, d) for rt, devs in json.loads(out)["devices"].items() for d in devs
+                  if d.get("state") == "Booted"]
+        if self.udid:
+            booted = [(rt, d) for rt, d in booted if d["udid"] == self.udid]
+        if len(booted) != 1:
+            raise RuntimeError("expected exactly one booted simulator%s, found %d (boot one first, "
+                               "this tool never does: xcrun simctl boot <udid>)"
+                               % (" with udid " + self.udid if self.udid else "", len(booted)))
+        runtime, device = booted[0]
+        self.udid = device["udid"]
+        code, out, err = self._simctl("install", self.udid, self.app, timeout=SIMCTL_INSTALL_TIMEOUT)
+        if code != 0:
+            raise RuntimeError("simctl install failed: %s %s" % (out.strip(), err.strip()))
+        return "iOS Modern UI in the simulator %s (%s, udid %s): %s, bundle id %s" % (
+            device.get("name"), runtime.rsplit(".", 1)[-1], self.udid, self.app, self.bundle_id)
+
+    def run(self, text, timeout):
+        start = time.time()
+        cmd = ["launch", "--console", "--terminate-running-process", self.udid, self.bundle_id,
+               "-probe", "-probe_input", text]
+        try:
+            code, out, err = self._simctl(*cmd, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self._simctl("terminate", self.udid, self.bundle_id)
+            return RunResult(None, "", "", time.time() - start,
+                             "simctl launch timed out after %s s (the UI should exit by itself after 2 s)" % timeout)
+        raw = out + ("\n" if out and not out.endswith("\n") else "") + err
+        line = apple_probe_line(raw)
+        source = "console"
+        if not line:  # the unified log of the simulator: the same NSLog line, perhaps cut when very long
+            try:
+                logged = self._simctl("spawn", self.udid, "log", "show", "--last", "1m", "--style", "compact",
+                                      "--predicate", 'process == "%s"' % APPLE_PROCESS, timeout=90)[1]
+            except subprocess.TimeoutExpired:
+                logged = ""
+            line = apple_probe_line(logged)
+            source = "log show"
+            raw += "\n--- log show:\n" + logged
+        self.console.append("=== %s (simctl exit %s, line from %s)\n%s\n" % (_clip(text, 40), code, source, raw))
+        self._simctl("terminate", self.udid, self.bundle_id)
+        if not line:
+            return RunResult(code, "", err.strip()[-300:], time.time() - start,
+                             "no probe line on the console nor in the log (simctl exit %s): %s"
+                             % (code, _clip(raw.strip().replace("\n", " | "), 300)))
+        return RunResult(code, line + "\n", err.strip()[-300:] if code else "", time.time() - start)
+
+    def extra_evidence(self):
+        return {"console.txt": "\n".join(self.console)}
+
+
 LAUNCHERS = {("linux", "modern"): LinuxModernLauncher,
              ("linux", "legacy"): LinuxLegacyLauncher,
              ("windows", "legacy"): WindowsLegacyLauncher,
              ("windows", "modern"): WindowsModernLauncher,
              ("android", "legacy"): AndroidLegacyLauncher,
-             ("android", "modern"): AndroidModernLauncher}
+             ("android", "modern"): AndroidModernLauncher,
+             ("macos", "modern"): MacOSModernLauncher,
+             ("macos", "legacy"): MacOSLegacyLauncher,
+             ("ios", "modern"): IOSSimulatorLauncher}
 
 
 def select_launcher(family, variant, platform_id):
@@ -1994,6 +2172,17 @@ def self_test():
     expect("Chrome launcher counts UTF-16 units", WebChromeHostLauncher.length_unit, "utf16")
     expect("Firefox VM launcher counts UTF-16 units", WebFirefoxVmLauncher.length_unit, "utf16")
     expect("web launcher counts UTF-16 units", WebNodeLauncher.length_unit, "utf16")
+    # Apple: the record is cut out of an NSLog console line; the launcher choice
+    nslog = ('2026-11-16 10:00:02.123 Loomora[4242:99] {"schema":1,"message":"Bonjour {a}"}\n'
+             'com.example.loomora: 4242\n')
+    expect("NSLog console line: the record starts at the first {\"schema\"",
+           apple_probe_line(nslog), '{"schema":1,"message":"Bonjour {a}"}')
+    expect("no record in the console", apple_probe_line("com.example: 1\nnothing\n"), "")
+    expect("macOS modern launcher", select_launcher("macos", "modern", "macos-26-arm64"), MacOSModernLauncher)
+    expect("macOS legacy launcher", select_launcher("macos", "legacy", "macos-26-arm64"), MacOSLegacyLauncher)
+    expect("iOS simulator launcher", select_launcher("ios", "modern", "ios-26.5-arm64-simulator"),
+           IOSSimulatorLauncher)
+    expect("no iOS legacy launcher (never run)", select_launcher("ios", "legacy", "ios-12.0-arm64"), None)
     print("self-test %s" % ("FAILED" if failures else "passed"))
     return 1 if failures else 0
 
@@ -2040,6 +2229,8 @@ def main(argv=None):
                     "platform-tools of $LOOMORA_ANDROID_SDK / $ANDROID_HOME, then PATH)")
     ap.add_argument("--serial", help="Android only: adb serial of the device (default "
                     "$ANDROID_SERIAL, or the only device)")
+    ap.add_argument("--udid", help="iOS simulator only: the UDID of the booted simulator (default "
+                    "$LOOMORA_SIM_UDID, or the only booted one)")
     ap.add_argument("--inner-variant", choices=("legacy", "modern"), help=argparse.SUPPRESS)
     ap.add_argument("--inner-run", help=argparse.SUPPRESS)    # Linux side, see the docstring
     ap.add_argument("--inner-where", action="store_true", help=argparse.SUPPRESS)
