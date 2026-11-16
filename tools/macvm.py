@@ -5,8 +5,9 @@ Run it in WSL (python3 tools/macvm.py ...), or from the Windows host: it then re
 
     macvm.py check                 read-only check of the host (KVM, QEMU, disk space)
     macvm.py plan [VM...]          what each VM is for, its size and the media it needs (no network)
-    macvm.py fetch tahoe --yes-download
-                                   the ONLY command that downloads (OSX-KVM and the Apple recovery image)
+    macvm.py fetch tahoe|mavericks --yes-download
+                                   the ONLY command that downloads (OSX-KVM and the Apple recovery image;
+                                   without the flag it prints the steps and downloads nothing)
     macvm.py create VM             create the sparse qcow2 disk (and the firmware variables); no download
     macvm.py cmd VM [--install]    print the QEMU command line (review; nothing is started)
     macvm.py start VM [--install] [--headless]
@@ -58,9 +59,14 @@ VMS = {
         "purpose": "build the Legacy iOS (armv7, armv7s, arm64) and macOS UIs (T078, T079, T067)",
         "boot": "chameleon", "ram_mb": 4096, "smp": "1",
         "disk_gb": 12, "ssh_port": 2223, "vnc": 2,
-        "media": "supplied by the owner: 10.9 installer converted to a raw image, a Chameleon ISO, "
-                 "Xcode 5.1.1 and the 10.6 SDK (Xcode 3.x or 4.x) from the developer account",
-        "estimate": "disk 15-25 GB in use, download 0 if the media already exist (estimates)",
+        # Apple Internet Recovery image of the board that shipped 10.9, through the OSX-KVM script
+        # (board id and MLB: recovery_urls.txt of OpenCorePkg macrecovery, read 2026-11-16).
+        "recovery": {"board": "Mac-F60DEB81FF30ACF6", "mlb": "00000000000FNN100", "os_type": "default"},
+        "media": "the 10.9 recovery image is downloaded by `fetch` (a recovery image, not the full installer: "
+                 "the install itself then downloads from Apple, which may no longer work for 10.9; not verified); "
+                 "supplied by the owner: a Chameleon ISO, Xcode 5.1.1 and the 10.6 SDK (Xcode 3.x or 4.x) "
+                 "from the developer account",
+        "estimate": "disk 15-25 GB in use (estimate); recovery download about 1 GB if it is like the Tahoe one (not measured)",
     },
     "snowleopard": {
         "title": "Mac OS X Server 10.6.8 Snow Leopard",
@@ -283,13 +289,21 @@ def cmd_plan(args):
 
 def cmd_fetch(args):
     known(args.vm)
-    if VMS[args.vm]["boot"] != "opencore":
+    spec = VMS[args.vm]
+    recovery = spec.get("recovery")
+    if recovery is None and spec["boot"] != "opencore":
         raise SetupError("%s has no download: its media are supplied by the owner (see `plan %s`)" % (args.vm, args.vm))
     d, kvm = vm_dir(args.vm), osxkvm_dir()
     steps = []
     if not (kvm / "fetch-macOS-v2.py").exists():
         steps.append(["git", "clone", "--depth", "1", "--recursive", OSXKVM_URL, str(kvm)])
-    steps.append([sys.executable, str(kvm / "fetch-macOS-v2.py"), "--shortname", args.vm, "--outdir", str(d)])
+    if recovery:
+        # An old OS: the recovery image of the board that shipped it, asked by board id and MLB.
+        steps.append([sys.executable, str(kvm / "fetch-macOS-v2.py"), "--action", "download",
+                      "-b", recovery["board"], "-m", recovery["mlb"], "-os", recovery["os_type"],
+                      "-n", "BaseSystem", "-o", str(d)])
+    else:
+        steps.append([sys.executable, str(kvm / "fetch-macOS-v2.py"), "--shortname", args.vm, "--outdir", str(d)])
     steps.append(["dmg2img", "-i", str(d / "BaseSystem.dmg"), str(d / "install.img")])
     if not args.yes_download:
         print("Nothing was downloaded. These steps use the network (OSX-KVM is about 170 MB; the recovery image "
@@ -436,6 +450,10 @@ def selftest():
         ns = argparse.Namespace(vm="tahoe", yes_download=False)
         ok(cmd_fetch(ns) == 2, "fetch without --yes-download downloads nothing (status 2)")
         ok(not (vm_dir("tahoe")).exists(), "fetch without the flag creates nothing")
+        ns = argparse.Namespace(vm="mavericks", yes_download=False)
+        ok(cmd_fetch(ns) == 2 and not vm_dir("mavericks").exists(), "fetch mavericks without the flag downloads nothing")
+        ok(VMS["mavericks"]["recovery"]["board"] == "Mac-F60DEB81FF30ACF6"
+           and len(VMS["mavericks"]["recovery"]["mlb"]) == 17, "mavericks: recovery board id and 17-character MLB")
         try:
             cmd_fetch(argparse.Namespace(vm="snowleopard", yes_download=True))
             ok(False, "fetch of a legacy VM is refused")
