@@ -153,6 +153,15 @@ Implemented targets:
                  The 10.6 SDK, osxcross and the i386 slice wait for a real old Mac (spike S2, T067).
                  WRITTEN WITHOUT A MAC, never compiled (see macos modern).
 
+  ios legacy     xcodebuild on ui/legacy/ios-uikit/Loomora.xcodeproj (T079), on a macOS host with Xcode
+                 only: the project is the Xcode 5.1.1 one (iOS 5.0, armv7 armv7s arm64), compiled here
+                 with Xcode 26 and the overrides IPHONEOS_DEPLOYMENT_TARGET=12.0 (the lowest Xcode 26
+                 deploys to) and ARCHS=arm64, unsigned, once per SDK (--ios-sdk, default all), with
+                 libloomora.a built for the same SDK and iOS 12.0 under build/ios-legacy/libs/<sdk>.
+                 Writes out/ios-legacy/<sdk>/Loomora.app and a zip made with ditto per SDK. The result
+                 is "compiled for arm64 at iOS 12, iOS 5 not_tested", never run. WRITTEN WITHOUT A MAC,
+                 never compiled (see macos modern).
+
 Platform id of a Linux deliverable: "linux-<os-release ID>-<VERSION_ID>-<machine>" such as
 "linux-ubuntu-24.04-x86_64", the same rule as ui/modern/linux-gtk3/probe.cpp and
 ui/legacy/linux-xlib/probe.c use for the probe record's platform_id (keep them in step). The
@@ -186,10 +195,8 @@ PLATFORMS = ("windows", "macos", "ios", "android", "linux", "web")
 VARIANTS = ("legacy", "modern")
 DEFAULT_WSL_DISTRO = "Ubuntu-24.04"
 
-# Targets that do not exist yet and the task that will add each of them.
-PENDING = {
-    ("ios", "legacy"): "T079",
-}
+# Targets that do not exist yet and the task that will add each of them (none today).
+PENDING = {}
 
 
 def gcc_full_version(cxx):
@@ -1542,7 +1549,7 @@ MACOS_MODERN_ARCHS = ("x86_64", "arm64")  # Universal 2
 # also lists an x86_64 simulator slice, left out: the macos-26 runner is Apple silicon and runs the
 # arm64 simulator (spec Clarifications, fifth session). ARCHS is passed to xcodebuild so that the
 # project and the library cannot disagree.
-IOS_MODERN_SDKS = {
+IOS_SDKS = {
     "iphoneos": ("generic/platform=iOS", ("arm64",)),
     "iphonesimulator": ("generic/platform=iOS Simulator", ("arm64",)),
 }
@@ -1552,11 +1559,17 @@ MACOS_GENERIC_PLATFORM = "macos-universal"
 IOS_GENERIC_PLATFORM = "ios-arm64"
 MACOS_LEGACY_GENERIC_PLATFORM = "macos-x86_64"  # the Legacy macOS build has one slice
 
-# Legacy macOS UI (spec Clarifications, fifth session: compiled on macos-26, never run; the 10.6 SDK
-# build waits for a real old Mac). It is built without Xcode project.
+# Legacy UIs (spec Clarifications, fifth session: compiled on macos-26, never run; the Xcode 5.1.1 /
+# 10.6 SDK builds wait for a real old Mac). The Legacy macOS UI is built without Xcode project.
 MACOS_LEGACY_DIR = common.ROOT / "ui" / "legacy" / "macos-appkit"
+IOS_LEGACY_DIR = common.ROOT / "ui" / "legacy" / "ios-uikit"
 MACOS_LEGACY_DEPLOYMENT_TARGET = "10.6"
 MACOS_LEGACY_ARCHS = ("x86_64",)  # the macOS 26 SDK has no i386 slice
+IOS_LEGACY_DEPLOYMENT_TARGET = "12.0"  # the lowest Xcode 26 deploys to; the project says 5.0
+IOS_LEGACY_PROJECT_TARGET = "5.0"  # the floor the Xcode 5.1.1 project declares (checked, not built)
+# SDK -> minimum OS versions accepted in the iOS Legacy library and app. Apple's arm64 simulator
+# exists since iOS 14: the toolchain may record 14.0 for the simulator slice (not verified, no Mac).
+IOS_LEGACY_ACCEPTED_MIN = {"iphoneos": ("12.0",), "iphonesimulator": ("12.0", "14.0")}
 LIBCXX_DYLIB = "/usr/lib/libc++.1.dylib"  # linked dynamically (spike S11: no static libc++ in Xcode 26)
 
 APPLE_HELP = """\
@@ -1589,7 +1602,8 @@ def binary_archs(path):
 
 def check_apple_min_version(path, expected):
     """The minimum OS version recorded in a Mach-O file or archive (otool -l: `minos` of
-    LC_BUILD_VERSION, `version` of LC_VERSION_MIN_*) must be `expected` in every slice."""
+    LC_BUILD_VERSION, `version` of LC_VERSION_MIN_*) must be `expected` (a version, or a tuple of
+    the accepted ones) in every slice."""
     text = capture(["otool", "-l", path])
     found = set(re.findall(r"^\s+minos (\S+)", text, re.M))
     found |= set(re.findall(r"cmd LC_VERSION_MIN_\w+\s+cmdsize \d+\s+version (\S+)", text))
@@ -1598,18 +1612,21 @@ def check_apple_min_version(path, expected):
         return ".".join((version.split(".") + ["0"])[:2])
     if not found:
         print("WARNING: no minimum OS version found in the otool -l output of %s" % path)
-    elif {short(v) for v in found} != {short(expected)}:
-        sys.exit("%s records the minimum OS version %s, expected %s"
-                 % (path, ", ".join(sorted(found)), expected))
+    else:
+        wanted = {short(v) for v in ((expected,) if isinstance(expected, str) else expected)}
+        if not {short(v) for v in found} <= wanted:
+            sys.exit("%s records the minimum OS version %s, expected %s"
+                     % (path, ", ".join(sorted(found)), " or ".join(sorted(wanted))))
 
 
-def build_apple_library(work, arch_list, sdk, deployment_target, system_name=None):
+def build_apple_library(work, arch_list, sdk, deployment_target, system_name=None, accepted_min=None):
     """Builds the backend as a static library (core/ through the root CMakeLists.txt, Release, no
     tests) once per architecture, checks -std=c++11 in compile_commands.json, and merges the slices
     with lipo (one slice: copied) into <work>/libloomora.a. `sdk` is the CMake sysroot (macosx,
     iphoneos, iphonesimulator); `system_name` sets
-    CMAKE_SYSTEM_NAME (iOS: CMake then targets the device or the simulator SDK). Returns (library, (compiler id,
-    compiler path))."""
+    CMAKE_SYSTEM_NAME (iOS: CMake then targets the device or the simulator SDK); `accepted_min` lists
+    the minimum OS versions the library may record (default: the deployment target). Returns (library,
+    (compiler id, compiler path))."""
     work.mkdir(parents=True, exist_ok=True)
     slices = []
     for arch in arch_list:
@@ -1637,7 +1654,7 @@ def build_apple_library(work, arch_list, sdk, deployment_target, system_name=Non
         common.run(["lipo", "-create"] + slices + ["-output", lib])
     if binary_archs(lib) != sorted(arch_list):
         sys.exit("%s holds the slices %s, expected %s" % (lib, binary_archs(lib), sorted(arch_list)))
-    check_apple_min_version(lib, deployment_target)
+    check_apple_min_version(lib, accepted_min or deployment_target)
     print("%s: %s, minimum OS %s, %d bytes"
           % (lib, "+".join(arch_list), deployment_target, lib.stat().st_size))
     return lib, cmake_compiler(work / ("cmake-" + arch_list[0]), "CXX")
@@ -1770,39 +1787,55 @@ def run_macos_modern(args):
     print("app: %s" % (out_dir / "Loomora.app" / "Contents" / "MacOS" / "Loomora"))
 
 
-def run_ios_modern(args):
-    require_apple_host("ios modern")
-    check_apple_deployment_target(IOS_MODERN_DIR, "IPHONEOS_DEPLOYMENT_TARGET", IOS_DEPLOYMENT_TARGET)
-    sdks = sorted(IOS_MODERN_SDKS) if args.ios_sdk == "all" else [args.ios_sdk]
+def build_ios_sdks(args, label, project_dir, deployment_target, zip_prefix, accepted_min=None,
+                   needs=(), extra=()):
+    """For each SDK asked for (--ios-sdk): libloomora.a for the SDK (CMake + Ninja, arm64), then an
+    unsigned `xcodebuild archive` of the project with ARCHS passed so that the project and the
+    library agree (`extra`: more xcodebuild settings), checks, and out/<label>/<sdk>/Loomora.app plus
+    a ditto zip. Returns {SDK: (zip, compiler id, linked libraries, tool facts)}."""
+    sdks = sorted(IOS_SDKS) if args.ios_sdk == "all" else [args.ios_sdk]
     build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (common.ROOT / "build"))
-    libs_root = build_root / "ios-modern" / "libs"
-    built = {}  # SDK -> (zip, compiler id, linked libraries, tool facts)
+    libs_root = build_root / label / "libs"
+    built = {}
     for sdk in sdks:
-        destination, archs = IOS_MODERN_SDKS[sdk]
-        work = build_root / "ios-modern" / sdk
+        destination, archs = IOS_SDKS[sdk]
+        work = build_root / label / sdk
+        accepted = accepted_min[sdk] if accepted_min else None
         # the project looks for the library in $(LOOMORA_LIB_DIR)/$(PLATFORM_NAME) = libs/<sdk>
-        _lib, (compiler, _path) = build_apple_library(libs_root / sdk, archs, sdk,
-                                                      IOS_DEPLOYMENT_TARGET, system_name="iOS")
+        _lib, (compiler, _path) = build_apple_library(libs_root / sdk, archs, sdk, deployment_target,
+                                                      system_name="iOS", accepted_min=accepted)
         xcarchive = work / "Loomora.xcarchive"
         if xcarchive.exists():
             shutil.rmtree(str(xcarchive))
-        xcodebuild_run(IOS_MODERN_DIR, "archive", work, destination, libs_root,
-                       ["-sdk", sdk, "-archivePath", xcarchive, "ARCHS=" + " ".join(archs)])
+        xcodebuild_run(project_dir, "archive", work, destination, libs_root,
+                       ["-sdk", sdk, "-archivePath", xcarchive, "ARCHS=" + " ".join(archs)] + list(extra))
         app = xcarchive / "Products" / "Applications" / "Loomora.app"
         exe = app / "Loomora"
         if not exe.is_file():
             sys.exit("xcodebuild archive finished but %s is missing" % exe)
-        libs = check_apple_app(exe, archs, IOS_DEPLOYMENT_TARGET)
-        out_dir = common.ROOT / "out" / "ios-modern" / sdk
-        archive = apple_publish(app, out_dir, "loomora-%s-%s.zip" % (sdk, "-".join(archs)))
+        libs = check_apple_app(exe, archs, accepted or deployment_target, needs)
+        out_dir = common.ROOT / "out" / label / sdk
+        archive = apple_publish(app, out_dir, "%s-%s-%s.zip" % (zip_prefix, sdk, "-".join(archs)))
         built[sdk] = (archive, compiler, libs, apple_tool_facts(sdk))
         print("app: %s" % (out_dir / "Loomora.app"))
+    return built
+
+
+def other_sdk_builds(built):
+    """["<sdk>: <zip>, <size>, sha256 <hash>"] for the SDKs built besides the device one."""
+    return ["%s: %s, %d bytes, sha256 %s" % (sdk, a.name, a.stat().st_size, common.sha256(a))
+            for sdk, (a, _c, _l, _f) in sorted(built.items()) if sdk != "iphoneos"]
+
+
+def run_ios_modern(args):
+    require_apple_host("ios modern")
+    check_apple_deployment_target(IOS_MODERN_DIR, "IPHONEOS_DEPLOYMENT_TARGET", IOS_DEPLOYMENT_TARGET)
+    built = build_ios_sdks(args, "ios-modern", IOS_MODERN_DIR, IOS_DEPLOYMENT_TARGET, "loomora")
     if "iphoneos" not in built:
         print("no deliverable record: the deliverable is the device build (iphoneos)")
         return
     archive, compiler, libs, facts = built["iphoneos"]
-    others = ["%s: %s, %d bytes, sha256 %s" % (sdk, a.name, a.stat().st_size, common.sha256(a))
-              for sdk, (a, _c, _l, _f) in sorted(built.items()) if sdk != "iphoneos"]
+    others = other_sdk_builds(built)
     base = apple_base_record(
         compiler,
         "aarch64-apple-ios (arm64), iOS %s deployment target, Loomora.app of an unsigned xcodebuild "
@@ -1905,6 +1938,45 @@ def run_macos_legacy(args):
     for record, artifact in apple_records("macos", MACOS_LEGACY_GENERIC_PLATFORM, base, archive):
         write_deliverable(record, artifact)
     print("app: %s" % (out_dir / "Loomora.app" / "Contents" / "MacOS" / "Loomora"))
+
+
+def run_ios_legacy(args):
+    require_apple_host("ios legacy")
+    # The project is the Xcode 5.1.1 one: it keeps its iOS 5.0 floor (and the three 32/64-bit
+    # slices); Xcode 26 builds it with the two overrides below. A project that no longer says 5.0
+    # would make the override meaningless.
+    check_apple_deployment_target(IOS_LEGACY_DIR, "IPHONEOS_DEPLOYMENT_TARGET", IOS_LEGACY_PROJECT_TARGET)
+    built = build_ios_sdks(
+        args, "ios-legacy", IOS_LEGACY_DIR, IOS_LEGACY_DEPLOYMENT_TARGET, "loomora-legacy",
+        accepted_min=IOS_LEGACY_ACCEPTED_MIN, needs=(LIBCXX_DYLIB,),
+        extra=["IPHONEOS_DEPLOYMENT_TARGET=" + IOS_LEGACY_DEPLOYMENT_TARGET, "CODE_SIGNING_ALLOWED=NO"])
+    if "iphoneos" not in built:
+        print("no deliverable record: the deliverable is the device build (iphoneos)")
+        return
+    archive, compiler, libs, facts = built["iphoneos"]
+    others = other_sdk_builds(built)
+    base = apple_base_record(
+        compiler,
+        "aarch64-apple-ios (arm64), iOS %s deployment target (override of the project's %s), "
+        "Loomora.app of an unsigned xcodebuild archive; COMPILED, NOT RUN; iOS 5 not_tested"
+        % (IOS_LEGACY_DEPLOYMENT_TARGET, IOS_LEGACY_PROJECT_TARGET),
+        "UIKit, Objective-C without ARC (manual retain/release), written with the iOS 5 APIs; "
+        "libloomora.a (C++11) linked through core/include/loomora.h",
+        facts, archive,
+        "python tools/build.py ios legacy: cmake + ninja builds libloomora.a from core/src for arm64 "
+        "(-std=c++11 checked in compile_commands.json, iphoneos SDK, deployment target %s), then "
+        "xcodebuild archive of ui/legacy/ios-uikit/Loomora.xcodeproj with Xcode 26 (Release, "
+        "ARCHS=arm64 and IPHONEOS_DEPLOYMENT_TARGET=%s override the project's armv7 armv7s arm64 and "
+        "%s, code signing off); the app links only system libraries (%s), libc++ dynamically; SDK %s; "
+        "artifact sha256 %s. COMPILED FOR arm64 AT iOS %s, NEVER RUN; iOS 5 is not_tested: the "
+        "armv7/armv7s slices and the deployment target 5.0 need Xcode 5.1.1 on a real old Mac "
+        "(spike S2, T067)%s; copied to out/ios-legacy/<sdk>/."
+        % (IOS_LEGACY_DEPLOYMENT_TARGET, IOS_LEGACY_DEPLOYMENT_TARGET, IOS_LEGACY_PROJECT_TARGET,
+           ", ".join(libs), facts[2], common.sha256(archive), IOS_LEGACY_DEPLOYMENT_TARGET,
+           ("; same build for the simulator: " + "; ".join(others)) if others else ""),
+        legacy=True)
+    for record, artifact in apple_records("ios", IOS_GENERIC_PLATFORM, base, archive, archs=("arm64",)):
+        write_deliverable(record, artifact)
 
 
 # ---- web legacy (T085, T086) ---------------------------------------------------------------
@@ -2170,6 +2242,7 @@ TARGETS = {
     ("macos", "modern"): run_macos_modern,
     ("ios", "modern"): run_ios_modern,
     ("macos", "legacy"): run_macos_legacy,
+    ("ios", "legacy"): run_ios_legacy,
     ("android", "modern"): run_android_modern,
     ("linux", "modern"): run_linux_modern,
     ("linux", "legacy"): run_linux_legacy,
@@ -2191,9 +2264,9 @@ def main(argv=None):
                         "instead of 24 (spike S8: 21), the APK is then NOT the deliverable")
     parser.add_argument("--arch", choices=LINUX_LEGACY_ARCHS + ("all",), default="all",
                         help="linux legacy only: the architecture to build (default all)")
-    parser.add_argument("--ios-sdk", choices=sorted(IOS_MODERN_SDKS) + ["all"], default="all",
-                        help="ios modern only: the SDK to build (default all; the CI job that runs the "
-                        "iOS simulator uses iphonesimulator)")
+    parser.add_argument("--ios-sdk", choices=sorted(IOS_SDKS) + ["all"], default="all",
+                        help="ios modern and ios legacy only: the SDK to build (default all; the CI job "
+                        "that runs the iOS simulator uses iphonesimulator)")
     args = parser.parse_args(argv)
 
     key = (args.platform, args.variant)
