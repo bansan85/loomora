@@ -1686,7 +1686,11 @@ def check_apple_app(exe, arch_list, deployment_target, needs=()):
     if binary_archs(exe) != sorted(arch_list):
         sys.exit("%s holds the slices %s, expected %s" % (exe, binary_archs(exe), sorted(arch_list)))
     check_apple_min_version(exe, deployment_target)
-    libs = [line.split()[0] for line in capture(["otool", "-L", exe]).splitlines()[1:] if line.strip()]
+    # otool -L prints one header per slice ("<exe> (architecture arm64):") and then the dependencies,
+    # indented with a tab; a universal executable has one header per architecture, so only the
+    # indented lines are dependencies.
+    libs = [line.split()[0] for line in capture(["otool", "-L", exe]).splitlines()
+            if line.startswith("\t")]
     other = [lib for lib in libs if not lib.startswith(("/usr/lib/", "/System/Library/"))]
     if other:
         sys.exit("%s links libraries that are not system ones: %s" % (exe, ", ".join(other)))

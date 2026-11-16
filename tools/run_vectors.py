@@ -1885,11 +1885,12 @@ class MacOSModernLauncher(Launcher):
             res = subprocess.run([str(self.exe), "--probe", "--probe-input", text],
                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE, timeout=timeout)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
             subprocess.run(["pkill", "-x", APPLE_PROCESS], stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL)
             return RunResult(None, "", "", time.time() - start,
-                             "timeout after %s s (the UI should exit by itself after 2 s)" % timeout)
+                             "timeout after %s s (the UI should exit by itself after 2 s); %s"
+                             % (timeout, _partial_output(exc)))
         except OSError as e:
             return RunResult(None, "", "", time.time() - start, "cannot start %s: %s" % (self.exe, e))
         result = RunResult(res.returncode, res.stdout.decode("utf-8", "replace"),
@@ -1971,10 +1972,11 @@ class IOSSimulatorLauncher(Launcher):
                "-probe", "-probe_input", text]
         try:
             code, out, err = self._simctl(*cmd, timeout=timeout)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
             self._simctl("terminate", self.udid, self.bundle_id)
             return RunResult(None, "", "", time.time() - start,
-                             "simctl launch timed out after %s s (the UI should exit by itself after 2 s)" % timeout)
+                             "simctl launch timed out after %s s (the UI should exit by itself after 2 s); %s"
+                             % (timeout, _partial_output(exc)))
         raw = out + ("\n" if out and not out.endswith("\n") else "") + err
         line = apple_probe_line(raw)
         source = "console"
@@ -2060,6 +2062,16 @@ def check_run(vector, result, platform_id, variant):
         if record.get("ui_variant") != variant:
             problems.append("ui_variant: %r, expected %r" % (record.get("ui_variant"), variant))
     return problems, line
+
+
+def _partial_output(exc):
+    """The start of the output a timed-out process wrote before it was killed (diagnostic only)."""
+    parts = []
+    for name, data in (("stdout", exc.stdout), ("stderr", exc.stderr)):
+        if data:
+            text = data.decode("utf-8", "replace") if isinstance(data, bytes) else str(data)
+            parts.append("%s %r" % (name, text[:400]))
+    return "; ".join(parts) or "no output"
 
 
 def _clip(value, limit=80):
