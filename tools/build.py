@@ -115,6 +115,20 @@ Implemented targets:
                  (spike S8) and writes no record. Writes one record per Android platform of API 24
                  or later of docs/implementation/validation/platforms/.
 
+  macos modern   CMake + Ninja and xcodebuild on ui/modern/macos-swiftui (T049), on a macOS host with
+                 Xcode ONLY (any other host stops at once with the list of what is needed). The C++11
+                 backend is built twice as the static library libloomora.a, x86_64 and arm64 with
+                 -mmacosx-version-min=11.0, merged with lipo into a Universal 2 library; then
+                 `xcodebuild build` of Loomora.xcodeproj (Swift + SwiftUI, deployment target macOS
+                 11, both architectures) links it. Checks that every backend source is compiled with
+                 -std=c++11, that library and app carry exactly the two slices and the 11.0
+                 minimum version, and that the app links only system libraries. Copies
+                 out/macos-modern/Loomora.app and a zip made with ditto (the artifact). One
+                 deliverable record per macOS platform record of docs/implementation/validation/platforms/
+                 (generic id macos-universal while there is none). WRITTEN WITHOUT A MAC: never
+                 compiled or run by its author; the compile is checked by the Apple CI job (T126,
+                 macos-26 runner).
+
 Platform id of a Linux deliverable: "linux-<os-release ID>-<VERSION_ID>-<machine>" such as
 "linux-ubuntu-24.04-x86_64", the same rule as ui/modern/linux-gtk3/probe.cpp and
 ui/legacy/linux-xlib/probe.c use for the probe record's platform_id (keep them in step). The
@@ -149,8 +163,6 @@ DEFAULT_WSL_DISTRO = "Ubuntu-24.04"
 
 # Targets that do not exist yet and the task that will add each of them.
 PENDING = {
-    ("macos", "modern"): "T049",
-    ("ios", "modern"): "T052",
     ("macos", "legacy"): "T077",
     ("ios", "legacy"): "T079",
 }
@@ -230,7 +242,8 @@ def linux_platform_id():
 
 # ---- linux modern (T058) -------------------------------------------------------------------
 
-LINUX_MODERN_CORE_STD = "c++11"  # the backend is always C++11, whatever the UI standard is
+BACKEND_STD = "c++11"  # the backend is always C++11, whatever the UI standard is
+LINUX_MODERN_CORE_STD = BACKEND_STD
 LINUX_MODERN_UI_STDS = ("c++11", "c++14", "c++17")  # the UI standards CMakeLists.txt may pick
 
 
@@ -249,23 +262,40 @@ def cmake_compiler(build_dir, language="CXX"):
     return "%s-%s" % (name, version.group(1)), path.group(1)
 
 
+def compile_stds(entry):
+    """The -std= flags of one compile_commands.json entry."""
+    return re.findall(r"-std=\S+", entry.get("command") or " ".join(entry.get("arguments", [])))
+
+
+def check_backend_std(commands):
+    """Every backend source (core/src) of a parsed compile_commands.json must be compiled with
+    -std=c++11 and nothing else (strict, no extensions; the standard is a target property, never
+    global). Returns the number of backend sources seen."""
+    core_dir = (common.ROOT / "core" / "src").as_posix()
+    seen = 0
+    for entry in commands:
+        source = Path(entry["file"]).as_posix()
+        if source.startswith(core_dir + "/"):
+            seen += 1
+            stds = compile_stds(entry)
+            if stds != ["-std=" + BACKEND_STD]:
+                sys.exit("%s is compiled with %s, the backend must be -std=%s only (strict, no "
+                         "extensions)" % (source, stds or "no -std", BACKEND_STD))
+    return seen
+
+
 def check_linux_modern_standards(build_dir):
     """Reads compile_commands.json: every backend source (core/src) must be compiled with
     -std=c++11 and every UI source with one -std=c++NN of LINUX_MODERN_UI_STDS (the standard of the
     UI target, set as a target property, never globally). Returns the UI standard, e.g. "c++17"."""
     commands = common.read_json(build_dir / "compile_commands.json")
     ui_dir = (common.ROOT / "ui" / "modern" / "linux-gtk3").as_posix()
-    core_dir = (common.ROOT / "core" / "src").as_posix()
-    core_seen, ui_stds = 0, set()
+    core_seen = check_backend_std(commands)
+    ui_stds = set()
     for entry in commands:
         source = Path(entry["file"]).as_posix()
-        stds = re.findall(r"-std=\S+", entry.get("command") or " ".join(entry.get("arguments", [])))
-        if source.startswith(core_dir + "/"):
-            core_seen += 1
-            if stds != ["-std=" + LINUX_MODERN_CORE_STD]:
-                sys.exit("%s is compiled with %s, the backend must be -std=%s only (strict, no "
-                         "extensions)" % (source, stds or "no -std", LINUX_MODERN_CORE_STD))
-        elif source.startswith(ui_dir + "/"):
+        if source.startswith(ui_dir + "/"):
+            stds = compile_stds(entry)
             if len(stds) != 1 or stds[0][5:] not in LINUX_MODERN_UI_STDS:
                 sys.exit("%s is compiled with %s, expected one of %s"
                          % (source, stds or "no -std", ", ".join(LINUX_MODERN_UI_STDS)))
@@ -740,7 +770,7 @@ def run_windows_legacy(args):
     for platform_id, toolchain, prefix, span in archs:
         built[platform_id.split("-", 1)[1]] = build_windows_legacy_arch(
             platform_id, toolchain, prefix, span, build_root)
-    for record, artifact in windows_legacy_records(built, windows_platforms()):
+    for record, artifact in windows_legacy_records(built, platforms_of_family("windows")):
         write_deliverable(record, artifact)
 
 
@@ -749,14 +779,15 @@ def run_windows_legacy(args):
 PLATFORM_ARCH_TO_BUILD = {"x86": "x86", "x86_64": "x64"}
 
 
-def windows_platforms():
-    """{platform id: record} of the Windows platforms of docs/implementation/validation/platforms/."""
+def platforms_of_family(family):
+    """{platform id: record} of the platforms of one family ("windows", "macos", "ios", ...) of
+    docs/implementation/validation/platforms/."""
     found = {}
     if not common.docs_present():
         return found  # no docs submodule: no platform records
     for path in sorted((common.VALIDATION / "platforms").glob("*.json")):
         rec = common.read_json(path)
-        if isinstance(rec, dict) and rec.get("family") == "windows" and rec.get("id"):
+        if isinstance(rec, dict) and rec.get("family") == family and rec.get("id"):
             found[rec["id"]] = rec
     return found
 
@@ -1388,7 +1419,7 @@ def run_windows_modern(args):
         sys.exit("windows modern: nothing was built")
     assets = WINUI_DIR / "obj" / "project.assets.json"
     packages = winui_package_versions(assets) if assets.is_file() else ({}, {})
-    for record, artifact in windows_modern_records(built, windows_platforms(), msvc.name,
+    for record, artifact in windows_modern_records(built, platforms_of_family("windows"), msvc.name,
                                                    msvc_version, dotnet_version, packages):
         write_deliverable(record, artifact)
 
@@ -1467,6 +1498,226 @@ def windows_modern_records(built, platforms, msvc_toolset, msvc_version, dotnet_
         if arch not in covered:
             out.append(make("windows-%s" % arch, arch, "net10"))
     return out
+
+
+# ---- macos modern (T049) ----------------------------------------------
+#
+# WRITTEN WITHOUT A MAC: the only machine of the author is a Windows PC, so this code has never been
+# run, let alone compiled. It follows the documented behaviour of cmake, lipo, otool, ditto and
+# xcodebuild; the first real run is the Apple CI job (T126, macos-26 runner), and any command line
+# below may need a fix then.
+
+MACOS_MODERN_DIR = common.ROOT / "ui" / "modern" / "macos-swiftui"
+# Deployment targets: the floors of the Modern UIs. They must equal the ones of the Xcode projects
+# (check_apple_deployment_target reads them there).
+MACOS_DEPLOYMENT_TARGET = "11.0"
+MACOS_MODERN_ARCHS = ("x86_64", "arm64")  # Universal 2
+# Generic deliverable ids, used while docs/implementation/validation/platforms/ has no record of the
+# family; the validator reports them as deliverables without platform until the record exists.
+MACOS_GENERIC_PLATFORM = "macos-universal"
+
+APPLE_HELP = """\
+%s builds only on a macOS host with Xcode (the full application, not only the Command Line Tools):
+xcodebuild, xcrun, lipo, otool and ditto come with it; cmake and ninja must be on PATH (Homebrew,
+or the GitHub macos-26 runner image). This machine is %s. No Mac was available when the target was
+written, so the code is unchecked: it is built by the Apple CI job (T126)."""
+
+
+def require_apple_host(target):
+    if sys.platform != "darwin":
+        sys.exit(APPLE_HELP % (target, sys.platform + (" (WSL / Linux)" if in_wsl_or_linux() else "")))
+    require_tools(["cmake", "ninja", "xcodebuild", "xcrun", "lipo", "otool", "ditto"])
+
+
+def check_apple_deployment_target(project_dir, key, expected):
+    """Fails when a deployment target of the Xcode project is not `expected`: the library is compiled
+    for `expected` and must match the floor the project declares."""
+    text = (project_dir / "Loomora.xcodeproj" / "project.pbxproj").read_text(encoding="utf-8")
+    found = set(re.findall(r"\b%s = ([0-9.]+);" % key, text))
+    if found != {expected}:
+        sys.exit("%s/Loomora.xcodeproj sets %s to %s, tools/build.py builds the library for %s"
+                 % (project_dir.relative_to(common.ROOT).as_posix(), key,
+                    ", ".join(sorted(found)) or "nothing", expected))
+
+
+def binary_archs(path):
+    return sorted(capture(["lipo", "-archs", path]).split())
+
+
+def check_apple_min_version(path, expected):
+    """The minimum OS version recorded in a Mach-O file or archive (otool -l: `minos` of
+    LC_BUILD_VERSION, `version` of LC_VERSION_MIN_*) must be `expected` in every slice."""
+    text = capture(["otool", "-l", path])
+    found = set(re.findall(r"^\s+minos (\S+)", text, re.M))
+    found |= set(re.findall(r"cmd LC_VERSION_MIN_\w+\s+cmdsize \d+\s+version (\S+)", text))
+
+    def short(version):  # "11.0.0" -> "11.0"
+        return ".".join((version.split(".") + ["0"])[:2])
+    if not found:
+        print("WARNING: no minimum OS version found in the otool -l output of %s" % path)
+    elif {short(v) for v in found} != {short(expected)}:
+        sys.exit("%s records the minimum OS version %s, expected %s"
+                 % (path, ", ".join(sorted(found)), expected))
+
+
+def build_apple_library(work, arch_list, sdk, deployment_target, system_name=None):
+    """Builds the backend as a static library (core/ through the root CMakeLists.txt, Release, no
+    tests) once per architecture, checks -std=c++11 in compile_commands.json, and merges the slices
+    with lipo (one slice: copied) into <work>/libloomora.a. `sdk` is the CMake sysroot (macosx,
+    iphoneos, iphonesimulator); `system_name` sets
+    CMAKE_SYSTEM_NAME (iOS: CMake then targets the device or the simulator SDK). Returns (library, (compiler id,
+    compiler path))."""
+    work.mkdir(parents=True, exist_ok=True)
+    slices = []
+    for arch in arch_list:
+        build_dir = work / ("cmake-" + arch)
+        # try_compile builds a static library: an iOS executable would need code signing
+        common.run(["cmake", "-S", common.ROOT, "-B", build_dir, "-G", "Ninja",
+                    "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+                    "-DLOOMORA_BUILD_TESTS=OFF", "-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY",
+                    "-DCMAKE_OSX_SYSROOT=" + sdk, "-DCMAKE_OSX_ARCHITECTURES=" + arch,
+                    "-DCMAKE_OSX_DEPLOYMENT_TARGET=" + deployment_target] +
+                   (["-DCMAKE_SYSTEM_NAME=" + system_name] if system_name else []))
+        common.run(["cmake", "--build", build_dir, "--target", "loomora"])
+        built = build_dir / "core" / "libloomora.a"
+        if not built.is_file():
+            sys.exit("build finished but %s is missing" % built)
+        if check_backend_std(common.read_json(build_dir / "compile_commands.json")) == 0:
+            sys.exit("compile_commands.json of %s lists no backend source" % build_dir)
+        slices.append(built)
+    lib = work / "libloomora.a"
+    if lib.exists():
+        lib.unlink()
+    if len(slices) == 1:
+        shutil.copyfile(str(slices[0]), str(lib))
+    else:
+        common.run(["lipo", "-create"] + slices + ["-output", lib])
+    if binary_archs(lib) != sorted(arch_list):
+        sys.exit("%s holds the slices %s, expected %s" % (lib, binary_archs(lib), sorted(arch_list)))
+    check_apple_min_version(lib, deployment_target)
+    print("%s: %s, minimum OS %s, %d bytes"
+          % (lib, "+".join(arch_list), deployment_target, lib.stat().st_size))
+    return lib, cmake_compiler(work / ("cmake-" + arch_list[0]), "CXX")
+
+
+def xcodebuild_run(project_dir, action, work, destination, lib_dir, extra=()):
+    """xcodebuild of the Loomora scheme (Release; the project switches code signing off); the
+    derived data go under <work>/derived, the library folder is passed as LOOMORA_LIB_DIR."""
+    derived = work / "derived"
+    if derived.exists():
+        shutil.rmtree(str(derived))
+    common.run(["xcodebuild", action, "-project", project_dir / "Loomora.xcodeproj", "-scheme",
+                "Loomora", "-configuration", "Release", "-destination", destination,
+                "-derivedDataPath", derived, "LOOMORA_LIB_DIR=" + str(lib_dir)] + list(extra))
+    return derived
+
+
+def check_apple_app(exe, arch_list, deployment_target):
+    """Slices and minimum OS version of the app executable; every library it links must be a system
+    one (/usr/lib: libSystem, libc++, the Swift runtime; /System/Library: frameworks). Returns them."""
+    if binary_archs(exe) != sorted(arch_list):
+        sys.exit("%s holds the slices %s, expected %s" % (exe, binary_archs(exe), sorted(arch_list)))
+    check_apple_min_version(exe, deployment_target)
+    libs = [line.split()[0] for line in capture(["otool", "-L", exe]).splitlines()[1:] if line.strip()]
+    other = [lib for lib in libs if not lib.startswith(("/usr/lib/", "/System/Library/"))]
+    if other:
+        sys.exit("%s links libraries that are not system ones: %s" % (exe, ", ".join(other)))
+    return libs
+
+
+def apple_tool_facts(sdk):
+    """(Xcode version and build, Swift version, SDK version) of the Xcode in use."""
+    lines = capture(["xcodebuild", "-version"]).splitlines()
+    xcode = "%s (%s)" % (lines[0][len("Xcode "):], lines[1].replace("Build version ", "")) \
+        if len(lines) > 1 else lines[0]
+    swift = re.search(r"Swift version (\S+)", capture(["xcrun", "swift", "--version"]))
+    return xcode, swift.group(1) if swift else "unknown", capture(["xcrun", "--sdk", sdk, "--show-sdk-version"])
+
+
+def apple_publish(app, out_dir, zip_name):
+    """Copies the .app bundle to out_dir/Loomora.app (symbolic links kept) and zips it with ditto
+    (zip_folder would drop the executable bit); returns the zip."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dest = out_dir / app.name
+    if dest.exists():
+        shutil.rmtree(str(dest))
+    shutil.copytree(str(app), str(dest), symlinks=True)
+    archive = out_dir / zip_name
+    if archive.exists():
+        archive.unlink()
+    common.run(["ditto", "-c", "-k", "--keepParent", dest, archive])
+    return archive
+
+
+def apple_records(family, generic_id, base, artifact, archs=None):
+    """[(record, artifact)]: `base` for every in-scope platform record of the family (arch in `archs`
+    when given), or for the generic id when the family has none."""
+    ids = sorted(pid for pid, rec in platforms_of_family(family).items()
+                 if rec.get("in_scope", True) and (archs is None or rec.get("arch") in archs))
+    out = []
+    for pid in ids or [generic_id]:
+        record = dict(base)
+        record["platform_id"] = pid
+        record["fallbacks"] = fallbacks_of(pid)
+        if pid != generic_id:
+            record["notes"] = ("Deliverable of platform %s (validation/platforms/%s.json), the same "
+                               "file for every platform of the family. %s" % (pid, pid, base["notes"]))
+        out.append((record, artifact))
+    return out
+
+
+def apple_base_record(compiler, target, toolkit, facts, artifact, notes):
+    """The Deliverable fields the macOS and iOS Modern builds share (platform_id and fallbacks are
+    filled per platform by apple_records)."""
+    xcode, swift, sdk_version = facts
+    return {
+        "ui_variant": "modern",
+        "cpp_std": "c++11",
+        "compiler": compiler,
+        "target": target,
+        "output": "native",
+        "ui_language": "swift",
+        "ui_toolkit": toolkit,
+        "ui_compiler": "Xcode %s, Apple Swift %s (language mode 5.0, SWIFT_VERSION of the project), "
+                       "SDK %s" % (xcode, swift, sdk_version),
+        "artifact": {"name": artifact.name, "size": artifact.stat().st_size},
+        "disabled_features": [],
+        "notes": notes,
+    }
+
+
+def run_macos_modern(args):
+    require_apple_host("macos modern")
+    check_apple_deployment_target(MACOS_MODERN_DIR, "MACOSX_DEPLOYMENT_TARGET", MACOS_DEPLOYMENT_TARGET)
+    build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (common.ROOT / "build"))
+    work = build_root / "macos-modern"
+    lib, (compiler, _path) = build_apple_library(work / "lib", MACOS_MODERN_ARCHS, "macosx",
+                                                 MACOS_DEPLOYMENT_TARGET)
+    derived = xcodebuild_run(MACOS_MODERN_DIR, "build", work, "generic/platform=macOS", lib.parent)
+    app = derived / "Build" / "Products" / "Release" / "Loomora.app"
+    exe = app / "Contents" / "MacOS" / "Loomora"
+    if not exe.is_file():
+        sys.exit("xcodebuild finished but %s is missing" % exe)
+    libs = check_apple_app(exe, MACOS_MODERN_ARCHS, MACOS_DEPLOYMENT_TARGET)
+    out_dir = common.ROOT / "out" / "macos-modern"
+    archive = apple_publish(app, out_dir, "loomora-macos-universal.zip")
+    facts = apple_tool_facts("macosx")
+    base = apple_base_record(
+        compiler,
+        "x86_64 + arm64 (Universal 2), macOS %s deployment target, Loomora.app" % MACOS_DEPLOYMENT_TARGET,
+        "SwiftUI (App lifecycle), macOS %s floor; libloomora.a called through the CLoomora module map "
+        "(core/include/loomora.h), no Objective-C, no C++ in the UI" % MACOS_DEPLOYMENT_TARGET,
+        facts, archive,
+        "python tools/build.py macos modern: cmake + ninja builds libloomora.a from core/src once per "
+        "architecture (-std=c++11 checked in compile_commands.json, -mmacosx-version-min=%s), lipo "
+        "merges the two slices, then xcodebuild build of ui/modern/macos-swiftui/Loomora.xcodeproj "
+        "(Release, ARCHS x86_64 arm64, code signing off); the app links only system libraries (%s); "
+        "SDK %s; artifact sha256 %s; built, NOT RUN by this tool (the run on macOS 26 is the Apple "
+        "CI job, T126); copied to out/macos-modern/."
+        % (MACOS_DEPLOYMENT_TARGET, ", ".join(libs), facts[2], common.sha256(archive)))
+    for record, artifact in apple_records("macos", MACOS_GENERIC_PLATFORM, base, archive):
+        write_deliverable(record, artifact)
+    print("app: %s" % (out_dir / "Loomora.app" / "Contents" / "MacOS" / "Loomora"))
 
 
 # ---- web legacy (T085, T086) ---------------------------------------------------------------
@@ -1729,6 +1980,7 @@ def run_web_modern(args):
 
 TARGETS = {
     ("android", "legacy"): run_android_legacy,
+    ("macos", "modern"): run_macos_modern,
     ("android", "modern"): run_android_modern,
     ("linux", "modern"): run_linux_modern,
     ("linux", "legacy"): run_linux_legacy,
