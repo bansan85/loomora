@@ -3,6 +3,7 @@
 
 Usage:
   python tools/build.py <platform> <variant> [--wsl-distro NAME] [--arch x86_64|i686|all]
+                        [--ios-sdk iphoneos|iphonesimulator|all]
 
   platform  windows | macos | ios | android | linux | web
   variant   legacy | modern
@@ -128,6 +129,17 @@ Implemented targets:
                  (generic id macos-universal while there is none). WRITTEN WITHOUT A MAC: never
                  compiled or run by its author; the compile is checked by the Apple CI job (T126,
                  macos-26 runner).
+
+  ios modern     The same for ui/modern/ios-swiftui (T052), on a macOS host with Xcode only:
+                 libloomora.a for aarch64-apple-ios (iphoneos SDK, arm64, iOS 15.0) and, for the
+                 simulator, arm64-apple-ios-simulator (iphonesimulator SDK; the project also lists an
+                 x86_64 simulator slice, left out here: the macos-26 runner is Apple silicon), then
+                 `xcodebuild archive` with code signing off, once per SDK (--ios-sdk, default
+                 all). Writes out/ios-modern/<sdk>/Loomora.app and a zip made with ditto per SDK; the
+                 deliverable record names the iphoneos zip (nothing is recorded by a simulator-only
+                 run, `--ios-sdk iphonesimulator`, the build the CI job runs on the iOS 26
+                 simulator). Generic record id ios-arm64 while there is no iOS platform record.
+                 WRITTEN WITHOUT A MAC, never compiled (see macos modern).
 
 Platform id of a Linux deliverable: "linux-<os-release ID>-<VERSION_ID>-<machine>" such as
 "linux-ubuntu-24.04-x86_64", the same rule as ui/modern/linux-gtk3/probe.cpp and
@@ -1500,7 +1512,7 @@ def windows_modern_records(built, platforms, msvc_toolset, msvc_version, dotnet_
     return out
 
 
-# ---- macos modern (T049) ----------------------------------------------
+# ---- macos modern (T049) and ios modern (T052) ----------------------------------------------
 #
 # WRITTEN WITHOUT A MAC: the only machine of the author is a Windows PC, so this code has never been
 # run, let alone compiled. It follows the documented behaviour of cmake, lipo, otool, ditto and
@@ -1508,13 +1520,24 @@ def windows_modern_records(built, platforms, msvc_toolset, msvc_version, dotnet_
 # below may need a fix then.
 
 MACOS_MODERN_DIR = common.ROOT / "ui" / "modern" / "macos-swiftui"
+IOS_MODERN_DIR = common.ROOT / "ui" / "modern" / "ios-swiftui"
 # Deployment targets: the floors of the Modern UIs. They must equal the ones of the Xcode projects
 # (check_apple_deployment_target reads them there).
 MACOS_DEPLOYMENT_TARGET = "11.0"
+IOS_DEPLOYMENT_TARGET = "15.0"
 MACOS_MODERN_ARCHS = ("x86_64", "arm64")  # Universal 2
+# SDK name -> (xcodebuild destination, architectures of the library and of the app). The project
+# also lists an x86_64 simulator slice, left out: the macos-26 runner is Apple silicon and runs the
+# arm64 simulator (spec Clarifications, fifth session). ARCHS is passed to xcodebuild so that the
+# project and the library cannot disagree.
+IOS_MODERN_SDKS = {
+    "iphoneos": ("generic/platform=iOS", ("arm64",)),
+    "iphonesimulator": ("generic/platform=iOS Simulator", ("arm64",)),
+}
 # Generic deliverable ids, used while docs/implementation/validation/platforms/ has no record of the
 # family; the validator reports them as deliverables without platform until the record exists.
 MACOS_GENERIC_PLATFORM = "macos-universal"
+IOS_GENERIC_PLATFORM = "ios-arm64"
 
 APPLE_HELP = """\
 %s builds only on a macOS host with Xcode (the full application, not only the Command Line Tools):
@@ -1718,6 +1741,58 @@ def run_macos_modern(args):
     for record, artifact in apple_records("macos", MACOS_GENERIC_PLATFORM, base, archive):
         write_deliverable(record, artifact)
     print("app: %s" % (out_dir / "Loomora.app" / "Contents" / "MacOS" / "Loomora"))
+
+
+def run_ios_modern(args):
+    require_apple_host("ios modern")
+    check_apple_deployment_target(IOS_MODERN_DIR, "IPHONEOS_DEPLOYMENT_TARGET", IOS_DEPLOYMENT_TARGET)
+    sdks = sorted(IOS_MODERN_SDKS) if args.ios_sdk == "all" else [args.ios_sdk]
+    build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (common.ROOT / "build"))
+    libs_root = build_root / "ios-modern" / "libs"
+    built = {}  # SDK -> (zip, compiler id, linked libraries, tool facts)
+    for sdk in sdks:
+        destination, archs = IOS_MODERN_SDKS[sdk]
+        work = build_root / "ios-modern" / sdk
+        # the project looks for the library in $(LOOMORA_LIB_DIR)/$(PLATFORM_NAME) = libs/<sdk>
+        _lib, (compiler, _path) = build_apple_library(libs_root / sdk, archs, sdk,
+                                                      IOS_DEPLOYMENT_TARGET, system_name="iOS")
+        xcarchive = work / "Loomora.xcarchive"
+        if xcarchive.exists():
+            shutil.rmtree(str(xcarchive))
+        xcodebuild_run(IOS_MODERN_DIR, "archive", work, destination, libs_root,
+                       ["-sdk", sdk, "-archivePath", xcarchive, "ARCHS=" + " ".join(archs)])
+        app = xcarchive / "Products" / "Applications" / "Loomora.app"
+        exe = app / "Loomora"
+        if not exe.is_file():
+            sys.exit("xcodebuild archive finished but %s is missing" % exe)
+        libs = check_apple_app(exe, archs, IOS_DEPLOYMENT_TARGET)
+        out_dir = common.ROOT / "out" / "ios-modern" / sdk
+        archive = apple_publish(app, out_dir, "loomora-%s-%s.zip" % (sdk, "-".join(archs)))
+        built[sdk] = (archive, compiler, libs, apple_tool_facts(sdk))
+        print("app: %s" % (out_dir / "Loomora.app"))
+    if "iphoneos" not in built:
+        print("no deliverable record: the deliverable is the device build (iphoneos)")
+        return
+    archive, compiler, libs, facts = built["iphoneos"]
+    others = ["%s: %s, %d bytes, sha256 %s" % (sdk, a.name, a.stat().st_size, common.sha256(a))
+              for sdk, (a, _c, _l, _f) in sorted(built.items()) if sdk != "iphoneos"]
+    base = apple_base_record(
+        compiler,
+        "aarch64-apple-ios (arm64), iOS %s deployment target, Loomora.app of an unsigned xcodebuild "
+        "archive" % IOS_DEPLOYMENT_TARGET,
+        "SwiftUI (App lifecycle), iOS %s floor; libloomora.a called through the CLoomora module map "
+        "(core/include/loomora.h), no Objective-C, no C++ in the UI" % IOS_DEPLOYMENT_TARGET,
+        facts, archive,
+        "python tools/build.py ios modern: cmake + ninja builds libloomora.a from core/src for arm64 "
+        "(-std=c++11 checked in compile_commands.json, iphoneos SDK, deployment target %s), then "
+        "xcodebuild archive of ui/modern/ios-swiftui/Loomora.xcodeproj (Release, code signing off: "
+        "the app cannot be installed on a device without signing); the app links only system "
+        "libraries (%s); SDK %s; artifact sha256 %s; built, NOT RUN by this tool (the run on the iOS "
+        "26 simulator is the Apple CI job, T126)%s; copied to out/ios-modern/<sdk>/."
+        % (IOS_DEPLOYMENT_TARGET, ", ".join(libs), facts[2], common.sha256(archive),
+           ("; same build for the simulator: " + "; ".join(others)) if others else ""))
+    for record, artifact in apple_records("ios", IOS_GENERIC_PLATFORM, base, archive, archs=("arm64",)):
+        write_deliverable(record, artifact)
 
 
 # ---- web legacy (T085, T086) ---------------------------------------------------------------
@@ -1981,6 +2056,7 @@ def run_web_modern(args):
 TARGETS = {
     ("android", "legacy"): run_android_legacy,
     ("macos", "modern"): run_macos_modern,
+    ("ios", "modern"): run_ios_modern,
     ("android", "modern"): run_android_modern,
     ("linux", "modern"): run_linux_modern,
     ("linux", "legacy"): run_linux_legacy,
@@ -2002,6 +2078,9 @@ def main(argv=None):
                         "instead of 24 (spike S8: 21), the APK is then NOT the deliverable")
     parser.add_argument("--arch", choices=LINUX_LEGACY_ARCHS + ("all",), default="all",
                         help="linux legacy only: the architecture to build (default all)")
+    parser.add_argument("--ios-sdk", choices=sorted(IOS_MODERN_SDKS) + ["all"], default="all",
+                        help="ios modern only: the SDK to build (default all; the CI job that runs the "
+                        "iOS simulator uses iphonesimulator)")
     args = parser.parse_args(argv)
 
     key = (args.platform, args.variant)
