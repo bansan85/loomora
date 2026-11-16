@@ -1570,6 +1570,12 @@ IOS_LEGACY_PROJECT_TARGET = "5.0"  # the floor the Xcode 5.1.1 project declares 
 # SDK -> minimum OS versions accepted in the iOS Legacy library and app. Apple's arm64 simulator
 # exists since iOS 14: the toolchain may record 14.0 for the simulator slice (not verified, no Mac).
 IOS_LEGACY_ACCEPTED_MIN = {"iphoneos": ("12.0",), "iphonesimulator": ("12.0", "14.0")}
+# Added to the failure message of check_apple_min_version when more than one version is accepted.
+MIN_VERSION_TOLERANCE_NOTE = (
+    ". Two versions are accepted for the iOS Legacy simulator SDK only (iphoneos accepts only the "
+    "deployment target, 12.0): the arm64 simulator exists since iOS 14, so the toolchain may record "
+    "14.0 for that slice instead of the requested 12.0 (an expectation, not verified, no Mac was "
+    "available). Any other value, or 14.0 on the device SDK, is a real failure")
 LIBCXX_DYLIB = "/usr/lib/libc++.1.dylib"  # linked dynamically (spike S11: no static libc++ in Xcode 26)
 
 APPLE_HELP = """\
@@ -1615,8 +1621,9 @@ def check_apple_min_version(path, expected):
     else:
         wanted = {short(v) for v in ((expected,) if isinstance(expected, str) else expected)}
         if not {short(v) for v in found} <= wanted:
-            sys.exit("%s records the minimum OS version %s, expected %s"
-                     % (path, ", ".join(sorted(found)), " or ".join(sorted(wanted))))
+            sys.exit("%s records the minimum OS version %s, expected %s%s"
+                     % (path, ", ".join(sorted(found)), " or ".join(sorted(wanted)),
+                        MIN_VERSION_TOLERANCE_NOTE if len(wanted) > 1 else ""))
 
 
 def build_apple_library(work, arch_list, sdk, deployment_target, system_name=None, accepted_min=None):
@@ -1787,12 +1794,26 @@ def run_macos_modern(args):
     print("app: %s" % (out_dir / "Loomora.app" / "Contents" / "MacOS" / "Loomora"))
 
 
+def check_bundle_min_version(plist, expected):
+    """MinimumOSVersion of the built Info.plist (Xcode expands ${IPHONEOS_DEPLOYMENT_TARGET}, so the
+    override of the deployment target must show up there) must be `expected`. It is the deployment
+    target even when the simulator slice records 14.0 in the Mach-O file."""
+    import plistlib
+    with open(str(plist), "rb") as handle:
+        found = plistlib.load(handle).get("MinimumOSVersion")
+    if found != expected:
+        sys.exit("%s sets MinimumOSVersion to %r, expected %r (the Info.plist of the project must say "
+                 "${IPHONEOS_DEPLOYMENT_TARGET} so that the override is followed)"
+                 % (plist, found, expected))
+
+
 def build_ios_sdks(args, label, project_dir, deployment_target, zip_prefix, accepted_min=None,
-                   needs=(), extra=()):
+                   needs=(), extra=(), bundle_min=None):
     """For each SDK asked for (--ios-sdk): libloomora.a for the SDK (CMake + Ninja, arm64), then an
     unsigned `xcodebuild archive` of the project with ARCHS passed so that the project and the
     library agree (`extra`: more xcodebuild settings), checks, and out/<label>/<sdk>/Loomora.app plus
-    a ditto zip. Returns {SDK: (zip, compiler id, linked libraries, tool facts)}."""
+    a ditto zip. `bundle_min`: the MinimumOSVersion the built Info.plist must hold. Returns {SDK: (zip,
+    compiler id, linked libraries, tool facts)}."""
     sdks = sorted(IOS_SDKS) if args.ios_sdk == "all" else [args.ios_sdk]
     build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (common.ROOT / "build"))
     libs_root = build_root / label / "libs"
@@ -1814,6 +1835,8 @@ def build_ios_sdks(args, label, project_dir, deployment_target, zip_prefix, acce
         if not exe.is_file():
             sys.exit("xcodebuild archive finished but %s is missing" % exe)
         libs = check_apple_app(exe, archs, accepted or deployment_target, needs)
+        if bundle_min:
+            check_bundle_min_version(app / "Info.plist", bundle_min)
         out_dir = common.ROOT / "out" / label / sdk
         archive = apple_publish(app, out_dir, "%s-%s-%s.zip" % (zip_prefix, sdk, "-".join(archs)))
         built[sdk] = (archive, compiler, libs, apple_tool_facts(sdk))
@@ -1940,15 +1963,29 @@ def run_macos_legacy(args):
     print("app: %s" % (out_dir / "Loomora.app" / "Contents" / "MacOS" / "Loomora"))
 
 
+def check_ios_legacy_plist(plist):
+    """MinimumOSVersion of the project's Info.plist must be ${IPHONEOS_DEPLOYMENT_TARGET}: the
+    Xcode 5.1.1 build (deployment target 5.0) then yields 5.0 and the override of the CI (12.0) is
+    followed. A literal version would be wrong for one of the two."""
+    import plistlib
+    with open(str(plist), "rb") as handle:
+        found = plistlib.load(handle).get("MinimumOSVersion")
+    if found != "${IPHONEOS_DEPLOYMENT_TARGET}":
+        sys.exit("%s sets MinimumOSVersion to %r, the Legacy iOS build expects "
+                 "'${IPHONEOS_DEPLOYMENT_TARGET}'" % (plist, found))
+
+
 def run_ios_legacy(args):
     require_apple_host("ios legacy")
     # The project is the Xcode 5.1.1 one: it keeps its iOS 5.0 floor (and the three 32/64-bit
     # slices); Xcode 26 builds it with the two overrides below. A project that no longer says 5.0
     # would make the override meaningless.
     check_apple_deployment_target(IOS_LEGACY_DIR, "IPHONEOS_DEPLOYMENT_TARGET", IOS_LEGACY_PROJECT_TARGET)
+    check_ios_legacy_plist(IOS_LEGACY_DIR / "Info.plist")
     built = build_ios_sdks(
         args, "ios-legacy", IOS_LEGACY_DIR, IOS_LEGACY_DEPLOYMENT_TARGET, "loomora-legacy",
         accepted_min=IOS_LEGACY_ACCEPTED_MIN, needs=(LIBCXX_DYLIB,),
+        bundle_min=IOS_LEGACY_DEPLOYMENT_TARGET,
         extra=["IPHONEOS_DEPLOYMENT_TARGET=" + IOS_LEGACY_DEPLOYMENT_TARGET, "CODE_SIGNING_ALLOWED=NO"])
     if "iphoneos" not in built:
         print("no deliverable record: the deliverable is the device build (iphoneos)")
@@ -1970,9 +2007,11 @@ def run_ios_legacy(args):
         "%s, code signing off); the app links only system libraries (%s), libc++ dynamically; SDK %s; "
         "artifact sha256 %s. COMPILED FOR arm64 AT iOS %s, NEVER RUN; iOS 5 is not_tested: the "
         "armv7/armv7s slices and the deployment target 5.0 need Xcode 5.1.1 on a real old Mac "
-        "(spike S2, T067)%s; copied to out/ios-legacy/<sdk>/."
+        "(spike S2, T067); MinimumOSVersion of Info.plist is ${IPHONEOS_DEPLOYMENT_TARGET}, checked "
+        "as %s in the built bundle (5.0 with Xcode 5.1.1)%s; copied to out/ios-legacy/<sdk>/."
         % (IOS_LEGACY_DEPLOYMENT_TARGET, IOS_LEGACY_DEPLOYMENT_TARGET, IOS_LEGACY_PROJECT_TARGET,
            ", ".join(libs), facts[2], common.sha256(archive), IOS_LEGACY_DEPLOYMENT_TARGET,
+           IOS_LEGACY_DEPLOYMENT_TARGET,
            ("; same build for the simulator: " + "; ".join(others)) if others else ""),
         legacy=True)
     for record, artifact in apple_records("ios", IOS_GENERIC_PLATFORM, base, archive, archs=("arm64",)):
