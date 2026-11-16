@@ -182,7 +182,7 @@ T069 (spike S4, the manylinux2010 build) was removed on 2026-11-14: Linux binari
 
 ### iOS Legacy UI (Objective-C, UIKit)
 
-- [ ] T078 [P] [US2] Write `ui/legacy/ios-uikit/main.m`, `AppDelegate.m`, `ViewController.m` (a `UITextField` pre-filled "Coucou" and a `UILabel` showing the greeting from `loomora_greet`, manual retain/release, 1,000-character limit), `Probe.m` (`-probe`, `-probe_input`, `NSLog`) and `Info.plist` (`MinimumOSVersion` 5.0), plus `ui/legacy/ios-uikit/Loomora.xcodeproj` for Xcode 5.1.1 (`armv7`, `armv7s`, `arm64`), written with the APIs of iOS 5 only and still opening in Xcode 26 (the CI overrides the deployment target to iOS 12, T079)
+- [X] T078 [P] [US2] Write `ui/legacy/ios-uikit/main.m`, `AppDelegate.m`, `ViewController.m` (a `UITextField` pre-filled "Coucou" and a `UILabel` showing the greeting from `loomora_greet`, manual retain/release, 1,000-character limit), `Probe.m` (`-probe`, `-probe_input`, `NSLog`) and `Info.plist` (`MinimumOSVersion` 5.0), plus `ui/legacy/ios-uikit/Loomora.xcodeproj` for Xcode 5.1.1 (`armv7`, `armv7s`, `arm64`), written with the APIs of iOS 5 only and still opening in Xcode 26 (the CI overrides the deployment target to iOS 12, T079) (done 2026-11-16, branch feat/ios-legacy-ui: written, NOT compiled, no Mac available; the compile is checked by T079 on macos-26)
 - [ ] T079 [US2] Add the `ios-legacy` target to `tools/build.py`: **on `macos-26` (default)** `xcodebuild` with Xcode 26, `arm64`, `IPHONEOS_DEPLOYMENT_TARGET=12.0`, result "compiled for arm64 at iOS 12, iOS 5 `not_tested`"; **later, on a real Mac**, Xcode 5.1.1, deployment 5.0, `armv7`, `armv7s`, `arm64` (reworded 2026-11-16, spec Clarifications fifth session)
 
 ### Android Legacy UI (Java, framework views)
