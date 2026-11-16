@@ -115,8 +115,8 @@ description: "Task list for Loomora across 15 years of platforms (C++11 backend,
 
 ### macOS Modern UI (Swift, SwiftUI)
 
-- [ ] T047 [P] [US1] Create `ui/modern/macos-swiftui/Loomora.xcodeproj` (deployment target macOS 11, Universal 2) with `module.modulemap` exposing `core/include/loomora.h`
-- [ ] T048 [US1] Write `ui/modern/macos-swiftui/Native.swift`, `LoomoraApp.swift`, `ContentView.swift` (`TextField` "Coucou" limited to 1,000 characters, `Text` with the greeting from `loomora_greet`, end-of-life banner) and `Probe.swift` (`--probe`, `--probe-input`, `task_info` resident size, stdout line, exit after 2 seconds)
+- [X] T047 [P] [US1] Create `ui/modern/macos-swiftui/Loomora.xcodeproj` (deployment target macOS 11, Universal 2) with `module.modulemap` exposing `core/include/loomora.h` (done 2026-11-16, branch feat/macos-modern: written, NOT compiled, no Mac available; the compile is checked by T126 on macos-26)
+- [X] T048 [US1] Write `ui/modern/macos-swiftui/Native.swift`, `LoomoraApp.swift`, `ContentView.swift` (`TextField` "Coucou" limited to 1,000 characters, `Text` with the greeting from `loomora_greet`, end-of-life banner) and `Probe.swift` (`--probe`, `--probe-input`, `task_info` resident size, stdout line, exit after 2 seconds) (done 2026-11-16, branch feat/macos-modern: written, NOT compiled, no Mac available; the compile is checked by T126 on macos-26)
 - [ ] T049 [US1] Add the `macos-modern` target to `tools/build.py`: static `libloomora.a` for `x86_64` and `arm64` merged with `lipo`, then `xcodebuild`
 
 ### iOS Modern UI (Swift, SwiftUI)
