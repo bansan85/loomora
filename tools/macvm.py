@@ -9,8 +9,14 @@ Run it in WSL (python3 tools/macvm.py ...), or from the Windows host: it then re
                                    the ONLY command that downloads (OSX-KVM and the Apple recovery image)
     macvm.py create VM             create the sparse qcow2 disk (and the firmware variables); no download
     macvm.py cmd VM [--install]    print the QEMU command line (review; nothing is started)
-    macvm.py start VM [--install] [--headless]
-    macvm.py stop VM               ACPI power-off through the QEMU monitor
+    macvm.py start VM [--install] [--headless] [--force]
+                                   refuses if ignore_msrs is not Y or the VM folder has < 15 GB free;
+                                   logs the command, the host state and QEMU's exit status in qemu.log,
+                                   and the guest errors QEMU saw in qemu-debug.log
+    macvm.py status VM             read-only: host state, written size of the disk, QEMU's view of the guest
+                                   (`info status`), last lines of both logs
+    macvm.py screenshot VM         dump the guest screen to screen.ppm and say whether it is all black
+    macvm.py stop VM              ACPI power-off through the QEMU monitor
     macvm.py snapshot VM [NAME]    create a snapshot of the stopped VM (default NAME: clean)
     macvm.py restore VM [NAME]     go back to a snapshot of the stopped VM
     macvm.py ssh VM [-- command]   ssh to the guest through the forwarded port
@@ -94,7 +100,7 @@ def paths(vm):
     d = vm_dir(vm)
     return {"dir": d, "disk": d / "disk.qcow2", "install": d / "install.img", "chameleon": d / "chameleon.iso",
             "ovmf_vars": d / "OVMF_VARS.fd", "pid": d / "qemu.pid", "mon": d / "monitor.sock",
-            "log": d / "qemu.log"}
+            "log": d / "qemu.log", "debug": d / "qemu-debug.log", "shot": d / "screen.ppm"}
 
 
 def known(vm):
@@ -108,7 +114,9 @@ def build_command(vm, install=False, headless=False, display="gtk"):
     spec, p = VMS[vm], paths(vm)
     c = [QEMU, "-enable-kvm", "-m", str(spec["ram_mb"]), "-smp", spec["smp"],
          "-device", "isa-applesmc,osk=" + OSK,
-         "-monitor", "unix:%s,server,nowait" % p["mon"], "-pidfile", str(p["pid"])]
+         "-monitor", "unix:%s,server,nowait" % p["mon"], "-pidfile", str(p["pid"]),
+         # What the guest does that QEMU cannot emulate (unimplemented devices, bad accesses).
+         "-D", str(p["debug"]), "-d", "guest_errors,unimp"]
     if headless:
         c += ["-display", "none", "-vnc", "127.0.0.1:%d" % spec["vnc"]]
     else:
@@ -356,6 +364,35 @@ def running(vm):
         return False
 
 
+MIN_FREE_GB = 15  # a guest installing macOS writes tens of GB; a full VHDX ends the VM abruptly
+
+
+def host_state(vm):
+    """What the host looks like now; the values a stopped or black-screen VM is judged against."""
+    msrs = Path("/sys/module/kvm/parameters/ignore_msrs")
+    mem = None
+    try:
+        m = re.search(r"MemAvailable:\s+(\d+) kB", Path("/proc/meminfo").read_text())
+        mem = int(m.group(1)) // 1024 if m else None
+    except OSError:
+        pass
+    return {"ignore_msrs": msrs.read_text().strip() if msrs.exists() else None,
+            "free_gb": free_gb(vm_dir(vm)), "mem_available_mb": mem}
+
+
+def preflight_problems(state):
+    """Reasons not to start a macOS guest, from host_state(). Pure."""
+    out = []
+    if state["ignore_msrs"] not in ("Y", "1"):
+        out.append("kvm ignore_msrs is %s: macOS guests reboot-loop or stay on a black screen "
+                   "(echo 1 | sudo tee /sys/module/kvm/parameters/ignore_msrs; it is lost at each `wsl --shutdown`)"
+                   % state["ignore_msrs"])
+    if state["free_gb"] < MIN_FREE_GB:
+        out.append("only %.1f GB free where the VM lives (need %d): the guest would stop when the disk is full"
+                   % (state["free_gb"], MIN_FREE_GB))
+    return out
+
+
 def cmd_start(args):
     known(args.vm)
     if running(args.vm):
@@ -365,10 +402,106 @@ def cmd_start(args):
         raise SetupError("missing: %s (see `plan %s`)" % (", ".join(miss), args.vm))
     if not Path("/dev/kvm").exists():
         raise SetupError("/dev/kvm is missing (run `check`)")
-    log = open(str(paths(args.vm)["log"]), "ab")
-    subprocess.Popen(build_command(args.vm, args.install, args.headless), stdout=log, stderr=log,
-                     stdin=subprocess.DEVNULL, start_new_session=True)
-    print("%s started; log %s; ssh port %d" % (args.vm, paths(args.vm)["log"], VMS[args.vm]["ssh_port"]))
+    state = host_state(args.vm)
+    problems = preflight_problems(state)
+    if problems and not args.force:
+        raise SetupError("refusing to start (--force to override):\n  - " + "\n  - ".join(problems))
+    for pr in problems:
+        print("WARNING (forced): " + pr)
+    p = paths(args.vm)
+    cmd = build_command(args.vm, args.install, args.headless)
+    cmdline = " ".join(shlex.quote(x) for x in cmd)
+    log = open(str(p["log"]), "ab")
+    log.write(("\n[macvm] %s start of %s, install=%s headless=%s; ignore_msrs=%s, %.1f GB free, %s MB RAM available\n"
+               "[macvm] %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), args.vm, args.install, args.headless,
+                                 state["ignore_msrs"], state["free_gb"], state["mem_available_mb"], cmdline)).encode())
+    log.flush()
+    # The shell records how QEMU ended: status 0 is a guest shutdown, 137 or 143 a kill (WSL stopped,
+    # out of memory), another value a QEMU error.
+    script = '%s; echo "[macvm] qemu exited with status $? at $(date +%%Y-%%m-%%d_%%H:%%M:%%S)" >> %s' % (
+        cmdline, shlex.quote(str(p["log"])))
+    subprocess.Popen(["sh", "-c", script], stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
+    print("%s started; log %s; debug log %s; ssh port %d\n"
+          "If the screen goes black: `macvm.py status %s` and `macvm.py screenshot %s` (do not close the window); "
+          "`--headless` avoids the WSLg window (VNC on 127.0.0.1:%d)."
+          % (args.vm, p["log"], p["debug"], VMS[args.vm]["ssh_port"], args.vm, args.vm, 5900 + VMS[args.vm]["vnc"]))
+    return 0
+
+
+def monitor_query(vm, text):
+    """Send one QEMU monitor command and return its reply (the monitor must be up)."""
+    s = socket.socket(socket.AF_UNIX)
+    s.settimeout(2)
+    s.connect(str(paths(vm)["mon"]))
+
+    def drain():
+        data = b""
+        try:
+            while True:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+        except socket.timeout:
+            pass
+        return data.decode("utf-8", "replace")
+
+    drain()  # banner
+    s.sendall((text + "\n").encode())
+    reply = drain()
+    s.close()
+    return re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", reply).replace("\r", "")
+
+
+def cmd_status(args):
+    """Read-only: is the VM running, what does QEMU say about the guest, what did the logs record."""
+    known(args.vm)
+    p = paths(args.vm)
+    st = host_state(args.vm)
+    print("host: ignore_msrs=%s, %.1f GB free in %s, %s MB RAM available" % (
+        st["ignore_msrs"], st["free_gb"], vm_dir(args.vm), st["mem_available_mb"]))
+    for pr in preflight_problems(st):
+        print("  PROBLEM: " + pr)
+    if p["disk"].exists() and shutil.which("qemu-img"):
+        info = run(["qemu-img", "info", "--output=json", str(p["disk"])]).stdout
+        m = re.search(r'"actual-size":\s*(\d+)', info)
+        v = re.search(r'"virtual-size":\s*(\d+)', info)
+        if m and v:
+            print("disk: %.1f GB written of %.0f GB virtual" % (int(m.group(1)) / 2 ** 30, int(v.group(1)) / 2 ** 30))
+    if running(args.vm):
+        print("qemu: running (pid %s)" % p["pid"].read_text().strip())
+        try:
+            # running = the guest runs (a black screen with `running` is a guest that is up but not drawing,
+            # or a display problem); paused, guest-panicked or internal-error say what stopped it.
+            reply = [l for l in monitor_query(args.vm, "info status").splitlines() if l.startswith("VM status")]
+            print("monitor: %s" % (reply[0] if reply else "no `VM status` line in the reply"))
+        except (OSError, socket.timeout) as e:
+            print("monitor: no answer (%s)" % e)
+    else:
+        print("qemu: not running")
+    for key in ("log", "debug"):
+        if p[key].exists():
+            lines = p[key].read_text(errors="replace").splitlines()
+            print("\n--- last lines of %s (%d lines in all) ---" % (p[key], len(lines)))
+            print("\n".join(lines[-15:]))
+    return 0
+
+
+def cmd_screenshot(args):
+    """Ask QEMU for the guest screen, as it is, in the VM folder (a diagnostic, never evidence)."""
+    known(args.vm)
+    if not running(args.vm):
+        raise SetupError("%s is not running" % args.vm)
+    shot = paths(args.vm)["shot"]
+    monitor_query(args.vm, "screendump %s" % shot)
+    time.sleep(1)
+    if not shot.exists():
+        raise SetupError("no screen dump written to %s" % shot)
+    data = shot.read_bytes()
+    head = re.match(rb"P6\s+(\d+)\s+(\d+)\s+255\s", data)
+    black = bool(head) and not any(data[head.end():])
+    print("%s written (%d bytes, %s); open it in a viewer that reads PPM. Every pixel black: %s"
+          % (shot, len(data), "%sx%s" % head.groups()[:2] if head else "not a P6 PPM", "yes" if black else "no"))
     return 0
 
 
@@ -430,6 +563,12 @@ def selftest():
             h = build_command(vm, headless=True)
             ok("-vnc" in h and "127.0.0.1:%d" % VMS[vm]["vnc"] in h, "%s: headless VNC on loopback" % vm)
         ok(len({v["ssh_port"] for v in VMS.values()}) == len(VMS), "distinct ssh ports")
+        ok("-D" in build_command("tahoe") and str(paths("tahoe")["debug"]) in build_command("tahoe"),
+           "QEMU writes its guest-error log to qemu-debug.log")
+        good = {"ignore_msrs": "Y", "free_gb": 50.0, "mem_available_mb": 9000}
+        ok(preflight_problems(good) == [], "preflight: a ready host has no problem")
+        ok(len(preflight_problems(dict(good, ignore_msrs="N"))) == 1, "preflight: ignore_msrs N refused")
+        ok(len(preflight_problems(dict(good, ignore_msrs=None, free_gb=3.0))) == 2, "preflight: missing ignore_msrs and low disk")
         ok("Skylake-Client" in " ".join(build_command("tahoe")), "tahoe: Skylake-Client CPU")
         ok("Penryn" in " ".join(build_command("snowleopard")), "snowleopard: Penryn CPU")
         # fetch must refuse to touch the network without the flag
@@ -477,6 +616,12 @@ def main(argv=None):
         s.add_argument("vm")
         s.add_argument("--install", action="store_true")
         s.add_argument("--headless", action="store_true")
+        if name == "start":
+            s.add_argument("--force", action="store_true", help="start although the preflight found a problem")
+        s.set_defaults(fn=fn)
+    for name, fn in (("status", cmd_status), ("screenshot", cmd_screenshot)):
+        s = sub.add_parser(name)
+        s.add_argument("vm")
         s.set_defaults(fn=fn)
     s = sub.add_parser("stop")
     s.add_argument("vm")
