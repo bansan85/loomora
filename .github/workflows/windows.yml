@@ -82,8 +82,9 @@ jobs:
   # `python tools/build.py windows legacy` on Linux: both executables (i686 for Windows 2000 to 11,
   # x86_64 for XP x64 to 11) with the -win32 thread model and the msvcrt runtime, then the import
   # allowlist check (build.py exits with an error when an import is not on the allowlist of its
-  # floor). Building never needs the docs repository, so no submodule is fetched: build.py then
-  # prints a warning and writes no deliverable record, which is the intended behaviour.
+  # floor). Building never needs the docs repository, so it is not fetched (build.py then prints a
+  # warning and writes no deliverable record, which is the intended behaviour); only zlib and
+  # RapidJSON are, because the backend links and includes them.
   cross-build:
     name: cross build (MinGW-w64 on ubuntu-24.04)
     needs: changes
@@ -96,6 +97,10 @@ jobs:
         with:
           submodules: false
           persist-credentials: false
+      # The backend links zlib and includes RapidJSON (the .loomora format, ADR 0018): both are git
+      # submodules, fetched alone (shallow), without the docs repository.
+      - name: Fetch the zlib and RapidJSON submodules
+        run: git submodule update --init --depth 1 third_party/zlib third_party/rapidjson
       - name: Install MinGW-w64 (win32 thread model), CMake and Ninja
         run: |
           sudo apt-get update
@@ -204,8 +209,9 @@ jobs:
 
   # `python tools/verify.py quick` on a Windows image: the clang + Ninja host build of the backend
   # and of the Win32 UI (CMakePresets.json host-clang), ctest (selftest and Catch2), the vectors
-  # through the executable it built, check_ui_logic, validate_records and the self-tests. The
-  # strict C++11 check (`std`) is left out: it needs GCC and runs on the Linux jobs of ci.yml.
+  # through the executable it built, the .loomora format checks of T099 (format-files, readonly,
+  # cli validate on loomora-cli.exe, ui project, corpus+validator: see verify.py --list), check_ui_logic,
+  # validate_records and the self-tests. The strict C++11 check (`std`) is left out: it needs GCC and runs on the Linux jobs of ci.yml.
   host-build:
     name: host build (clang, windows-2025)
     needs: changes
@@ -227,7 +233,7 @@ jobs:
           ninja --version
       - name: Verify (quick, without the strict C++11 check)
         run: |
-          python tools/verify.py quick --only build,ctest,vectors,ui-logic,records,diff \
+          python tools/verify.py quick --only build,ctest,vectors,format-files,readonly,cli,ui-project,corpus,ui-logic,records,diff \
             --build-dir "$RUNNER_TEMP/loomora-build" --jobs 4 2>&1 | tee "$RUNNER_TEMP/verify.log"
           # A skipped check is a check that did not run: in CI it is an error. The Modern UI run
           # is skipped here by design (it needs the WinUI build of winui3.yml).
