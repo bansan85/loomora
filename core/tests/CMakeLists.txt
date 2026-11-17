@@ -44,7 +44,7 @@ set_target_properties(loomora_selftest PROPERTIES CXX_STANDARD 11 CXX_STANDARD_R
 # source file, satisfies the reference inside the executable (docs/implementation/adr/0002). Every other target
 # links the system's own GetThreadId. The same toolchain defines LOOMORA_AVOID_IOSTREAM, which
 # makes selftest.cpp print through <cstdio> (docs/implementation/adr/0004).
-if(LOOMORA_TARGET_WIN2000)
+if(LOOMORA_TARGET_WIN2000 OR LOOMORA_TARGET_WINXP64)
   target_sources(loomora_selftest PRIVATE
     "${PROJECT_SOURCE_DIR}/ui/legacy/windows-win32/getthreadid_shim.cpp")
 endif()
@@ -68,7 +68,7 @@ target_include_directories(loomora_format_selftest SYSTEM PRIVATE "${LOOMORA_RAP
 target_link_libraries(loomora_format_selftest PRIVATE loomora)
 set_target_properties(loomora_format_selftest PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON
                                                          CXX_EXTENSIONS OFF)
-if(LOOMORA_TARGET_WIN2000)
+if(LOOMORA_TARGET_WIN2000 OR LOOMORA_TARGET_WINXP64)
   target_sources(loomora_format_selftest PRIVATE
     "${PROJECT_SOURCE_DIR}/ui/legacy/windows-win32/getthreadid_shim.cpp")
 endif()
@@ -136,6 +136,10 @@ target_include_directories(loomora_spike_fmt_deps SYSTEM PRIVATE "${LOOMORA_RAPI
 target_link_libraries(loomora_spike_fmt_deps PRIVATE loomora_zlib)
 set_target_properties(loomora_spike_fmt_deps PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON
                                                          CXX_EXTENSIONS OFF)
+if(LOOMORA_TARGET_WIN2000 OR LOOMORA_TARGET_WINXP64)
+  target_sources(loomora_spike_fmt_deps PRIVATE
+    "${PROJECT_SOURCE_DIR}/ui/legacy/windows-win32/getthreadid_shim.cpp")
+endif()
 
 # --- loomora_refgen: writes the `basic` reference project (spec 002, T039). Host only ----------
 # Also built by the MinGW-w64 Windows toolchains (an .exe run on Windows) and by the i686 Linux
@@ -147,7 +151,7 @@ if(NOT LOOMORA_TARGET_WEB AND NOT LOOMORA_TARGET_ANDROID AND NOT CMAKE_SYSTEM_NA
   add_executable(loomora_refgen refgen.cpp)
   target_link_libraries(loomora_refgen PRIVATE loomora)
   loomora_test_fp(loomora_refgen)
-  if(LOOMORA_TARGET_WIN2000)
+  if(LOOMORA_TARGET_WIN2000 OR LOOMORA_TARGET_WINXP64)
     target_sources(loomora_refgen PRIVATE
       "${PROJECT_SOURCE_DIR}/ui/legacy/windows-win32/getthreadid_shim.cpp")
   endif()
