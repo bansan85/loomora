@@ -350,6 +350,8 @@ NOT_A_FALLBACK = OrderedDict([
     ("LOOMORA_XFT_FOUND", "result of the Xft link test; its outcome is the fallback "
                           "xlib-core-font-glyphs (LOOMORA_XLIB_HAVE_XFT)"),
     ("LOOMORA_XLIB_REQUIRED", "build option: a missing X11 is an error instead of a skipped target"),
+    ("LOOMORA_HAVE_PROJECT_EXPORT", "build switch of the UI round-trip probe: compiled when the backend has "
+                                    "the export (core/src/c_api_project_export.cpp); no platform takes another path"),
 ])
 
 

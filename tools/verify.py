@@ -6,7 +6,11 @@ Usage:
                          [--build-dir DIR] [--jobs N] [--wsl-distro NAME]
 
 quick (default)  builds what exists for this host, then runs ctest, tools/run_vectors.py for
-                 the UIs built here, tools/check_cli_validate.py (the host command `loomora validate` on the
+                 the UIs built here, tools/run_vectors.py --validate-project and --roundtrip-project on
+                 the same UIs (the line of each project mode against `loomora validate --quiet`, on the
+                 loomora_refgen references, the valid-* files of the corpus, one invalid file and a
+                 missing path; the round trip only when the backend has its export, see step_ui_project),
+                 tools/check_cli_validate.py (the host command `loomora validate` on the
                  references and the corpus), tools/check_std.py, tools/check_ui_logic.py (self-test, then the search of
                  ui/ for a greeting built outside the backend), tools/validate_records.py and the self-tests
                  of tools/diff_verdicts.py and tools/run_vectors.py.
@@ -31,7 +35,7 @@ them into the repository; asking the owner first is required before any image go
 docs/implementation (see CLAUDE.md).
 
 --only NAME,...  limit the checks; a NAME is a kind (build, ctest, vectors, std, ui-logic, records, diff,
-                 screenshots, sanitizer, variants, wsl, corpus, validator, format, format-files, readonly, cli) or a UI (legacy, modern) or a variant id
+                 screenshots, sanitizer, variants, wsl, corpus, validator, format, format-files, readonly, cli, ui-project) or a UI (legacy, modern) or a variant id
                  (gtk-floor, gtk4, i686, xlib-corefont); the checks matching any NAME run.
 --variants       also build / run the non-default variants (Linux: GTK 3.10 floor, GTK 4, i686
                  Xlib, Xlib core-font run), in quick or full. Only on request or when the files
@@ -70,7 +74,7 @@ import common
 ROOT = common.ROOT
 IS_WINDOWS = sys.platform == "win32"
 UIS = ("legacy", "modern")
-KINDS = ("build", "ctest", "vectors", "std", "ui-logic", "records", "diff", "screenshots", "sanitizer", "variants", "wsl", "cli", "corpus", "validator")
+KINDS = ("build", "ctest", "vectors", "std", "ui-logic", "records", "diff", "screenshots", "sanitizer", "variants", "wsl", "cli", "corpus", "validator", "ui-project")
 UI_EXE = {"legacy": "loomora-xlib", "modern": "loomora-gtk3"}  # product names of the Linux UIs
 # Texts of the graphical scenarios: mixed Unicode, and a long text that is cut at 1,000 characters.
 SCENARIOS = (
@@ -558,6 +562,56 @@ def step_cli_validate(ctx):
                  else "check_cli_validate status %d" % rc, log)
 # ---- END cli-validate ----------------------------------------------------------------------------
 
+# ---- BEGIN ui-project (T098: the project modes of the UIs against `loomora validate`) -------------------
+def step_ui_project(ctx):
+    """tools/run_vectors.py --validate-project / --roundtrip-project on every UI the default build made
+    (contracts/ui-validate-project.md). The files: the loomora_refgen references and the valid-* files of
+    the corpus (validate and round trip), one invalid file (the FAIL line, status 1), a missing path
+    (status 2); the usage rows of run_vectors come with each run. The round trip needs the export of the
+    backend: without core/src/c_api_project_export.cpp the UIs are built without it and only the validate
+    mode is run (said in the detail line). One log per UI under the build directory. No display is used."""
+    bdir = ctx.build_dir / "default"
+    refgen = find_exe(bdir, "loomora_refgen.exe" if IS_WINDOWS else "loomora_refgen")
+    cli = find_exe(bdir, "loomora-cli.exe" if IS_WINDOWS else "loomora")
+    if refgen is None or cli is None:
+        return ctx.skip("ui project", "loomora_refgen or the host command `loomora validate` is not built here")
+    work = ctx.build_dir / "ui-project"
+    shutil.rmtree(str(work), ignore_errors=True)
+    refs, corpus = work / "refs", work / "corpus"
+    refs.mkdir(parents=True)
+    log = ctx.log("ui-project-files")
+    rc, _ = run_logged(log, [refgen, refs])
+    if rc == 0:
+        rc, _ = run_logged(log, [sys.executable, ROOT / "tools" / "gen_invalid_corpus.py", corpus, "--skip-truncate"])
+    if rc != 0:
+        return ctx.fail("ui project", "cannot make the reference files (status %d)" % rc, log)
+    valid = sorted(refs.glob("*.loomora")) + sorted(corpus.glob("valid-*.loomora"))
+    invalid = corpus / "invalid-entry.sha256.loomora"
+    missing = work / "missing.loomora"
+    have_export = (ROOT / "core" / "src" / "c_api_project_export.cpp").is_file()
+    for ui in sorted(ctx.exes):
+        ctx.step_start = time.time()
+        name = "ui project %s %s" % ("windows" if IS_WINDOWS else "linux", ui)
+        cmd = [sys.executable, ROOT / "tools" / "run_vectors.py", host_platform_id(), ui, "--exe", ctx.exes[ui],
+               "--cli", cli, "--jobs", ctx.jobs]
+        for f in valid + [invalid, missing]:
+            cmd += ["--validate-project", f]
+        if have_export:
+            for f in valid + [invalid, missing]:
+                cmd += ["--roundtrip-project", f]
+        plog = ctx.log(name)
+        rc, _ = run_logged(plog, cmd)
+        m = re.search(r"summary: (\d+) project run\(s\), (\d+) passed, (\d+) failed", log_text(plog))
+        if rc == 0 and m:
+            ctx.ok(name, "%s/%s; validate on %d valid + 1 invalid + 1 missing file%s" % (
+                m.group(2), m.group(1), len(valid),
+                ", round trip too" if have_export else "; round trip skipped: the backend has no export yet"))
+        elif m:
+            ctx.fail(name, "%s of %s" % (m.group(3), m.group(1)), plog)
+        else:
+            ctx.fail(name, "did not run (status %d)" % rc, plog)
+# ---- END ui-project ------------------------------------------------------------------------------------
+
 # ---- format checks (spec 002): reference files and read-only use mode -----------------------------
 def step_format_files(ctx):
     """T039: loomora_refgen writes basic, empty and escape40; the independent Python reader accepts them."""
@@ -602,6 +656,9 @@ def make_plan(ctx):
     # BEGIN cli-validate
     S.append(("cli validate", {"cli"}, "tools/check_cli_validate.py on the host command (valid references, corpus, options)", step_cli_validate, True))
     # END cli-validate
+    # BEGIN ui-project
+    S.append(("ui project", {"ui-project", "legacy", "modern"}, "tools/run_vectors.py --validate-project / --roundtrip-project on the UIs of this host (references, valid corpus files, one invalid, one missing)", step_ui_project, True))
+    # END ui-project
     S.append(("corpus+validator", {"corpus", "validator"}, "corpus with truncations into the build dir, then the validator rows of loomora_tests", step_corpus_validator, True))  # T075
     S.append(("std", {"std"}, "tools/check_std.py (strict C++11 backend, clean C API)", step_std, False))
     S.append(("ui-logic", {"ui-logic"}, "tools/check_ui_logic.py (no UI builds the greeting; self-test first)", step_ui_logic, False))
