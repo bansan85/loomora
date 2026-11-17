@@ -46,6 +46,8 @@ HEADERS = [HEADER, common.CORE / "include" / "loomora_project.h"]
 # Vendored C library of the format (compiled once per compiler, see compile_zlib) and RapidJSON.
 ZLIB_DIR = common.ROOT / "third_party" / "zlib"
 RAPIDJSON_DIR = common.ROOT / "third_party" / "rapidjson" / "include"
+# The submodule is the whole upstream tree: only the sources built by cmake/loomora_zlib.cmake count.
+ZLIB_SOURCES = ("adler32.c", "crc32.c", "deflate.c", "inflate.c", "inffast.c", "inftrees.c", "trees.c", "zutil.c")
 # Include paths of the backend sources: "loomora.h", "format/...", "internal/..."; vendored
 # directories are SYSTEM so the strict flags never apply to them.
 INCLUDES = ["-I" + str(common.CORE / "include"), "-I" + str(common.CORE / "src"),
@@ -206,13 +208,13 @@ def check_exports(names, expected):
 
 
 def compile_zlib(family, cxx, cc, work, res):
-    """Compiles third_party/zlib/*.c to position-independent objects; returns their paths, or None
+    """Compiles the ZLIB_SOURCES of third_party/zlib to position-independent objects; returns their paths, or None
     (and a FAIL) when one does not compile."""
     objs = []
     zdir = work / "zlib"
     zdir.mkdir(parents=True, exist_ok=True)
     driver = [cc] if cc else [cxx, "-x", "c"]
-    for src in sorted(ZLIB_DIR.glob("*.c")):
+    for src in [ZLIB_DIR / n for n in ZLIB_SOURCES]:
         obj = zdir / (src.stem + ".o")
         rc, out = sh(driver + ["-w", "-O1", "-fPIC", "-c", "-I", str(ZLIB_DIR), "-o", obj, src])
         if rc != 0:
