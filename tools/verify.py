@@ -6,7 +6,8 @@ Usage:
                          [--build-dir DIR] [--jobs N] [--wsl-distro NAME]
 
 quick (default)  builds what exists for this host, then runs ctest, tools/run_vectors.py for
-                 the UIs built here, tools/check_std.py, tools/check_ui_logic.py (self-test, then the search of
+                 the UIs built here, tools/check_cli_validate.py (the host command `loomora validate` on the
+                 references and the corpus), tools/check_std.py, tools/check_ui_logic.py (self-test, then the search of
                  ui/ for a greeting built outside the backend), tools/validate_records.py and the self-tests
                  of tools/diff_verdicts.py and tools/run_vectors.py.
                  Linux / WSL: core + the Linux UIs the top-level CMake offers, default variant
@@ -30,7 +31,7 @@ them into the repository; asking the owner first is required before any image go
 docs/implementation (see CLAUDE.md).
 
 --only NAME,...  limit the checks; a NAME is a kind (build, ctest, vectors, std, ui-logic, records, diff,
-                 screenshots, sanitizer, variants, wsl) or a UI (legacy, modern) or a variant id
+                 screenshots, sanitizer, variants, wsl, cli) or a UI (legacy, modern) or a variant id
                  (gtk-floor, gtk4, i686, xlib-corefont); the checks matching any NAME run.
 --variants       also build / run the non-default variants (Linux: GTK 3.10 floor, GTK 4, i686
                  Xlib, Xlib core-font run), in quick or full. Only on request or when the files
@@ -69,7 +70,7 @@ import common
 ROOT = common.ROOT
 IS_WINDOWS = sys.platform == "win32"
 UIS = ("legacy", "modern")
-KINDS = ("build", "ctest", "vectors", "std", "ui-logic", "records", "diff", "screenshots", "sanitizer", "variants", "wsl")
+KINDS = ("build", "ctest", "vectors", "std", "ui-logic", "records", "diff", "screenshots", "sanitizer", "variants", "wsl", "cli")
 UI_EXE = {"legacy": "loomora-xlib", "modern": "loomora-gtk3"}  # product names of the Linux UIs
 # Texts of the graphical scenarios: mixed Unicode, and a long text that is cut at 1,000 characters.
 SCENARIOS = (
@@ -512,6 +513,27 @@ def step_corefont(ctx):
     run_vectors(ctx, "legacy", ctx.exes.get("legacy"), "xlib-corefont", {"LOOMORA_XLIB_NO_XFT": "1"})
 
 
+# ---- BEGIN cli-validate (T079: `loomora validate` on the references and the corpus) ---------------
+def step_cli_validate(ctx):
+    """tools/check_cli_validate.py on the host command the default build made (loomora-cli.exe on
+    Windows, where loomora.exe is the Win32 UI; loomora elsewhere); it generates the corpus itself."""
+    name = "cli validate"
+    exe = find_exe(ctx.build_dir / "default", "loomora-cli.exe" if IS_WINDOWS else "loomora")
+    if exe is None:
+        return ctx.skip(name, "the host command `loomora validate` was not built here")
+    log = ctx.log(name)
+    rc, _ = run_logged(log, [sys.executable, ROOT / "tools" / "check_cli_validate.py", "--loomora", exe,
+                             "--jobs", ctx.jobs])
+    m = re.search(r"check_cli_validate: (\d+) corpus file\(s\).*?, (\d+) failed; (\d+) option row\(s\), (\d+) failed",
+                  log_text(log))
+    if rc == 0 and m:
+        ctx.ok(name, "%s corpus files, %s option rows" % (m.group(1), m.group(3)))
+    else:
+        ctx.fail(name, ("%d corpus file(s) and %d option row(s) failed" % (int(m.group(2)), int(m.group(4)))) if m
+                 else "check_cli_validate status %d" % rc, log)
+# ---- END cli-validate ----------------------------------------------------------------------------
+
+
 # ---- plan and main -----------------------------------------------------------------------------
 
 def make_plan(ctx):
@@ -525,6 +547,9 @@ def make_plan(ctx):
     else:
         for ui in UIS:
             S.append(("run_vectors linux " + ui, {"vectors", ui}, "tools/run_vectors.py on the Linux %s UI" % ui, (lambda u: lambda c: step_vectors(c, u))(ui), True))
+    # BEGIN cli-validate
+    S.append(("cli validate", {"cli"}, "tools/check_cli_validate.py on the host command (valid references, corpus, options)", step_cli_validate, True))
+    # END cli-validate
     S.append(("std", {"std"}, "tools/check_std.py (strict C++11 backend, clean C API)", step_std, False))
     S.append(("ui-logic", {"ui-logic"}, "tools/check_ui_logic.py (no UI builds the greeting; self-test first)", step_ui_logic, False))
     S.append(("records", {"records"}, "tools/validate_records.py (fetches the docs submodule when missing)", step_records, False))
