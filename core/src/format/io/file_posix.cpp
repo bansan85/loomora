@@ -23,12 +23,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <ctime>
 #include <memory>
 #include <string>
 
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -123,15 +123,21 @@ class PosixSource : public Source {
     std::uint64_t size_;
 };
 
-// A name suffix that differs between processes, calls and runs: time, process id, a counter and
-// the address of a local, mixed; uniqueness is guaranteed by O_EXCL, not by this value.
-std::string random_suffix() {
-    static std::uint32_t counter = 0;
+// A name suffix that differs between processes, threads, calls and runs: time in microseconds, process
+// id, the address of a local (it differs per thread) and the attempt number, mixed; uniqueness is
+// guaranteed by O_EXCL, not by this value. It keeps no state shared between threads: two editors
+// saving at the same time from two threads are independent handles (c-api-project.md, Thread safety).
+std::string random_suffix(int attempt) {
     int local = 0;
-    std::uint64_t x = static_cast<std::uint64_t>(std::time(nullptr)) * 6364136223846793005ull;
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 0;
+    (void)::gettimeofday(&tv, nullptr);
+    std::uint64_t x = (static_cast<std::uint64_t>(tv.tv_sec) * 1000000u + static_cast<std::uint64_t>(tv.tv_usec)) *
+                      6364136223846793005ull;
     x ^= static_cast<std::uint64_t>(::getpid()) << 20;
     x ^= static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(&local));
-    x += static_cast<std::uint64_t>(++counter) * 1442695040888963407ull;
+    x += static_cast<std::uint64_t>(attempt + 1) * 1442695040888963407ull;
     x ^= x >> 29;
     x *= 0xBF58476D1CE4E5B9ull;
     x ^= x >> 32;
@@ -318,7 +324,7 @@ std::unique_ptr<Sink> create_file_sink(const std::string &utf8_target_path) {
         throw FormatError(LOOMORA_ERR_IO, "empty target path");
     // O_EXCL: never open a temporary file another process (or a stale run) already made.
     for (int attempt = 0; attempt < 100; ++attempt) {
-        const std::string temp = utf8_target_path + ".tmp-" + random_suffix();
+        const std::string temp = utf8_target_path + ".tmp-" + random_suffix(attempt);
         const int fd = ::open(temp.c_str(), O_RDWR | O_CREAT | O_EXCL | kCloexec, 0666);
         if (fd < 0) {
             if (errno == EEXIST || errno == EINTR)
