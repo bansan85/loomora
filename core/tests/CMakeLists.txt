@@ -158,3 +158,14 @@ if(TARGET loomora_tests)
   target_compile_definitions(loomora_tests PRIVATE FMT_CORPUS_DIR="${FMT_CORPUS_DIR}")
 endif()
 # --- end of reader corpus ---------------------------------------------------------------------
+# --- loomora_bench_format: the SC-005 measurement of the reader (spec 002, T074). Host only, never built by default ---
+if(NOT LOOMORA_TARGET_WIN2000 AND NOT LOOMORA_TARGET_WEB AND NOT CMAKE_CROSSCOMPILING)
+  add_executable(loomora_bench_format EXCLUDE_FROM_ALL bench_format.cpp)
+  target_link_libraries(loomora_bench_format PRIVATE loomora)
+  if(WIN32)
+    target_link_libraries(loomora_bench_format PRIVATE psapi)
+  endif()
+  set_target_properties(loomora_bench_format PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON
+                                                        CXX_EXTENSIONS OFF)
+endif()
+# --- end of loomora_bench_format --------------------------------------------------------------------
