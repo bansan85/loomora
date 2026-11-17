@@ -140,6 +140,12 @@ if(LOOMORA_TARGET_WIN2000 OR LOOMORA_TARGET_WINXP64)
   target_sources(loomora_spike_fmt_deps PRIVATE
     "${PROJECT_SOURCE_DIR}/ui/legacy/windows-win32/getthreadid_shim.cpp")
 endif()
+if(LOOMORA_TARGET_WEB)
+  # The spike does not link libloomora: only its main() is exported (the toolchain's list would
+  # name functions that are not there).
+  target_link_options(loomora_spike_fmt_deps PRIVATE
+    "-sEXPORTED_FUNCTIONS=@${PROJECT_SOURCE_DIR}/bridge/wasm/exports-main.txt")
+endif()
 
 # --- loomora_refgen: writes the `basic` reference project (spec 002, T039). Host only ----------
 # Also built by the MinGW-w64 Windows toolchains (an .exe run on Windows) and by the i686 Linux
