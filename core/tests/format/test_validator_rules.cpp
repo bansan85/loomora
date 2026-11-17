@@ -19,6 +19,8 @@
 #include "../basic_project.hpp"
 #include "format/limits.hpp"
 #include "format/project_reader.hpp"
+#include "format/validate/geometry.hpp"
+#include <cmath>
 
 #ifndef FMT_CORPUS_DIR
 #define FMT_CORPUS_DIR ""
@@ -475,4 +477,92 @@ TEST_CASE("500,000 nails on a grid are validated in linear time with a warning f
     REQUIRE(f.size() == 1);
     REQUIRE(f[0].code == "warn.count");
     REQUIRE(f[0].message.find("501264") != std::string::npos);
+}
+
+TEST_CASE("the closest-pair search agrees with the brute-force search", "[format][validator][geometry]") {
+    using namespace loomora::format;
+    std::uint64_t state = 12345;
+    struct R {
+        static double next(std::uint64_t &st) {
+            st = st * 6364136223846793005ULL + 1442695040888963407ULL;
+            return static_cast<double>(st >> 11) / 9007199254740992.0;
+        }
+    };
+    const double diameters[5] = {0.5, 1, 2, 8, 30};
+    int found = 0, none = 0;
+    for (int trial = 0; trial < 120; ++trial) {
+        const bool is3d = (trial % 3) == 0;
+        const std::size_t n = 2 + static_cast<std::size_t>(R::next(state) * 300);
+        const double extent = 60 + 400 * R::next(state);
+        model::NailTable t(is3d);
+        for (std::size_t i = 0; i < n; ++i) {
+            model::Nail nail;
+            nail.id = static_cast<std::uint32_t>(i);
+            nail.x = extent * R::next(state);
+            nail.y = extent * R::next(state);
+            nail.z = is3d ? extent * R::next(state) : 0;
+            nail.diameter = diameters[static_cast<std::size_t>(R::next(state) * 5)];
+            t.add(nail);
+        }
+        bool brute = false;
+        for (std::size_t i = 0; i < n && !brute; ++i)
+            for (std::size_t j = i + 1; j < n; ++j) {
+                const double dx = t.x[i] - t.x[j], dy = t.y[i] - t.y[j], dz = is3d ? t.z[i] - t.z[j] : 0;
+                const double reach = (t.diameter[i] + t.diameter[j]) / 2 - 1e-6;
+                if (dx * dx + dy * dy + dz * dz < reach * reach) {
+                    brute = true;
+                    break;
+                }
+            }
+        std::size_t a = 0, b = 0;
+        double d = 0;
+        const bool fast = find_close_nails(t, 1e-6, a, b, d);
+        INFO("trial " << trial << " n " << n);
+        REQUIRE(fast == brute);
+        if (fast) {
+            REQUIRE(a < b);
+            const double reach = (t.diameter[a] + t.diameter[b]) / 2;
+            REQUIRE(d < reach);
+            ++found;
+        } else {
+            ++none;
+        }
+    }
+    REQUIRE(found > 10);
+    REQUIRE(none > 3);
+}
+
+TEST_CASE("the polygon tester is exact on a square and fast on a very large outline", "[format][validator][geometry]") {
+    using namespace loomora::format;
+    std::vector<model::Point> sq;
+    sq.push_back(model::Point(-10, -10));
+    sq.push_back(model::Point(10, -10));
+    sq.push_back(model::Point(10, 10));
+    sq.push_back(model::Point(-10, 10));
+    Polygon square(sq);
+    REQUIRE(square.contains(0, 0));
+    REQUIRE(square.contains(9.99, -9.99));
+    REQUIRE_FALSE(square.contains(10.5, 0));
+    REQUIRE_FALSE(square.contains(0, -10.5));
+    REQUIRE(square.near_boundary(10.005, 0, 0.01));
+    REQUIRE_FALSE(square.near_boundary(10.02, 0, 0.01));
+    REQUIRE(square.near_boundary(0, -9.995, 0.01));
+    // 200,000 points on a circle: a million tests stay fast thanks to the buckets.
+    std::vector<model::Point> circle;
+    for (int i = 0; i < 200000; ++i) {
+        const double a = 6.283185307179586 * i / 200000;
+        circle.push_back(model::Point(1000 * std::cos(a), 1000 * std::sin(a)));
+    }
+    Polygon big(circle);
+    int inside = 0, near = 0;
+    for (int i = 0; i < 200000; ++i) {
+        const double x = -1100 + 2200.0 * (i % 500) / 500, y = -1100 + 2200.0 * (i / 500) / 400;
+        if (big.contains(x, y))
+            ++inside;
+        if (big.near_boundary(x, y, 0.01))
+            ++near;
+    }
+    REQUIRE(inside > 100000);
+    REQUIRE(inside < 200000);
+    REQUIRE(near < 2000);
 }

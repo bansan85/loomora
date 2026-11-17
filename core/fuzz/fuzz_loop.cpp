@@ -16,7 +16,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -375,5 +377,15 @@ int main(int argc, char **argv) {
     const double total = std::chrono::duration<double>(Clock::now() - start).count();
     std::printf("done: %llu inputs in %.1f s = %.0f inputs/s, slowest %.3f s, no crash\n",
                 static_cast<unsigned long long>(executed), total, executed / std::max(total, 0.001), slowest);
+    const fuzz::Stats &st = fuzz::stats();
+    std::printf("opened %lu, rejected %lu; most frequent first errors:", st.opened, st.rejected);
+    std::vector<std::pair<unsigned long, std::string> > top;
+    for (std::map<std::string, unsigned long>::const_iterator it = st.first_error.begin(); it != st.first_error.end(); ++it)
+        top.push_back(std::make_pair(it->second, it->first));
+    std::sort(top.rbegin(), top.rend());
+    for (std::size_t i = 0; i < top.size() && i < 12; ++i)
+        std::printf(" %s=%lu", top[i].second.c_str(), top[i].first);
+    std::printf("\n");
     return 0;
 }
+

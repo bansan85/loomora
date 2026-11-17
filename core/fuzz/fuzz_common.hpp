@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -83,6 +84,17 @@ inline void read_everything(const loomora_project *p) {
     }
 }
 
+// What the inputs did so far (printed by the mutation loop: how deep the mutated files get).
+struct Stats {
+    unsigned long opened, rejected;
+    std::map<std::string, unsigned long> first_error; // by code of the first error of a rejected file
+    Stats() : opened(0), rejected(0) {}
+};
+inline Stats &stats() {
+    static Stats s;
+    return s;
+}
+
 inline void read_report(const loomora_report *r) {
     if (r == nullptr)
         return;
@@ -108,6 +120,23 @@ inline void exercise(const std::uint8_t *data, std::size_t size) {
     loomora_report *r = nullptr;
     const int32_t rc = loomora_project_open_memory(data, size, nullptr, nullptr, &p, &r);
     read_report(r);
+    if (rc == 0) {
+        ++stats().opened;
+    } else {
+        ++stats().rejected;
+        std::string code = "(no report)";
+        for (int64_t i = 0; r != nullptr && i < loomora_report_count(r); ++i) {
+            int32_t sev, kind;
+            std::uint32_t id;
+            if (loomora_report_issue(r, static_cast<std::size_t>(i), &sev, &kind, &id) == 0 && sev == 2) {
+                char buf[64];
+                const int64_t n = loomora_report_text(r, static_cast<std::size_t>(i), 1, reinterpret_cast<std::uint8_t *>(buf), sizeof buf - 1);
+                code.assign(buf, n > 0 && n < 63 ? static_cast<std::size_t>(n) : 0);
+                break;
+            }
+        }
+        ++stats().first_error[code];
+    }
     if (rc == 0 && p != nullptr)
         read_everything(p);
     loomora_project_close(p);
