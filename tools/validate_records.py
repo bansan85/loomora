@@ -85,7 +85,7 @@ WEB_PATHS = ("wasm", "js")
 SPIKE_STATUSES = ("open", "confirmed", "refuted")
 # S4 (manylinux2010 build, glibc 2.12) was removed on 2026-11-14: Linux binaries are built on the
 # machine that runs them (docs/implementation/adr/0007).
-SPIKE_IDS = tuple("S%d" % i for i in range(1, 12) if i != 4)
+SPIKE_IDS = tuple("S%d" % i for i in range(1, 12) if i != 4) + ("S-F1", "S-F2", "S-F3")  # S-F*: spec 002 (file format)
 HYPOTHESIS_IDS = tuple("V%d" % i for i in range(1, 21))
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")  # same pattern as probe-result.schema.json
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
