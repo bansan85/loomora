@@ -35,7 +35,9 @@ bool parse_body(const std::string &text, Body &out);
 bool is_outline_type(const std::string &type);
 
 struct Point {
-    double x = 0, y = 0;
+    double x, y;
+    Point() : x(0), y(0) {}
+    Point(double x_, double y_) : x(x_), y(y_) {}
 };
 
 // An outline or an exclusion. JSON key order: type, params, polyline.
