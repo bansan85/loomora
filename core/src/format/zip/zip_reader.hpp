@@ -49,7 +49,7 @@ namespace format {
 // The first entry of every .loomora file.
 extern const char kMimetypeName[];     // "mimetype"
 extern const char kMimetypeContent[];  // "application/vnd.loomora+zip"
-extern const std::size_t kMimetypeSize; // 28
+extern const std::size_t kMimetypeSize; // 27
 
 // Checks an entry name against the rules of the contract (UTF-8, at most limits().entry_name_max_bytes
 // bytes, relative, '/' separator, no empty, "." or ".." component, no leading '/', no '\', no ':'

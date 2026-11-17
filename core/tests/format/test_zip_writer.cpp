@@ -164,7 +164,7 @@ TEST_CASE("mimetype is the first entry, stored, at offset 0, with no extra field
     CHECK(get16(a, 26) == 8);                      // name length
     CHECK(get16(a, 28) == 0);                      // no extra field
     CHECK(std::string(a.begin() + 30, a.begin() + 38) == "mimetype");
-    CHECK(std::string(a.begin() + 38, a.begin() + 66) == "application/vnd.loomora+zip");
+    CHECK(std::string(a.begin() + 38, a.begin() + 65) == "application/vnd.loomora+zip");
 }
 
 TEST_CASE("every header field has its fixed value", "[zipw]") {
@@ -433,7 +433,7 @@ TEST_CASE("the same project written twice gives the same bytes (golden SHA-256)"
     CHECK(first == second);
     // The hash covers the zlib stream of the vendored zlib 1.3.1 and every fixed header value; a
     // change of either is a visible change of this constant.
-    CHECK(sha256_hex(first) == "0000000000000000000000000000000000000000000000000000000000000000");
+    CHECK(sha256_hex(first) == "fdc354001b3ee7101e5ac39f5336ec5df2b46d94944900da5c95995984547bed");
 }
 
 TEST_CASE("copy-through writes the compressed bytes as they are", "[zipw][raw]") {
