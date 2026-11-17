@@ -7,7 +7,8 @@ Usage:
 
 Counts non-empty, non-comment source lines of three kinds of code:
 
-  backend  core/           the C++11 backend and its C API (core/src, core/include)
+  backend  core/           the C++11 backend and its C API (core/src, core/include), including the
+                           project file format module (core/src/format/**, core/src/c_api_project*.cpp)
   glue     bridge/<name>   JNI (android) and Emscripten (web) glue; 0 for the platforms that link the
                            C API directly (Windows, Linux, macOS, iOS)
   ui       ui/<variant>/<platform>/   the native UI of one platform and variant (window, lifecycle,
@@ -278,6 +279,14 @@ def selftest():
         text, below = render_text(r, 0.8, False)
         expect("rows below 80% (2 records + 2 UIs)", len(below), 4)
         expect("text table has the percentage", "50.0%" in text, True)
+        put("core/src/format/zip/z.cpp", "int z1;\nint z2;\n")                                  # format module: shared backend, 2
+        put("core/src/c_api_project.cpp", "int p1;\n")                                          # project C API: shared backend, 1
+        put("third_party/zlib/inflate.c", "int zlib1;\n")                                       # third party: not counted
+        r = measure(base)
+        expect("format module counts as backend, third_party does not",
+               sorted(f for f in r["backend"]["files"] if "format" in f or "project" in f or "zlib" in f),
+               ["src/c_api_project.cpp", "src/format/zip/z.cpp"])
+        expect("backend lines with the format module", r["backend"]["lines"], 8)
     finally:
         shutil.rmtree(str(base), ignore_errors=True)
     print("selftest: %d failed" % len(failures))
