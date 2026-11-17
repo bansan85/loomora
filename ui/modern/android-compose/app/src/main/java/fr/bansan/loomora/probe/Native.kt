@@ -58,4 +58,47 @@ object Native {
         disabledFeatures: String,
         timestampUtc: String,
     ): String?
+
+    // ---- The project API (contracts/c-api-project.md), only what the project probe modes of spec 002
+    // need. A project or a report is a handle (a Long the UI never interprets); 0 means none. Every
+    // handle is released with projectClose / reportFree.
+
+    /** loomora_project_open_path: { code, project handle, report handle }, or null if the glue failed. */
+    @JvmStatic
+    external fun projectOpen(path: String): LongArray?
+
+    /** loomora_validate_memory: { code, 0, report handle }, or null if the glue failed. */
+    @JvmStatic
+    external fun validateMemory(data: ByteArray): LongArray?
+
+    @JvmStatic
+    external fun reportCount(report: Long): Long
+
+    @JvmStatic
+    external fun reportErrorCount(report: Long): Long
+
+    @JvmStatic
+    external fun reportFree(report: Long)
+
+    @JvmStatic
+    external fun projectClose(project: Long)
+
+    /** loomora_project_is_light: 1 for a light project, 0 for a full one. */
+    @JvmStatic
+    external fun projectIsLight(project: Long): Int
+
+    /**
+     * loomora_project_export_stream of every result into a byte array. Null on failure, with the
+     * error code in rc[0] (0 on success). profile: 1 full, 2 light (LOOMORA_PROFILE_*).
+     */
+    @JvmStatic
+    external fun projectExport(project: Long, profile: Int, modifiedAt: String, rc: IntArray): ByteArray?
+
+    /** The JSON of an item (kind: LOOMORA_KIND_*), or null. */
+    @JvmStatic
+    external fun projectItemJson(project: Long, kind: Int, id: Int): ByteArray?
+
+    /** The whole content of an entry, or null. */
+    @JvmStatic
+    external fun projectReadEntry(project: Long, entry: String): ByteArray?
 }
