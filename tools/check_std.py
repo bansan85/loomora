@@ -4,12 +4,13 @@
 Usage: python tools/check_std.py [--build-dir DIR] [--keep] [-v]
 
 For every GCC and Clang found on the host (g++, clang++, clang++-NN), it:
-  1. compiles every core/src/*.cpp with -std=c++11 -pedantic-errors -Wall -Wextra -Werror;
-  2. compiles core/include/loomora.h as C89 (-std=c89 -pedantic-errors) and as C++98;
+  1. compiles every core/src/**/*.cpp (the format code included) with -std=c++11 -pedantic-errors -Wall -Wextra -Werror;
+  2. compiles core/include/loomora.h (and loomora_project.h, which it includes) as C89 (-std=c89 -pedantic-errors) and as C++98;
   3. builds a shared library with -fvisibility=hidden plus the export list of core/loomora.map
      (core/loomora.exp on macOS; hidden visibility alone does not hide the std templates) and
-     fails if `nm -D --defined-only` shows any exported symbol that is not one of the loomora_*
-     C functions of the header, or if one of them is missing (ELF and Mach-O hosts; also
+     fails if `nm -D --defined-only` shows any exported symbol that is not a loomora_* C function,
+     any exported loomora_* function that no header declares with LOOMORA_API, or if one declared
+     is missing (the vendored zlib is compiled and linked in, as in the real library) (ELF and Mach-O hosts; also
      checked with the C++ runtime linked statically, as on the platforms where it is needed);
   4. builds and runs core/tests/boundary_check.cpp, which makes every allocation fail in turn
      and checks that no exception escapes any loomora_* function;
@@ -37,8 +38,18 @@ from pathlib import Path
 
 import common
 
-SOURCES = sorted(glob.glob(str(common.CORE / "src" / "*.cpp")))
+# Every backend source, at any depth: src/*.cpp, src/format/**.cpp (the .loomora format).
+SOURCES = sorted(str(p) for p in (common.CORE / "src").rglob("*.cpp"))
 HEADER = common.CORE / "include" / "loomora.h"
+# loomora.h includes loomora_project.h: the public C API is the functions of both.
+HEADERS = [HEADER, common.CORE / "include" / "loomora_project.h"]
+# Vendored C library of the format (compiled once per compiler, see compile_zlib) and RapidJSON.
+ZLIB_DIR = common.ROOT / "third_party" / "zlib"
+RAPIDJSON_DIR = common.ROOT / "third_party" / "rapidjson" / "include"
+# Include paths of the backend sources: "loomora.h", "format/...", "internal/..."; vendored
+# directories are SYSTEM so the strict flags never apply to them.
+INCLUDES = ["-I" + str(common.CORE / "include"), "-I" + str(common.CORE / "src"),
+            "-isystem", str(RAPIDJSON_DIR), "-isystem", str(ZLIB_DIR)]
 BOUNDARY = common.CORE / "tests" / "boundary_check.cpp"
 STRICT = ["-std=c++11", "-pedantic-errors", "-Wall", "-Wextra", "-Werror"]
 EXE = ".exe" if os.name == "nt" else ""
@@ -123,7 +134,7 @@ def check_ui_uses_c_api_only(res):
     internal = set()
     for folder in (common.CORE / "src", common.CORE / "src" / "internal"):
         if folder.is_dir():
-            internal.update(p.name for p in folder.iterdir() if p.suffix in UI_SOURCE_SUFFIXES)
+            internal.update(p.name for p in folder.rglob("*") if p.suffix in UI_SOURCE_SUFFIXES)
     checked, bad = [], []
     for path in sorted(UI_DIR.rglob("*")):
         if path.suffix not in UI_SOURCE_SUFFIXES or not path.is_file():
@@ -145,9 +156,11 @@ def check_ui_uses_c_api_only(res):
 
 
 def exported_functions():
-    """The loomora_* functions declared with LOOMORA_API in the public header."""
-    text = HEADER.read_text(encoding="utf-8")
-    names = re.findall(r"LOOMORA_API\s+[^;()]*?\b(loomora_[a-z0-9_]+)\s*\(", text)
+    """The loomora_* functions declared with LOOMORA_API in the public headers."""
+    names = []
+    for header in HEADERS:
+        text = header.read_text(encoding="utf-8")
+        names += re.findall(r"LOOMORA_API\s+[^;()]*?\b(loomora_[a-z0-9_]+)\s*\(", text)
     if not names:
         sys.exit("check_std: no LOOMORA_API declaration found in loomora.h")
     return sorted(set(names))
@@ -181,11 +194,32 @@ def check_exports(names, expected):
         if n in LINKER_SYMBOLS:
             continue
         if n not in expected:
-            problems.append("exported but not a loomora_* C function: %s" % n)
+            if n.startswith("loomora_"):
+                problems.append("exported loomora_* function that no header declares with "
+                                "LOOMORA_API: %s" % n)
+            else:
+                problems.append("exported but not a loomora_* C function: %s" % n)
     for n in expected:
         if n not in names:
-            problems.append("declared in loomora.h but not exported: %s" % n)
+            problems.append("declared in loomora.h / loomora_project.h but not exported: %s" % n)
     return problems
+
+
+def compile_zlib(family, cxx, cc, work, res):
+    """Compiles third_party/zlib/*.c to position-independent objects; returns their paths, or None
+    (and a FAIL) when one does not compile."""
+    objs = []
+    zdir = work / "zlib"
+    zdir.mkdir(parents=True, exist_ok=True)
+    driver = [cc] if cc else [cxx, "-x", "c"]
+    for src in sorted(ZLIB_DIR.glob("*.c")):
+        obj = zdir / (src.stem + ".o")
+        rc, out = sh(driver + ["-w", "-O1", "-fPIC", "-c", "-I", str(ZLIB_DIR), "-o", obj, src])
+        if rc != 0:
+            res.fail(family, "vendored zlib: %s does not compile" % src.name, out)
+            return None
+        objs.append(str(obj))
+    return objs
 
 
 def check_compiler(family, cxx, cc, work, res, verbose):
@@ -207,7 +241,7 @@ def check_compiler(family, cxx, cc, work, res, verbose):
     else:
         bad = 0
         for src in SOURCES:
-            rc, out = sh([cxx] + STRICT + ["-fsyntax-only", src])
+            rc, out = sh([cxx] + STRICT + INCLUDES + ["-fsyntax-only", src])
             if rc != 0:
                 bad += 1
                 res.fail(tag, "%s: %s does not compile with %s" % (family, Path(src).name, " ".join(STRICT)), out)
@@ -224,7 +258,10 @@ def check_compiler(family, cxx, cc, work, res, verbose):
                     "         loomora_is_eol(LOOMORA_FAMILY_LINUX, 5, 4) +\n"
                     "         (loomora_eol_warning() == 0) + (loomora_build_compiler() == 0) +\n"
                     "         (int)loomora_probe_record(\"p\", LOOMORA_UI_LEGACY, LOOMORA_CORE_NATIVE,\n"
-                    "                                   \"a\", \"b\", 1, 1, -1, 0, \"\", \"t\", b, 16);\n"
+                    "                                   \"a\", \"b\", 1, 1, -1, 0, \"\", \"t\", b, 16) +\n"
+                    "         (int)loomora_format_version(0, 0) +\n"
+                    "         (int)loomora_format_limit(LOOMORA_LIMIT_BOMB_RATIO) +\n"
+                    "         loomora_uuid4_from_random(b, (char *)b);\n"
                     "}\n")
     tu_cpp = work / "header_cpp98.cpp"
     tu_cpp.write_text(tu_c.read_text().replace("(void)", "()"))
@@ -248,6 +285,12 @@ def check_compiler(family, cxx, cc, work, res, verbose):
     if not strict:
         return
 
+    # The vendored zlib (a C library, no warning flags) is compiled once and linked below, as the
+    # real library links loomora_zlib.
+    zlib_objects = compile_zlib(family, cxx, cc, work, res)
+    if zlib_objects is None:
+        return
+
     # --- 3. shared library: only loomora_* exported -----------------------------------------
     nm = shutil.which("nm") or shutil.which("llvm-nm")
     if os.name == "nt" or not nm:
@@ -269,7 +312,8 @@ def check_compiler(family, cxx, cc, work, res, verbose):
         for label, extra, name in variants:
             lib = work / name
             cmd = ([cxx] + STRICT + ["-fPIC", "-fvisibility=hidden", "-fvisibility-inlines-hidden",
-                                       "-DLOOMORA_BUILD_SHARED_LIB", "-shared", "-o", lib] + extra + SOURCES)
+                                       "-DLOOMORA_BUILD_SHARED_LIB", "-shared", "-o", lib] + INCLUDES + extra
+                   + SOURCES + zlib_objects)
             rc, out = sh(cmd)
             if rc != 0:
                 if extra and ("cannot find" in out or "relocation" in out):
@@ -294,7 +338,7 @@ def check_compiler(family, cxx, cc, work, res, verbose):
 
     # --- 4. no exception escapes the C boundary ---------------------------------------------
     exe = work / ("boundary_check" + EXE)
-    rc, out = sh([cxx] + STRICT + ["-o", exe, BOUNDARY] + SOURCES)
+    rc, out = sh([cxx] + STRICT + INCLUDES + ["-o", exe, BOUNDARY] + SOURCES + zlib_objects)
     if rc != 0:
         res.fail(tag, "boundary_check does not build", out)
     else:
