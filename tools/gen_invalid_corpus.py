@@ -77,7 +77,7 @@ class Case(object):
         d["contract_code"] = bool(self.code) and self.code in CONTRACT_CODES
         d["entry"] = self.entry
         d["also"] = list(self.also)
-        d["exit"] = [1] if self.severity == "error" else [0]
+        d["exit"] = ([1, 2] if self.code == "zip.not_zip" else [1]) if self.severity == "error" else [0]
         if self.limits:
             d["set_limit"] = ["%s=%d" % kv for kv in sorted(self.limits.items())]
         d["note"] = self.note
@@ -723,7 +723,7 @@ def _():
     return _with_items(listed=[("x-demo/A.txt", b"one")], extra=[pf.ZipItem("x-demo/A.txt", b"two", 0)])
 
 
-@case("hostile", "zip.symlink", "symlink", entry="x-demo/link", note="Unix mode 0120777 (symbolic link)")
+@case("hostile", "zip.symlink", "link", entry="x-demo/link", note="Unix mode 0120777 (symbolic link)")
 def _():
     return _with_items(extra=[pf.ZipItem("x-demo/link", b"/etc/passwd", 0, ext_attr=0xA1FF0000)])
 
