@@ -11,7 +11,7 @@ Add to the single C++11 backend (`core/`) a **format module** that writes, reads
 Approach ([research.md](research.md)):
 
 - **Streaming.** The reader validates every entry while streaming it (no entry is held whole in memory) and serves items on demand, by range for the bulk data (nails, steps, mesh). A 32-bit machine can therefore use a project far larger than its memory, and "no limit on elements" costs only time and a warning.
-- **Own container code, vendored codec.** A strict ZIP reader and a deterministic ZIP writer (stored and deflate, ZIP64 when needed) written for the project; **zlib** (vendored) only for deflate and inflate. **RapidJSON** (vendored, header-only) for JSON, whose own number conversion makes the text identical on every platform. SHA-256 is written for the project.
+- **Own container code, pinned codec.** A strict ZIP reader and a deterministic ZIP writer (stored and deflate, ZIP64 when needed) written for the project; **zlib** (vendored) only for deflate and inflate. **RapidJSON** (vendored, header-only) for JSON, whose own number conversion makes the text identical on every platform. SHA-256 is written for the project.
 - **Deterministic bytes.** Fixed entry order, fixed ZIP header values, no clock, fixed deflate parameters from the pinned zlib: the same project writes the same bytes on every architecture. Each target's self-test recomputes the SHA-256 of a reference project and compares it to an embedded value, so cross-architecture identity is checked on every platform without moving files.
 - **Edit mode** stages changes and saves by writing a new archive next to the old one and replacing it atomically; entries of untouched items are copied unchanged (same checksums, SC-013). Changing a frame, layout, image or spool removes the results that depend on it. **Use mode** opens read-only and never writes.
 - **Boundary.** A second C header, `loomora_project.h`, included by `loomora.h`, with opaque handles, caller-supplied buffers, range reads and a validation report ([contracts/c-api-project.md](contracts/c-api-project.md)). Every UI gets it through the existing glue; each UI only gains a probe-style `--validate-project` mode (no logic).
@@ -20,7 +20,7 @@ Approach ([research.md](research.md)):
 
 **Language/Version**: backend **C++11**, `CXX_STANDARD 11` as a target property, checked by `tools/check_std.py` (GCC and Clang `-std=c++11 -pedantic-errors -Werror`); vendored C (zlib) compiled as C89/C99 by the same toolchains; no language standard above C++11 (FR-031). Exceptions are used inside the module and never cross the C API.
 
-**Primary Dependencies**: zlib 1.3.x (vendored subset: `adler32 crc32 deflate inflate inffast inftrees trees zutil`, zlib licence), RapidJSON (vendored `include/rapidjson`, MIT), Catch2 v2.13.10 (tests only, existing submodule), Python 3.8+ standard library for host tools (ADR 0015), `jsonschema` only for the schema check of the independent checker (already allowed).
+**Primary Dependencies**: zlib 1.3.x (git submodule, v1.3.1, built subset: `adler32 crc32 deflate inflate inffast inftrees trees zutil`, zlib licence), RapidJSON (vendored `include/rapidjson`, MIT), Catch2 v2.13.10 (tests only, existing submodule), Python 3.8+ standard library for host tools (ADR 0015), `jsonschema` only for the schema check of the independent checker (already allowed).
 
 **Storage**: the project file itself (a ZIP archive); no database. The weaving progress is application data and is outside this feature.
 
@@ -120,8 +120,8 @@ core/
     └── CMakeLists.txt            # extended (option LOOMORA_BUILD_FUZZ)
 cli/loomora/main.cpp              # `loomora validate <file>` (host only)
 third_party/
-├── zlib/                         # vendored subset + LICENSE + VENDORED.md (version, hash)
-└── rapidjson/                    # vendored headers + LICENSE + VENDORED.md
+├── zlib/                         # submodule (madler/zlib, tag v1.3.1); built by cmake/loomora_zlib.cmake
+└── rapidjson/                    # submodule (Tencent/rapidjson, pinned commit 297637bc); headers only
 bridge/jni, bridge/wasm           # export lists and glue for the new functions
 ui/*/                             # one `--validate-project <path>` probe mode per UI
 tools/
@@ -157,4 +157,4 @@ Each phase ends with `python tools/verify.py quick` green on its branch.
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
 | Opaque handles in the C API (extends ADR 0001 rule 3, "memory only in caller-supplied buffers") | Opening a project is stateful: a project of any size cannot be copied through a buffer, and range reads need the open archive. | A stateless API that re-opens and re-validates the archive on every call would hash the whole file for each read. Handles never expose memory; all data still crosses in caller buffers (ADR 0023). |
-| Two vendored third-party libraries (zlib, RapidJSON) | Deflate and inflate (FR-003) and a JSON parser and writer whose number text is platform-independent (FR-004). | Writing inflate and deflate and a correct double-to-text routine ourselves would be more code and more risk than the two small, proven libraries; the system zlib differs by platform and would break byte identity (ADR 0022). |
+| Two third-party libraries as pinned git submodules (zlib, RapidJSON) | Deflate and inflate (FR-003) and a JSON parser and writer whose number text is platform-independent (FR-004). | Writing inflate and deflate and a correct double-to-text routine ourselves would be more code and more risk than the two small, proven libraries; the system zlib differs by platform and would break byte identity (ADR 0022). |
