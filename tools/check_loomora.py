@@ -1519,14 +1519,35 @@ def check_file(path, **kw):
 
 
 # ---- expected content (tools/gen_reference.py) -------------------------------------------------
+def restrict_expected(want, one):
+    """The expected content of the light subset `one` (key "one" of the JSON): the items it names, taken from
+    the full description, with its own counts, features and unused layouts."""
+    sub = dict(want)
+    for key, ids in (("frames", one["frames"]), ("layouts", one["layouts"]), ("images", one["images"]),
+                     ("spools", one["spools"]), ("results", [one["result"]])):
+        sub[key] = [x for x in want[key] if x["id"] in ids]
+    for key in ("counts", "required_features", "combinations_without_result"):
+        sub[key] = one[key]
+    return sub
+
+
+EXPECT_NAMES = ("multi.loomora", "multi-light.loomora", "one.loomora")
+
+
 def check_expected(path, expected_path, out=print):
     """Re-derives the counts and the references of a .loomora file with the independent reader and compares
     them with the expected-content JSON of tools/gen_reference.py (core/tests/format/multi.expected.json).
-    Returns the number of differences (an invalid file counts as one)."""
+    `multi.loomora` is compared with the whole description, `multi-light.loomora` too and it must be a light
+    file (profile, no source or target image, no settings, no UVs), `one.loomora` with the subset of the
+    key "one" (also light). Returns the number of differences (an invalid file counts as one)."""
     with open(expected_path, "rb") as f:
         want = json.loads(f.read().decode("utf-8"))
     with open(path, "rb") as f:
         data = f.read()
+    name = os.path.basename(path)
+    light = name in want.get("light_files", [])
+    if name == want["one"]["file"]:
+        want = restrict_expected(want, want["one"])
     chk = Checker(data, os.path.basename(path), dict(DEFAULT_LIMITS), False, SCHEMA_DIR, "auto")
     rep = chk.run()
     diffs = []
@@ -1536,6 +1557,16 @@ def check_expected(path, expected_path, out=print):
         def cmp(what, got, exp):
             if got != exp:
                 diffs.append("%s: file has %r, expected %r" % (what, got, exp))
+        cmp("profile", (chk.man.get("profile"), chk.man.get("editable")), ("light", False) if light else ("full", True))
+        if light:
+            import zipfile
+            import io
+            names = zipfile.ZipFile(io.BytesIO(data)).namelist()
+            heavy = [n for n in names if "/source." in n or "/target." in n or "/mesh-source." in n
+                     or n.endswith("/settings.json")]
+            cmp("light file: entries a light project never holds", heavy, [])
+            cmp("light file: frames with UVs in the manifest",
+                [i for i, d in chk.frames.items() if d.get("mesh", {}).get("has_uvs")], [])
         cmp("title", chk.man.get("title"), want["title"])
         cmp("counts", chk.man.get("counts"), want["counts"])
         cmp("required_features", chk.man.get("required_features"), want["required_features"])
@@ -1686,7 +1717,7 @@ def main(argv=None):
     ap.add_argument("--compare", nargs=2, metavar=("DIR_A", "DIR_B"), help="byte-identical .loomora files of two directories")
     ap.add_argument("--compare-mesh", nargs=2, metavar=("FULL", "LIGHT"), help="mesh.bin of a full file and of its light copy")
     ap.add_argument("--expect", metavar="EXPECTED_JSON", help="also compare the file(s) with the expected-content JSON "
-                    "of tools/gen_reference.py (the file named multi.loomora only)")
+                    "of tools/gen_reference.py (the files named multi.loomora, multi-light.loomora and one.loomora)")
     ap.add_argument("--selftest", action="store_true", help="built-in references and corpus (fast)")
     try:
         args = ap.parse_args(argv)
@@ -1733,7 +1764,7 @@ def main(argv=None):
             status = 2
             continue
         rep.name = path
-        if args.expect and os.path.basename(path) == "multi.loomora":
+        if args.expect and os.path.basename(path) in EXPECT_NAMES:
             if check_expected(path, args.expect):
                 status = max(status, 1)
         if args.json:

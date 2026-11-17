@@ -5,7 +5,9 @@ Writes core/tests/format/multi.expected.json from the SPECIFICATION of `multi` (
 cube, 5 layouts, 4 images, 6 spools, 5 results: core/tests/multi_project.hpp is its C++ builder), with
 no Loomora code and no C++ involved: the nails (a circle, a heart, rings, a ring on the top face of the
 cube) and the steps (the formulas of the builder, restated here) are computed again with the Python
-standard library. The Catch2 test core/tests/format/test_multi_project.cpp compares what the library
+standard library. The light references of T084 are described here too: `multi-light` (the light export
+of `multi`: the same items) and `one` (the light export of ONE result, the Cube result: the items it
+uses, listed under the key "one"). The Catch2 test core/tests/format/test_multi_project.cpp compares what the library
 reads from `multi` to this file, and `tools/check_loomora.py --expect` compares what the independent
 checker reads to it.
 
@@ -124,6 +126,13 @@ def build():
             "first_steps": [list(x) for x in st[:12]], "last_steps": [list(x) for x in st[-12:]],
         })
     used = set((r["frame"], r["layout"]) for r in results)
+    cube = [r for r in results if r["name"] == "Cube"][0]
+    one = {  # the light subset of ONE result: the result and what it uses (the file holds exactly these)
+        "file": "one.loomora", "result": cube["id"], "frames": [cube["frame"]], "layouts": [cube["layout"]],
+        "images": sorted(cube["images"]), "spools": sorted(s for s, _ in cube["spools"]),
+        "counts": {"frames": 1, "layouts": 1, "images": len(cube["images"]), "spools": len(cube["spools"]), "results": 1},
+        "required_features": ["surface_mesh", "multi_view_target"], "combinations_without_result": [],
+    }
     return {
         "about": "Expected content of the `multi` reference project; written by tools/gen_reference.py",
         "title": "Several items",
@@ -131,6 +140,8 @@ def build():
         "required_features": ["surface_mesh", "multi_view_target"],
         "spools": spools, "frames": frames, "layouts": layouts, "images": images, "results": results,
         "combinations_without_result": [[l["frame"], l["id"]] for l in layouts if (l["frame"], l["id"]) not in used],
+        "light_files": ["multi-light.loomora", "one.loomora"],
+        "one": one,
     }
 
 
