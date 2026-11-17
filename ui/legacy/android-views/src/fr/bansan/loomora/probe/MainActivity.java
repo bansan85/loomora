@@ -9,6 +9,7 @@ import android.text.Editable;
 import android.text.InputFilter;
 import android.text.Spanned;
 import android.text.TextWatcher;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewTreeObserver;
@@ -31,6 +32,7 @@ public class MainActivity extends Activity {
     private final Handler handler = new Handler();
     private long launchMs;
     private boolean probe;
+    private int projectMode = ProjectProbe.NONE;
     private boolean displayed;
     private int displayMs;
     private boolean emitted;
@@ -64,7 +66,9 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         launchMs = SystemClock.elapsedRealtime();
         super.onCreate(savedInstanceState);
-        probe = Probe.enabled(getIntent());
+        // A project mode (spec 002) is exclusive with the probe: with both, nothing is written.
+        projectMode = ProjectProbe.mode(getIntent());
+        probe = Probe.enabled(getIntent()) && projectMode == ProjectProbe.NONE;
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -137,6 +141,40 @@ public class MainActivity extends Activity {
                     });
             handler.postDelayed(emitAndFinish, GIVE_UP_MS);
         }
+        if (projectMode != ProjectProbe.NONE) {
+            runProjectMode();
+        }
+    }
+
+    /**
+     * Project probe mode (intent extra validate_project or roundtrip_project): the work is done by
+     * ProjectProbe on a worker thread, which logs the one line (tag LOOMORA_VALIDATE); the activity
+     * then finishes by itself. A usage error (two modes, or a mode next to "probe") logs nothing.
+     */
+    private void runProjectMode() {
+        final int mode = projectMode;
+        final String path = ProjectProbe.path(getIntent(), mode);
+        new Thread(new Runnable() {
+            public void run() {
+                try {
+                    if (mode != ProjectProbe.BAD_USAGE && path != null) {
+                        if (Native.LOADED) {
+                            ProjectProbe.runAndLog(mode, path);
+                        } else {
+                            Log.e(ProjectProbe.TAG + "_ERROR", "the backend could not be loaded: "
+                                    + Native.LOAD_ERROR);
+                        }
+                    }
+                } catch (Throwable t) {
+                    Log.e(ProjectProbe.TAG + "_ERROR", "project mode failed: " + t);
+                }
+                handler.post(new Runnable() {
+                    public void run() {
+                        finish();
+                    }
+                });
+            }
+        }).start();
     }
 
     private void updateGreeting() {

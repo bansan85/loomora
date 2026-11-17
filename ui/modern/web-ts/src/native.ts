@@ -24,7 +24,9 @@ type CFunction = (...args: Array<number | bigint>) => number;
 
 /** The part of the Emscripten module object that this file uses (bridge/wasm/runtime-methods.txt). */
 interface EmscriptenModule {
+  /** The result of a function that returns an int64 is a BigInt in the WebAssembly build. */
   ccall(name: string, returnType: "number", argTypes: string[], args: Array<number | bigint>): number;
+  ccall(name: string, returnType: null, argTypes: string[], args: Array<number | bigint>): void;
   cwrap(name: string, returnType: "number", argTypes: string[]): CFunction;
   stackSave(): number;
   stackAlloc(size: number): number;
@@ -51,6 +53,32 @@ export interface Native {
   eolWarning(): string;
   /** The ProbeResult JSON line; `rssKb` < 0 means not measured; throws if the backend refuses. */
   probe(args: ProbeArgs): string;
+  /** What the project probe modes need of the backend (spec 002). */
+  readonly project: ProjectApi;
+}
+
+/**
+ * The project API of the backend (contracts/c-api-project.md) for the project probe modes of spec 002,
+ * only what they need. A project or a report is a pointer (a number the page never interprets); 0
+ * means none. The file lives in a buffer of the module (loomora_web_alloc, bridge/wasm/module.cpp)
+ * until the project is closed.
+ */
+export interface ProjectApi {
+  /** Copies `bytes` into a new buffer of the module; 0 when memory is short. */
+  alloc(bytes: Uint8Array): number;
+  release(pointer: number): void;
+  /** loomora_project_open_memory on a buffer made by alloc. */
+  open(pointer: number, length: number): { rc: number; project: number; report: number };
+  /** loomora_validate_memory. */
+  validate(pointer: number, length: number): { rc: number; report: number };
+  /** loomora_project_is_light: 1 for a light project, 0 for a full one. */
+  isLight(project: number): number;
+  /** loomora_project_export_stream of every result into a buffer of the module (release it with release). */
+  exportCopy(project: number, profile: number, modifiedAt: string): { rc: number; data: number; size: number };
+  reportCount(report: number): number;
+  reportErrorCount(report: number): number;
+  reportFree(report: number): void;
+  close(project: number): void;
 }
 
 export interface ProbeArgs {
@@ -143,7 +171,95 @@ function bind(M: EmscriptenModule): Native {
     return pointer;
   }
 
+  /** `count` bytes of the stack of the module set to 0 (the out-pointers of a call); returns the address. */
+  function slots(count: number): number {
+    const pointer = M.stackAlloc(count);
+    M.HEAPU8.fill(0, pointer, pointer + count);
+    return pointer;
+  }
+
+  /** A 32-bit little-endian value of the module's memory (a pointer or a size_t, 32 bits in WebAssembly). */
+  function u32(pointer: number): number {
+    return new DataView(M.HEAPU8.buffer).getUint32(pointer, true);
+  }
+
+  const project: ProjectApi = {
+    alloc(bytes) {
+      const pointer = M.ccall("loomora_web_alloc", n, [n], [bytes.length]);
+      if (pointer !== 0) {
+        M.HEAPU8.set(bytes, pointer);
+      }
+      return pointer;
+    },
+
+    release(pointer) {
+      if (pointer !== 0) {
+        M.ccall("loomora_web_free", null, [n], [pointer]);
+      }
+    },
+
+    open(pointer, length) {
+      const sp = M.stackSave();
+      try {
+        const s = slots(8);
+        const rc = M.ccall("loomora_project_open_memory", n, [n, n, n, n, n, n], [pointer, length, 0, 0, s, s + 4]);
+        return { rc, project: u32(s), report: u32(s + 4) };
+      } finally {
+        M.stackRestore(sp);
+      }
+    },
+
+    validate(pointer, length) {
+      const sp = M.stackSave();
+      try {
+        const s = slots(4);
+        const rc = M.ccall("loomora_validate_memory", n, [n, n, n, n, n], [pointer, length, 0, 0, s]);
+        return { rc, report: u32(s) };
+      } finally {
+        M.stackRestore(sp);
+      }
+    },
+
+    isLight(handle) {
+      return M.ccall("loomora_project_is_light", n, [n], [handle]);
+    },
+
+    exportCopy(handle, profile, modifiedAt) {
+      const sp = M.stackSave();
+      try {
+        const s = slots(8);
+        const rc = M.ccall("loomora_web_export", n, [n, n, n, n, n], [handle, profile, cString(modifiedAt), s, s + 4]);
+        return { rc, data: u32(s), size: u32(s + 4) };
+      } finally {
+        M.stackRestore(sp);
+      }
+    },
+
+    /* The counts are int64: a BigInt in the WebAssembly build. */
+    reportCount(report) {
+      return report === 0 ? 0 : Number(M.ccall("loomora_report_count", n, [n], [report]));
+    },
+
+    reportErrorCount(report) {
+      return report === 0 ? 0 : Number(M.ccall("loomora_report_error_count", n, [n], [report]));
+    },
+
+    reportFree(report) {
+      if (report !== 0) {
+        M.ccall("loomora_report_free", null, [n], [report]);
+      }
+    },
+
+    close(handle) {
+      if (handle !== 0) {
+        M.ccall("loomora_project_close", null, [n], [handle]);
+      }
+    },
+  };
+
   return {
+    project,
+
     greet(text) {
       const bytes = encoder.encode(text);
       const sp = M.stackSave();

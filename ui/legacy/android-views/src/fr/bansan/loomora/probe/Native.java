@@ -43,4 +43,37 @@ public final class Native {
     public static native String probeRecord(String platformId, int uiVariant, int coreKind,
             String input, String displayedText, int displayed, int displayMs, long rssKb,
             int eolWarningShown, String disabledFeatures, String timestampUtc);
+
+    // ---- the project API (contracts/c-api-project.md), only what the project probe modes of
+    // spec 002 need. A project or a report is a handle (a long the UI never interprets); 0 means
+    // none. Every handle is released with projectClose / reportFree.
+
+    /** loomora_project_open_path: { code, project handle, report handle }, or null if the glue failed. */
+    public static native long[] projectOpen(String path);
+
+    /** loomora_validate_memory: { code, 0, report handle }, or null if the glue failed. */
+    public static native long[] validateMemory(byte[] data);
+
+    public static native long reportCount(long report);
+
+    public static native long reportErrorCount(long report);
+
+    public static native void reportFree(long report);
+
+    public static native void projectClose(long project);
+
+    /** loomora_project_is_light: 1 for a light project, 0 for a full one. */
+    public static native int projectIsLight(long project);
+
+    /**
+     * loomora_project_export_stream of every result into a byte array. Null on failure, with the
+     * error code in rc[0] (0 on success). profile: 1 full, 2 light (LOOMORA_PROFILE_*).
+     */
+    public static native byte[] projectExport(long project, int profile, String modifiedAt, int[] rc);
+
+    /** The JSON of an item (kind: LOOMORA_KIND_*), or null. */
+    public static native byte[] projectItemJson(long project, int kind, int id);
+
+    /** The whole content of an entry, or null. */
+    public static native byte[] projectReadEntry(long project, String entry);
 }

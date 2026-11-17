@@ -58,5 +58,9 @@
  "_loomora_report_text",
  "_loomora_report_free",
  "_loomora_project_export_path",
- "_loomora_project_export_stream"
+ "_loomora_project_export_stream",
+
+ "_loomora_web_alloc",
+ "_loomora_web_free",
+ "_loomora_web_export"
 ]
