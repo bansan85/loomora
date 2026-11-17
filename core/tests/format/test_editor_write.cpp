@@ -329,9 +329,16 @@ TEST_CASE("the editor refuses what the data model forbids", "[format][editor]") 
     CHECK(loomora_editor_add_spool(e, "{\"name\":\"x\",\"diameter_mm\":1,\"color\":\"red\"}", &id) == LOOMORA_ERR_INVALID_ITEM);
     CHECK(loomora_editor_add_spool(nullptr, "{}", &id) == LOOMORA_ERR_INVALID);
     CHECK(loomora_editor_add_spool(e, nullptr, &id) == LOOMORA_ERR_INVALID);
+    // A 3D frame needs a 3D surface and a body (3D frames themselves are added: test_editor_dependents.cpp).
     CHECK(loomora_editor_add_frame(e, "{\"name\":\"3d\",\"kind\":\"3d\",\"dimensions\":{\"width_mm\":1,\"height_mm\":1,\"depth_mm\":1},"
-                                      "\"outline\":{\"type\":\"circle\",\"polyline\":[]},\"surface\":\"mesh\",\"body\":\"solid\"}",
+                                      "\"outline\":{\"type\":\"circle\",\"polyline\":[]},\"surface\":\"plane\",\"body\":\"solid\"}",
                                    &id) == LOOMORA_ERR_INVALID_ITEM);
+    CHECK(loomora_editor_add_frame(e, "{\"name\":\"3d\",\"kind\":\"3d\",\"dimensions\":{\"width_mm\":1,\"height_mm\":1},"
+                                      "\"outline\":{\"type\":\"circle\",\"polyline\":[]},\"surface\":\"mesh\",\"body\":\"solid\"}",
+                                   &id) == LOOMORA_ERR_INVALID_ITEM); // no depth_mm
+    CHECK(loomora_editor_add_frame(e, "{\"name\":\"3d\",\"kind\":\"3d\",\"dimensions\":{\"width_mm\":1,\"height_mm\":1,\"depth_mm\":1},"
+                                      "\"outline\":{\"type\":\"circle\",\"polyline\":[]},\"surface\":\"mesh\"}",
+                                   &id) == LOOMORA_ERR_INVALID_ITEM); // no body
     CHECK(loomora_editor_add_layout(e, 7, "{\"name\":\"l\"}", nullptr, 0, &id) == LOOMORA_ERR_NOT_FOUND);
 
     // A failed add changes nothing: the next spool still gets identifier 1.

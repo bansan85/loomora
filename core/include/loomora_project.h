@@ -227,6 +227,76 @@ LOOMORA_API int32_t loomora_editor_save_stream(loomora_editor *e, const char *mo
 
 /* ---- end of editor: create and save ---- */
 
+/* ---- editor: 3D, edit, dependents ---- */
+
+/* Operations of loomora_editor_dependents. */
+#define LOOMORA_OP_REMOVE 1 /* the removal of the item */
+#define LOOMORA_OP_CHANGE 2 /* a change of a field results depend on (data-model.md, "Which changes count") */
+
+/* Opens a project for edit: the file is opened and validated as loomora_project_open_path does (*report
+   gets the warnings, or the errors on failure), and stays open: items that are not touched are copied
+   into the next save as their compressed bytes, so their SHA-256 does not change. A light project is
+   refused with LOOMORA_ERR_READ_ONLY_PROJECT ("This project is a light copy and cannot be edited"). Entries
+   this version does not define are kept. The handle is freed with loomora_editor_close. */
+LOOMORA_API int32_t loomora_editor_open_path(const char *path, loomora_progress_fn cb, void *user,
+                                             loomora_editor **editor, loomora_report **report);
+
+/* 3D frames are added with loomora_editor_add_frame ("kind":"3d", "dimensions" with "depth_mm", a "body" of
+   solid, shell or guide, a "surface" of mesh, primitive, extrusion, revolution or csg, optionally a "mesh"
+   object with watertight, manifold, source and construction). On a 3D frame the nails of add_layout and
+   replace_layout_nails must have bit 0 of loomora_nail.flags set and carry z, axis, length, side and the face.
+   The first mesh of a frame that has none: info gives the counts and the flags (LOOMORA_MESH_NORMALS /
+   LOOMORA_MESH_UVS), xyz 3 floats per vertex, abc 3 indices per triangle, normals 3 floats per vertex
+   (required with the flag), uvs 2 floats per vertex (required with the flag). Afterwards use
+   loomora_editor_replace_frame_mesh. A frame whose surface is "mesh" must have its mesh before a save. */
+LOOMORA_API int32_t loomora_editor_frame_set_mesh(loomora_editor *e, uint32_t frame, const loomora_mesh_info *info,
+                                                  const float *xyz, const uint32_t *abc,
+                                                  const float *normals_or_null, const float *uvs_or_null);
+/* The copy of the imported mesh file (full only): `name` gives the extension of mesh-source.<ext>; NULL data
+   removes it. The frame must have a mesh. Never has dependents. */
+LOOMORA_API int32_t loomora_editor_frame_set_attached_source(loomora_editor *e, uint32_t frame, const char *name,
+                                                             const uint8_t *data, size_t len);
+
+/* Replace = same identifier, new content. A change of a field results depend on (the "Which changes count"
+   table of the data model) removes the dependent results, in the same call, only when confirm_dependents is
+   non-zero; otherwise LOOMORA_ERR_HAS_DEPENDENTS and nothing changes (loomora_editor_dependents lists them).
+   A change of any other field removes nothing. replace_item refuses with LOOMORA_ERR_INVALID_ITEM a change of
+   the frame of a layout, of the frame, layout, images or spools of a result, or of the kind of a frame
+   (issue code "edit.immutable"); the only change of a result is its name. replace_item of an image changes
+   its JSON part only. */
+LOOMORA_API int32_t loomora_editor_replace_item(loomora_editor *e, int32_t kind, uint32_t id, const char *json,
+                                                int32_t confirm_dependents);
+/* Keeps the labels of the nails whose identifier remains. */
+LOOMORA_API int32_t loomora_editor_replace_layout_nails(loomora_editor *e, uint32_t layout,
+                                                        const loomora_nail *nails, size_t count,
+                                                        int32_t confirm_dependents);
+LOOMORA_API int32_t loomora_editor_replace_frame_mesh(loomora_editor *e, uint32_t frame,
+                                                      const loomora_mesh_info *info, const float *xyz,
+                                                      const uint32_t *abc, const float *normals_or_null,
+                                                      const float *uvs_or_null, int32_t confirm_dependents);
+/* `json` as for add_image; a picture that is NULL (0 bytes) is kept as it is. */
+LOOMORA_API int32_t loomora_editor_replace_image(loomora_editor *e, uint32_t image, const char *json,
+                                                 const uint8_t *source, size_t source_len,
+                                                 const uint8_t *target_png, size_t target_len,
+                                                 const uint8_t *thumb_png, size_t thumb_len,
+                                                 int32_t confirm_dependents);
+/* The thumbnail of an image or of a result (kind LOOMORA_KIND_IMAGE or LOOMORA_KIND_RESULT): never has dependents. */
+LOOMORA_API int32_t loomora_editor_replace_thumbnail(loomora_editor *e, int32_t kind, uint32_t id,
+                                                     const uint8_t *png, size_t len);
+/* Removes an item and what depends on it (a frame: its layouts and their results; a layout, an image or a
+   spool: the results that use it; a result: nothing else). An identifier removed is never reused. */
+LOOMORA_API int32_t loomora_editor_remove_item(loomora_editor *e, int32_t kind, uint32_t id,
+                                               int32_t confirm_dependents);
+/* What `operation` on an item would remove: pairs (kind, id) of layouts, then results, written to
+   pairs[0 .. 2n) only when cap_pairs >= n. Returns n, or a negative error (LOOMORA_ERR_NOT_FOUND for an
+   unknown item, LOOMORA_ERR_INVALID for an unknown operation). */
+LOOMORA_API int64_t loomora_editor_dependents(const loomora_editor *e, int32_t kind, uint32_t id,
+                                              int32_t operation, uint32_t *pairs, size_t cap_pairs);
+/* The display order of a kind: `ids` is a permutation of the identifiers of the kind. */
+LOOMORA_API int32_t loomora_editor_set_order(loomora_editor *e, int32_t kind, const uint32_t *ids, size_t n);
+
+/* ---- end of editor: 3D, edit, dependents ---- */
+
 #ifdef __cplusplus
 }
 #endif
