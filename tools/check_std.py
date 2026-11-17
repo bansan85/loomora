@@ -19,6 +19,11 @@ For every GCC and Clang found on the host (g++, clang++, clang++-NN), it:
      stays C++11 whatever the standard of a UI (C++11 for the Legacy ones, up to C++17 for the
      Modern ones) and no C++ type or exception crosses the boundary.
 
+cli/loomora (the host command `loomora validate`, T077) is not scanned by any step: it is a host
+program built with the host's compiler as C++11 by its own CMake target; it uses the public C API
+and, for its hidden --set-limit option, core/src/format/limits.hpp through the static library, so
+it adds no symbol to the shared library whose exports step 3 lists.
+
 A compiler that is absent is skipped with a message; the tool fails if neither GCC nor Clang
 exists, and also if no strict C++11 check could be run at all. A compiler whose standard
 library cannot be used with -std=c++11 (clang on Windows uses the MSVC STL, which needs
