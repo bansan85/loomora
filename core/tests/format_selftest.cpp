@@ -17,6 +17,7 @@
 
 #include "../include/loomora.h"
 #include "basic_project.hpp"
+#include "multi_project.hpp"
 #include "format/sha256.hpp"
 
 namespace {
@@ -27,6 +28,7 @@ namespace {
 const char kGoldenBasic[] = "fcdf97f0257076ba1c3ecae1867e57ebdc397440286a278f2cbe34eff8ce5f96";
 const char kGoldenEmpty[] = "8ca4dc6a2139539feb87f92b11cc0d5685fdff051fa044b692a7be5d984d7913";
 const char kGoldenEscape[] = "b17920aabf9cc165a5c3b9290ba15f22e99903592426a8e55c96dc67ae570e2a";
+const char kGoldenMulti[] = "8bcd3ae91876dcf6048c3a5dc689754a8eab90367faed373942b819a7c3f8607";
 
 typedef std::vector<std::uint8_t> Bytes;
 
@@ -240,6 +242,59 @@ void test_escape() {
     }
 }
 
+// The `multi` reference project (3 frames incl. a 3D cube, 5 layouts, 4 images, 6 spools, 5 results):
+// the archive hash, the read-back counts, the identifiers and the first nails and steps of each result.
+void test_multi() {
+    loomora_editor *e = 0;
+    multi_project::Ids ids;
+    check(multi_project::build_multi(&e, &ids) == 0, "multi: build through the C API");
+    if (e == 0)
+        return;
+    Bytes bytes, again;
+    check(save(e, bytes), "multi: save, clean report");
+    check(save(e, again) && again == bytes, "multi: saving twice gives the same bytes");
+    loomora_editor_close(e);
+    const std::string hex = digest(bytes);
+    check(hex == kGoldenMulti, "multi: SHA-256 of the archive equals the golden value");
+    if (hex != kGoldenMulti) {
+        std::fputs("  multi sha256 = ", stdout);
+        std::fputs(hex.c_str(), stdout);
+        std::fputs("\n", stdout);
+    }
+    loomora_project *p = 0;
+    check(open_clean(bytes, &p), "multi: reads back, no issue");
+    if (p == 0)
+        return;
+    check(loomora_project_count(p, LOOMORA_KIND_FRAME) == 3 && loomora_project_count(p, LOOMORA_KIND_LAYOUT) == 5 &&
+              loomora_project_count(p, LOOMORA_KIND_IMAGE) == 4 && loomora_project_count(p, LOOMORA_KIND_SPOOL) == 6 &&
+              loomora_project_count(p, LOOMORA_KIND_RESULT) == 5,
+          "multi: item counts");
+    check(loomora_layout_nail_count(p, ids.layout_a1) == multi_project::kMultiNailsCircle &&
+              loomora_layout_nail_count(p, ids.layout_a2) == multi_project::kMultiNailsHeart &&
+              loomora_layout_nail_count(p, ids.layout_b) == multi_project::kMultiNailsRing &&
+              loomora_layout_nail_count(p, ids.layout_b_unused) == multi_project::kMultiNailsSmall &&
+              loomora_layout_nail_count(p, ids.layout_3d) == multi_project::kMultiNails3D,
+          "multi: nails per layout");
+    check(loomora_result_step_count(p, ids.result_a2) == multi_project::kMultiStepsHeart &&
+              loomora_result_step_count(p, ids.result_a1) == multi_project::kMultiStepsCircle &&
+              loomora_result_step_count(p, ids.result_b) == multi_project::kMultiStepsRing &&
+              loomora_result_step_count(p, ids.result_3d) == multi_project::kMultiSteps3D &&
+              loomora_result_step_count(p, ids.result_shared) == multi_project::kMultiStepsShared,
+          "multi: steps per result");
+    // The heart: nail 0 is the notch (0, 5 * 380 / 32), the tip is half way round.
+    loomora_nail heart[2];
+    check(loomora_layout_read_nails(p, ids.layout_a2, 0, 1, heart) == 1 &&
+              loomora_layout_read_nails(p, ids.layout_a2, multi_project::kMultiNailsHeart / 2, 1, heart + 1) == 1 &&
+              heart[0].x == 0.0 && heart[0].y == basic_project::round3(5.0 * 380.0 / 32.0) && heart[1].x == 0.0 &&
+              heart[1].y == basic_project::round3(-17.0 * 380.0 / 32.0),
+          "multi: the heart notch and tip");
+    loomora_mesh_info info = loomora_mesh_info();
+    check(loomora_frame_mesh_info(p, ids.frame_3d, &info) == 0 && info.vertices == 8 && info.triangles == 12 &&
+              info.flags == (LOOMORA_MESH_NORMALS | LOOMORA_MESH_UVS),
+          "multi: the cube mesh");
+    loomora_project_close(p);
+}
+
 } // namespace
 
 int main() {
@@ -256,6 +311,7 @@ int main() {
     test_basic();
     test_empty();
     test_escape();
+    test_multi();
     std::fputs(g_failures == 0 ? "format selftest: ok\n" : "format selftest: FAILED\n", stdout);
     return g_failures == 0 ? 0 : 1;
 }

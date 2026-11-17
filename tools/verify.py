@@ -614,7 +614,7 @@ def step_ui_project(ctx):
 
 # ---- format checks (spec 002): reference files and read-only use mode -----------------------------
 def step_format_files(ctx):
-    """T039: loomora_refgen writes basic, empty and escape40; the independent Python reader accepts them."""
+    """T039/T054: loomora_refgen writes basic, empty, escape40 and multi; the independent Python reader accepts them."""
     bdir = ctx.build_dir / "default"
     refgen = find_exe(bdir, "loomora_refgen.exe" if IS_WINDOWS else "loomora_refgen")
     if refgen is None:
@@ -626,8 +626,12 @@ def step_format_files(ctx):
     rc, _ = run_logged(log, [refgen, out])
     if rc != 0:
         return ctx.fail("format-files", "loomora_refgen status %d" % rc, log)
-    rc, _ = run_logged(log, [sys.executable, ROOT / "tools" / "check_loomora.py", "--canonical", out])
-    ctx.ok("format-files", "basic, empty, escape40 pass check_loomora --canonical") if rc == 0 else ctx.fail("format-files", "check_loomora status %d" % rc, log)
+    expected = ROOT / "core" / "tests" / "format" / "multi.expected.json"
+    rc, _ = run_logged(log, [sys.executable, ROOT / "tools" / "gen_reference.py", "--check"])
+    if rc != 0:
+        return ctx.fail("format-files", "multi.expected.json is not what tools/gen_reference.py writes", log)
+    rc, _ = run_logged(log, [sys.executable, ROOT / "tools" / "check_loomora.py", "--canonical", "--expect", expected, out])
+    ctx.ok("format-files", "basic, empty, escape40, multi pass check_loomora --canonical, multi matches its expected JSON") if rc == 0 else ctx.fail("format-files", "check_loomora status %d" % rc, log)
 
 
 def step_readonly(ctx):

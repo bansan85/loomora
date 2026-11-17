@@ -10,6 +10,7 @@ cross-checks the C++ implementation with an unrelated reader.
 Usage:
   python tools/check_loomora.py [--json] [--quiet] [--canonical] [--set-limit NAME=VALUE]
                                 FILE_OR_DIR [FILE_OR_DIR ...]
+  python tools/check_loomora.py --expect EXPECTED.json DIR  also compare multi.loomora with tools/gen_reference.py's JSON
   python tools/check_loomora.py --compare DIR_A DIR_B     byte-identical .loomora files, names matched
   python tools/check_loomora.py --compare-mesh FULL LIGHT  mesh.bin of a full file and of its light copy
   python tools/check_loomora.py --selftest                 built-in references and corpus, fast
@@ -1517,6 +1518,62 @@ def check_file(path, **kw):
     return check_bytes(data, os.path.basename(path), **kw)
 
 
+# ---- expected content (tools/gen_reference.py) -------------------------------------------------
+def check_expected(path, expected_path, out=print):
+    """Re-derives the counts and the references of a .loomora file with the independent reader and compares
+    them with the expected-content JSON of tools/gen_reference.py (core/tests/format/multi.expected.json).
+    Returns the number of differences (an invalid file counts as one)."""
+    with open(expected_path, "rb") as f:
+        want = json.loads(f.read().decode("utf-8"))
+    with open(path, "rb") as f:
+        data = f.read()
+    chk = Checker(data, os.path.basename(path), dict(DEFAULT_LIMITS), False, SCHEMA_DIR, "auto")
+    rep = chk.run()
+    diffs = []
+    if rep.errors:
+        diffs.append("the file is not valid: %s" % rep.errors[0].line())
+    else:
+        def cmp(what, got, exp):
+            if got != exp:
+                diffs.append("%s: file has %r, expected %r" % (what, got, exp))
+        cmp("title", chk.man.get("title"), want["title"])
+        cmp("counts", chk.man.get("counts"), want["counts"])
+        cmp("required_features", chk.man.get("required_features"), want["required_features"])
+        for kind, table, key in (("frame", chk.frames, "frames"), ("layout", chk.layouts, "layouts"),
+                                 ("image", chk.images, "images"), ("result", chk.results, "results")):
+            cmp("%s ids" % kind, sorted(table), [x["id"] for x in want[key]])
+        cmp("spool ids", sorted(chk.spools), [x["id"] for x in want["spools"]])
+        for x in want["frames"]:
+            d = chk.frames.get(x["id"], {})
+            cmp("frame %d name/kind" % x["id"], (d.get("name"), d.get("kind")), (x["name"], x["kind"]))
+            if "mesh" in x:
+                m = d.get("mesh", {})
+                cmp("frame %d mesh counts" % x["id"], (m.get("vertices"), m.get("triangles")),
+                    (x["mesh"]["vertices"], x["mesh"]["triangles"]))
+        for x in want["layouts"]:
+            d = chk.layouts.get(x["id"], {})
+            cmp("layout %d name/frame/nail_count" % x["id"], (d.get("name"), d.get("frame"), d.get("nail_count")),
+                (x["name"], x["frame"], len(x["nails"])))
+        for x in want["images"]:
+            d = chk.images.get(x["id"], {})
+            cmp("image %d" % x["id"], (d.get("name"), d.get("color_mode"), d.get("shape")),
+                (x["name"], x["color_mode"], x["shape"]))
+        for x in want["results"]:
+            d = chk.results.get(x["id"], {})
+            cmp("result %d name/frame/layout/steps" % x["id"], (d.get("name"), d.get("frame"), d.get("layout"), d.get("steps")),
+                (x["name"], x["frame"], x["layout"], x["steps"]))
+            cmp("result %d images" % x["id"], [i.get("image") for i in d.get("images", [])], x["images"])
+            cmp("result %d views" % x["id"], any("view" in i for i in d.get("images", [])), x["views"])
+            cmp("result %d spools" % x["id"], [[s["spool"], s["length_mm"]] for s in d.get("spools", [])], x["spools"])
+        used = set((d.get("frame"), d.get("layout")) for d in chk.results.values())
+        free = sorted([d.get("frame"), i] for i, d in chk.layouts.items() if (d.get("frame"), i) not in used)
+        cmp("layouts without result", free, sorted(want["combinations_without_result"]))
+    for line in diffs:
+        out("expected: %s" % line)
+    out("%s: %s" % (path, "matches %s" % os.path.basename(expected_path) if not diffs else "%d difference(s)" % len(diffs)))
+    return len(diffs)
+
+
 # ---- comparisons -----------------------------------------------------------------------------
 def compare_dirs(a, b, out=print):
     """Byte-identical .loomora files of two directories, names matched. Returns the number of differences."""
@@ -1628,6 +1685,8 @@ def main(argv=None):
     ap.add_argument("--schemas", default=SCHEMA_DIR, help="directory of the JSON schemas")
     ap.add_argument("--compare", nargs=2, metavar=("DIR_A", "DIR_B"), help="byte-identical .loomora files of two directories")
     ap.add_argument("--compare-mesh", nargs=2, metavar=("FULL", "LIGHT"), help="mesh.bin of a full file and of its light copy")
+    ap.add_argument("--expect", metavar="EXPECTED_JSON", help="also compare the file(s) with the expected-content JSON "
+                    "of tools/gen_reference.py (the file named multi.loomora only)")
     ap.add_argument("--selftest", action="store_true", help="built-in references and corpus (fast)")
     try:
         args = ap.parse_args(argv)
@@ -1674,6 +1733,9 @@ def main(argv=None):
             status = 2
             continue
         rep.name = path
+        if args.expect and os.path.basename(path) == "multi.loomora":
+            if check_expected(path, args.expect):
+                status = max(status, 1)
         if args.json:
             print(json.dumps(rep.as_json(), ensure_ascii=False, separators=(",", ":")))
         else:
