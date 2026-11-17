@@ -20,6 +20,17 @@ add_custom_command(
   VERBATIM)
 add_custom_target(loomora_vectors DEPENDS "${LOOMORA_VECTORS_INC}")
 
+# Per-target floating-point switch (docs/implementation/adr/0004): a toolchain whose doubles are not
+# the SSE2/IEEE ones (32-bit x86 with the x87 unit) sets LOOMORA_TEST_FP_FLAGS. The reference fixtures
+# (basic_project.hpp, multi_project.hpp: cos/sin, round3, 0.1 + 0.2 of the tests) are computed with
+# doubles and must give the bytes of the other targets (FR-004); only the test programs take the flags,
+# libloomora itself is not changed. Empty on every other toolchain.
+function(loomora_test_fp target)
+  if(LOOMORA_TEST_FP_FLAGS)
+    target_compile_options(${target} PRIVATE ${LOOMORA_TEST_FP_FLAGS})
+  endif()
+endfunction()
+
 # --- loomora_selftest: part of the default build and of ctest -------------------------------
 add_executable(loomora_selftest selftest.cpp "${LOOMORA_VECTORS_INC}")
 add_dependencies(loomora_selftest loomora_vectors)
@@ -65,6 +76,7 @@ if(LOOMORA_TARGET_WEB)
   target_link_options(loomora_format_selftest PRIVATE
     "-sEXPORTED_FUNCTIONS=@${PROJECT_SOURCE_DIR}/bridge/wasm/exports-selftest.txt")
 endif()
+loomora_test_fp(loomora_format_selftest)
 add_test(NAME format_selftest COMMAND loomora_format_selftest)
 
 # --- loomora_tests: Catch2 --------------------------------------------------------------
@@ -109,6 +121,7 @@ elseif(EXISTS "${LOOMORA_CATCH2_DIR}/catch2/catch.hpp")
                                               loomora_header_cpp98)
   set_target_properties(loomora_tests PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON
                                                  CXX_EXTENSIONS OFF)
+  loomora_test_fp(loomora_tests)
   add_test(NAME loomora_tests COMMAND loomora_tests)
 else()
   message(STATUS "Catch2 submodule not checked out (git submodule update --init): "
@@ -125,9 +138,19 @@ set_target_properties(loomora_spike_fmt_deps PROPERTIES CXX_STANDARD 11 CXX_STAN
                                                          CXX_EXTENSIONS OFF)
 
 # --- loomora_refgen: writes the `basic` reference project (spec 002, T039). Host only ----------
-if(NOT LOOMORA_TARGET_WIN2000 AND NOT LOOMORA_TARGET_WEB AND NOT CMAKE_CROSSCOMPILING)
+# Also built by the MinGW-w64 Windows toolchains (an .exe run on Windows) and by the i686 Linux
+# toolchain (run natively on the 64-bit host) for the cross-architecture identity of the files (T059);
+# not by the Web, Android or iOS cross builds, which cannot run it.
+if(NOT LOOMORA_TARGET_WEB AND NOT LOOMORA_TARGET_ANDROID AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS"
+   AND (NOT CMAKE_CROSSCOMPILING OR CMAKE_SYSTEM_NAME STREQUAL "Windows"
+        OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
   add_executable(loomora_refgen refgen.cpp)
   target_link_libraries(loomora_refgen PRIVATE loomora)
+  loomora_test_fp(loomora_refgen)
+  if(LOOMORA_TARGET_WIN2000)
+    target_sources(loomora_refgen PRIVATE
+      "${PROJECT_SOURCE_DIR}/ui/legacy/windows-win32/getthreadid_shim.cpp")
+  endif()
   set_target_properties(loomora_refgen PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON
                                                   CXX_EXTENSIONS OFF)
 endif()
