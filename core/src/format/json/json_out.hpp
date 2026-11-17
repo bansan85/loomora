@@ -26,6 +26,8 @@ namespace loomora {
 namespace format {
 namespace json {
 
+// format_double into `buf` (at least 40 bytes, not NUL-terminated); returns the length.
+std::size_t format_double_to(double value, char *buf);
 // The text of a double as the writer writes it (no NaN or Infinity: throws like number()).
 std::string format_double(double value);
 

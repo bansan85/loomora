@@ -78,6 +78,28 @@ class MemoryByteReader : public ByteReader {
     std::size_t pos_;
 };
 
+// A ByteReader that gives one `prefix` character, then the bytes of `inner` (to parse a fragment
+// of a document as if it were inside an array: prefix '[').
+class PrefixByteReader : public ByteReader {
+  public:
+    PrefixByteReader(char prefix, ByteReader &inner) : prefix_(prefix), sent_(false), inner_(inner) {}
+    std::size_t read(char *buf, std::size_t cap) override {
+        if (cap == 0)
+            return 0;
+        if (!sent_) {
+            sent_ = true;
+            buf[0] = prefix_;
+            return 1;
+        }
+        return inner_.read(buf, cap);
+    }
+
+  private:
+    char prefix_;
+    bool sent_;
+    ByteReader &inner_;
+};
+
 // A ByteReader over [offset, offset + length) of a random-access Source.
 class SourceByteReader : public ByteReader {
   public:
@@ -168,15 +190,17 @@ class DepthGuard {
 [[noreturn]] void throw_parse_error(const rapidjson::ParseResult &result, const char *text,
                                     std::size_t len, const std::string &entry);
 
-// Parses the stream `in` into `handler` (RapidJSON SAX handler: Null, Bool, Int, Uint, Int64,
-// Uint64, Double, String, StartObject, Key, EndObject, StartArray, EndArray; RawNumber is never
-// called). Returns true when the whole document was parsed. When the handler returns false the
-// parse stops and parse_sax returns false (a deliberate early end, e.g. a range read); the
-// handler must then report its own error if it was not deliberate. Throws FormatError for a
-// syntax error, a depth overflow, a NUL byte or a document larger than the entry limit.
+// Parses `stream` into `handler` (RapidJSON SAX handler: Null, Bool, Int, Uint, Int64, Uint64,
+// Double, String, StartObject, Key, EndObject, StartArray, EndArray; RawNumber is never called).
+// Returns true when the whole document was parsed. When the handler returns false the parse stops
+// and the function returns false (a deliberate early end, e.g. a range read); the handler must
+// then report its own error if it was not deliberate. Throws FormatError for a syntax error, a
+// depth overflow, a NUL byte or a document larger than the entry limit. The caller owns the
+// stream, so a handler may ask it for the byte offset: with the iterative parser the
+// StartObject and StartArray events come before the `{` or `[` is taken, so stream.Tell() is the
+// offset of that character.
 template <typename Handler>
-bool parse_sax(ByteReader &in, Handler &handler, const std::string &entry) {
-    ReaderStream stream(in);
+bool parse_sax_stream(ReaderStream &stream, Handler &handler, const std::string &entry) {
     DepthGuard<Handler> guard(handler, limits().json_depth);
     rapidjson::Reader reader;
     const rapidjson::ParseResult result = reader.Parse<kParseFlags>(stream, guard);
@@ -192,6 +216,13 @@ bool parse_sax(ByteReader &in, Handler &handler, const std::string &entry) {
         throw_parse_error(result, nullptr, 0, entry);
     }
     return true;
+}
+
+// parse_sax_stream over a new stream of `in`.
+template <typename Handler>
+bool parse_sax(ByteReader &in, Handler &handler, const std::string &entry) {
+    ReaderStream stream(in);
+    return parse_sax_stream(stream, handler, entry);
 }
 
 // ---- Typed access to a parsed DOM ------------------------------------------------------------

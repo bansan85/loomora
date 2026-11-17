@@ -23,16 +23,23 @@ namespace {
 
 } // namespace
 
-std::string format_double(double value) {
+std::size_t format_double_to(double value, char *buf) {
     if (!(value - value == 0.0))
         refuse("num.not_finite", "a number to write is NaN or Infinity");
-    if (value == 0.0)
-        return "0"; // also -0
-    char buf[40];
+    if (value == 0.0) { // also -0
+        buf[0] = '0';
+        return 1;
+    }
     char *end = rapidjson::internal::dtoa(value, buf, 324);
     std::size_t n = static_cast<std::size_t>(end - buf);
     if (n >= 2 && buf[n - 2] == '.' && buf[n - 1] == '0')
         n -= 2; // a whole value: no ".0"
+    return n;
+}
+
+std::string format_double(double value) {
+    char buf[40];
+    const std::size_t n = format_double_to(value, buf);
     return std::string(buf, n);
 }
 
@@ -55,8 +62,9 @@ void JsonWriter::uint(std::uint64_t value) { writer_.Uint64(value); }
 void JsonWriter::integer(std::int64_t value) { writer_.Int64(value); }
 
 void JsonWriter::number(double value) {
-    const std::string text = format_double(value);
-    writer_.RawValue(text.data(), text.size(), rapidjson::kNumberType);
+    char buf[40];
+    const std::size_t n = format_double_to(value, buf);
+    writer_.RawValue(buf, n, rapidjson::kNumberType);
 }
 
 void JsonWriter::string(const char *text, std::size_t len) {
