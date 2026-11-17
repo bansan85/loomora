@@ -1,8 +1,8 @@
 // C binding of the project editor (loomora_project.h, "editor: create and save"): a thin forwarding
 // layer over format/project_editor.hpp and format/project_writer.hpp. A try / catch (...) wraps every
 // call, so no exception ever crosses a function declared here; no C++ type appears in a signature.
-// The later editing functions (3D frames and meshes, replace_*, remove_item, dependents, order,
-// opening a project for edit) go in this file too, on the same loomora_editor handle.
+// The editing functions (3D frames and meshes, replace_*, remove_item, dependents, order, opening a
+// project for edit) are in the second half of this file, on the same loomora_editor handle.
 #include "../include/loomora.h"
 
 #include <map>
@@ -19,6 +19,10 @@
 #include "format/project_writer.hpp"
 #include "format/report.hpp"
 #include "internal/config.hpp"
+
+static_assert(sizeof(loomora_nail) == 88, "loomora_nail is 88 bytes");
+static_assert(sizeof(loomora_step) == 12, "loomora_step is 12 bytes");
+static_assert(sizeof(loomora_mesh_info) == 24, "loomora_mesh_info is 24 bytes");
 
 // The editor handle: the staged project.
 struct loomora_editor {
