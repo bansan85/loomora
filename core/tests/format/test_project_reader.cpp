@@ -147,14 +147,6 @@ std::string item_json(const loomora_project *p, int kind, uint32_t id) {
 
 // ---- the expected result of a corpus row ------------------------------------------------------
 
-bool pending(const std::string &code) {
-    // The semantic validator (T068) is a later task: references, nails against the frame, spool
-    // lengths and the warnings of thresholds, distances, origin and thumbnails.
-    return code.compare(0, 4, "ref.") == 0 || code == "nail.outside_frame" ||
-           code.compare(0, 6, "spool.") == 0 || code == "warn.count" || code == "warn.nail_distance" ||
-           code == "warn.origin_offset" || code == "warn.thumbnail_size";
-}
-
 int32_t expected_rc(const std::string &code) {
     if (code == "version.major")
         return LOOMORA_ERR_UNSUPPORTED_VERSION;
@@ -365,10 +357,10 @@ TEST_CASE("valid-newer-minor opens and ignores what it does not know", "[format]
 TEST_CASE("warning corpus files open and report the warnings the reader owns", "[format][reader]") {
     if (!have_corpus())
         return;
-    int pending_rows = 0, checked = 0;
+    int checked = 0;
     const std::vector<Row> rows = load_rows();
     for (size_t i = 0; i < rows.size(); ++i) {
-        if (rows[i].kind != "warning" && rows[i].kind != "large")
+        if (rows[i].kind != "warning") // the large-* files need lowered limits: test_validator_rules.cpp
             continue;
         INFO(rows[i].file);
         const std::string path = corpus_dir() + "/" + rows[i].file;
@@ -376,33 +368,23 @@ TEST_CASE("warning corpus files open and report the warnings the reader owns", "
         o.rc = loomora_project_open_path(path.c_str(), nullptr, nullptr, &o.p, &o.r);
         REQUIRE(o.rc == 0); // a warning never blocks
         REQUIRE(loomora_report_error_count(o.r) == 0);
-        if (pending(rows[i].code)) {
-            ++pending_rows; // T068
-            continue;
-        }
         REQUIRE(contains(codes_of(o.r, 1), rows[i].code, false));
         if (rows[i].code == "warn.light_project")
             REQUIRE(loomora_project_is_light(o.p) == 1);
         ++checked;
     }
-    REQUIRE(checked >= 3);
-    if (pending_rows > 0)
-        WARN(pending_rows << " warning rows are pending the semantic validator (T068)");
+    REQUIRE(checked >= 6);
 }
 
 TEST_CASE("every invalid and hostile corpus file gives its code", "[format][reader]") {
     if (!have_corpus())
         return;
-    int pending_rows = 0, checked = 0;
+    int checked = 0;
     const std::vector<Row> rows = load_rows();
     for (size_t i = 0; i < rows.size(); ++i) {
         if (rows[i].kind != "invalid" && rows[i].kind != "hostile")
             continue;
         INFO(rows[i].file << " expects " << rows[i].code);
-        if (pending(rows[i].code)) {
-            ++pending_rows; // T068
-            continue;
-        }
         const std::string path = corpus_dir() + "/" + rows[i].file;
         const std::string want = reader_code(rows[i]);
         const bool exact = rows[i].contract_code || want != rows[i].code;
@@ -437,9 +419,7 @@ TEST_CASE("every invalid and hostile corpus file gives its code", "[format][read
         }
         ++checked;
     }
-    REQUIRE(checked >= 60);
-    if (pending_rows > 0)
-        WARN(pending_rows << " rows (ref.*, nail.outside_frame, spool.*, warn.*) are pending the semantic validator (T068)");
+    REQUIRE(checked >= 90);
 }
 
 TEST_CASE("the version rule names the version the file needs", "[format][reader]") {

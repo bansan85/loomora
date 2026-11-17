@@ -11,6 +11,7 @@
 #include "format/item_json.hpp"
 #include "format/limits.hpp"
 #include "format/sha256.hpp"
+#include "format/validate/validator.hpp"
 #include "format/zip/zip_writer.hpp"
 
 namespace loomora {
@@ -19,19 +20,6 @@ namespace format {
 namespace {
 
 const std::size_t kNailsPerChunk = 2048;
-
-std::string dec(std::uint64_t value) {
-    char buf[24];
-    int n = 0;
-    do {
-        buf[n++] = static_cast<char>('0' + value % 10);
-        value /= 10;
-    } while (value != 0);
-    std::string s;
-    while (n > 0)
-        s.push_back(buf[--n]);
-    return s;
-}
 
 // Where an entry's bytes go: the first pass hashes them, the second writes them.
 class Emitter {
@@ -190,30 +178,37 @@ void build_plan(const ProjectEditor &e, std::vector<Planned> &plan) {
     }
 }
 
-void warn_count(Report *report, const std::string &what, std::uint64_t count, std::uint64_t limit,
-                const std::string &entry, ItemKind kind, std::uint32_t id) {
-    if (report == nullptr || count <= limit)
-        return;
-    report->add(kWarning, "warn.count", entry,
-                what + ": " + dec(count) + " is above the threshold of " + dec(limit), kind, id);
-}
-
 void collect_warnings(const ProjectEditor &e, std::uint64_t total_bytes, Report *report) {
     if (report == nullptr)
         return;
-    const Limits &l = limits();
-    warn_count(report, "frames", e.frames().size(), l.warn_items_per_kind, "", kItemNone, 0);
-    warn_count(report, "layouts", e.layouts().size(), l.warn_items_per_kind, "", kItemNone, 0);
-    warn_count(report, "images", e.images().size(), l.warn_items_per_kind, "", kItemNone, 0);
-    warn_count(report, "spools", e.spools().size(), l.warn_items_per_kind, "", kItemNone, 0);
-    warn_count(report, "results", e.results().size(), l.warn_items_per_kind, "", kItemNone, 0);
-    warn_count(report, "decompressed bytes of the project", total_bytes, l.warn_decompressed_total, "", kItemNone, 0);
-    for (std::map<std::uint32_t, StagedLayout>::const_iterator it = e.layouts().begin(); it != e.layouts().end(); ++it)
-        warn_count(report, "nails of layout " + dec(it->first), it->second.nails.size(), l.warn_nails_per_layout,
-                   nails_entry(it->second.layout.frame, it->first), kItemLayout, it->first);
-    for (std::map<std::uint32_t, StagedResult>::const_iterator it = e.results().begin(); it != e.results().end(); ++it)
-        warn_count(report, "steps of result " + dec(it->first), it->second.result.steps, l.warn_steps_per_result,
-                   result_sequence_entry(it->first), kItemResult, it->first);
+    ThresholdFacts facts;
+    facts.frames = e.frames().size();
+    facts.layout_items = e.layouts().size();
+    facts.images = e.images().size();
+    facts.spools = e.spools().size();
+    facts.results = e.results().size();
+    facts.total_bytes = total_bytes;
+    for (std::map<std::uint32_t, StagedLayout>::const_iterator it = e.layouts().begin(); it != e.layouts().end(); ++it) {
+        ThresholdFacts::Layout l;
+        l.id = it->first;
+        l.frame = it->second.layout.frame;
+        l.nails = it->second.nails.size();
+        facts.layouts.push_back(l);
+    }
+    for (std::map<std::uint32_t, StagedResult>::const_iterator it = e.results().begin(); it != e.results().end(); ++it) {
+        ThresholdFacts::Result r;
+        r.id = it->first;
+        r.steps = it->second.result.steps;
+        facts.result_list.push_back(r);
+    }
+    for (std::map<std::uint32_t, StagedFrame>::const_iterator it = e.frames().begin(); it != e.frames().end(); ++it)
+        if (it->second.frame.has_mesh) {
+            ThresholdFacts::Mesh m;
+            m.frame = it->first;
+            m.triangles = it->second.frame.mesh.triangles;
+            facts.meshes.push_back(m);
+        }
+    check_thresholds(facts, *report); // the same function as the reader's: one file, the same warnings
 }
 
 } // namespace
