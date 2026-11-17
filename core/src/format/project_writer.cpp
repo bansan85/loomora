@@ -213,7 +213,8 @@ void build_plan(const ProjectEditor &e, std::vector<Planned> &plan) {
             add_archive(plan, image_entry(it->first), image_entry(it->first));
         else
             add_text(plan, image_entry(it->first), image_json(img.image));
-        add_blob(plan, img.image.source.entry, img.source);
+        if (img.image.has_source) // a light export has none
+            add_blob(plan, img.image.source.entry, img.source);
         if (img.image.has_target)
             add_blob(plan, img.image.target.entry, img.target);
         add_blob(plan, img.image.thumbnail.entry, img.thumbnail);

@@ -297,6 +297,33 @@ LOOMORA_API int32_t loomora_editor_set_order(loomora_editor *e, int32_t kind, co
 
 /* ---- end of editor: 3D, edit, dependents ---- */
 
+/* ---- export: light and subset ---- */
+
+#define LOOMORA_PROFILE_FULL 1  /* everything, editable */
+#define LOOMORA_PROFILE_LIGHT 2 /* no source or processed images, settings, mesh source, construction or UVs; not editable */
+
+/* Writes a copy of an open project with the given profile and, when n_results is not 0, only the results of
+   result_ids (the file then holds exactly the frames, layouts, images and spools they use; the project
+   identifier is kept; counts, next_id and order describe the file; the display order is that of the
+   source, whatever the order of result_ids). n_results == 0 exports every item. modified_at is the caller's
+   time (ISO 8601 UTC). options: bit 0 = store every entry uncompressed. Entries that stay unchanged are
+   copied as their compressed bytes (their SHA-256 does not change); entries this version does not define are
+   kept in a full export only. The path variant replaces the file atomically like a save. A full export from
+   a light project returns LOOMORA_ERR_READ_ONLY_PROJECT; an unknown result is LOOMORA_ERR_NOT_FOUND, a
+   profile that is neither constant LOOMORA_ERR_INVALID. *report (if not NULL) holds the warnings, or the
+   cause of a failure; it is freed with loomora_report_free. */
+LOOMORA_API int32_t loomora_project_export_path(const loomora_project *p, const char *path, int32_t profile,
+                                                const uint32_t *result_ids, size_t n_results,
+                                                const char *modified_at, uint32_t options,
+                                                loomora_progress_fn cb, void *user, loomora_report **report);
+/* The same into a caller's sink: the archive is built in memory and handed over, in order, once complete. */
+LOOMORA_API int32_t loomora_project_export_stream(const loomora_project *p, int32_t profile,
+                                                  const uint32_t *result_ids, size_t n_results,
+                                                  const char *modified_at, uint32_t options,
+                                                  loomora_sink_fn sink, void *user, loomora_report **report);
+
+/* ---- end of export: light and subset ---- */
+
 #ifdef __cplusplus
 }
 #endif

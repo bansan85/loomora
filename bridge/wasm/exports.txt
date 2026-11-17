@@ -56,5 +56,7 @@
  "_loomora_report_error_count",
  "_loomora_report_issue",
  "_loomora_report_text",
- "_loomora_report_free"
+ "_loomora_report_free",
+ "_loomora_project_export_path",
+ "_loomora_project_export_stream"
 ]

@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "c_api_project_handles.hpp"
+#include "c_api_project_reader_handle.hpp"
 #include "format/codec/mesh_codec.hpp"
 #include "format/codec/sequence_codec.hpp"
 #include "format/io/file.hpp"
@@ -19,10 +20,6 @@
 #include "internal/config.hpp"
 
 using namespace loomora::format;
-
-struct loomora_project {
-    std::unique_ptr<ProjectReader> reader;
-};
 
 namespace {
 
