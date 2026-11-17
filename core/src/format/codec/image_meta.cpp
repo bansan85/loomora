@@ -1,6 +1,7 @@
 // Container-level image checks and metadata strip (image_meta.hpp).
 #include "format/codec/image_meta.hpp"
 
+#include <cstdio>
 #include <cstring>
 #include <string>
 
@@ -18,6 +19,13 @@ typedef std::vector<std::uint8_t> Bytes;
 
 const unsigned char kPngSignature[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
 const std::uint32_t kPngMaxDim = 0x7FFFFFFFu;
+
+// Decimal text of a number (std::to_string and std::snprintf are missing from the gnustl of the Android NDK).
+std::string dec(unsigned long long value) {
+    char buf[32];
+    snprintf(buf, sizeof buf, "%llu", value);
+    return std::string(buf);
+}
 
 [[noreturn]] void bad(const std::string &what) {
     throw FormatError(LOOMORA_ERR_INVALID_ITEM, what);
@@ -322,11 +330,11 @@ void require_thumbnail(const std::uint8_t *data, std::size_t len) {
     if (problem != nullptr)
         bad(std::string("thumbnail: ") + problem);
     if (h.width > l.thumb_max_side || h.height > l.thumb_max_side)
-        bad("thumbnail is " + std::to_string(h.width) + " x " + std::to_string(h.height) +
-            " pixels, above the maximum of " + std::to_string(l.thumb_max_side));
+        bad("thumbnail is " + dec(h.width) + " x " + dec(h.height) +
+            " pixels, above the maximum of " + dec(l.thumb_max_side));
     if (len > l.thumb_max_bytes)
-        bad("thumbnail is " + std::to_string(len) + " bytes, above the maximum of " +
-            std::to_string(l.thumb_max_bytes));
+        bad("thumbnail is " + dec(len) + " bytes, above the maximum of " +
+            dec(l.thumb_max_bytes));
 }
 
 } // namespace format
