@@ -3,4 +3,7 @@
  "_loomora_is_eol",
  "_loomora_eol_warning",
  "_loomora_build_compiler",
- "_loomora_probe_record"]
+ "_loomora_probe_record",
+ "_loomora_format_version",
+ "_loomora_format_limit",
+ "_loomora_uuid4_from_random"]
