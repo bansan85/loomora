@@ -29,7 +29,7 @@ Screenshots are written under the build directory and are CANDIDATES, not commit
 them into the repository; asking the owner first is required before any image goes into
 docs/implementation (see CLAUDE.md).
 
---only NAME,...  limit the checks; a NAME is a kind (build, ctest, vectors, std, ui-logic, records, diff,
+--only NAME,...  limit the checks; a NAME is a kind (build, ctest, vectors, corpus, validator, std, ui-logic, records, diff,
                  screenshots, sanitizer, variants, wsl) or a UI (legacy, modern) or a variant id
                  (gtk-floor, gtk4, i686, xlib-corefont); the checks matching any NAME run.
 --variants       also build / run the non-default variants (Linux: GTK 3.10 floor, GTK 4, i686
@@ -69,7 +69,7 @@ import common
 ROOT = common.ROOT
 IS_WINDOWS = sys.platform == "win32"
 UIS = ("legacy", "modern")
-KINDS = ("build", "ctest", "vectors", "std", "ui-logic", "records", "diff", "screenshots", "sanitizer", "variants", "wsl")
+KINDS = ("build", "ctest", "vectors", "corpus", "validator", "std", "ui-logic", "records", "diff", "screenshots", "sanitizer", "variants", "wsl")
 UI_EXE = {"legacy": "loomora-xlib", "modern": "loomora-gtk3"}  # product names of the Linux UIs
 # Texts of the graphical scenarios: mixed Unicode, and a long text that is cut at 1,000 characters.
 SCENARIOS = (
@@ -328,6 +328,29 @@ def step_ctest(ctx):
         ctx.ok("ctest", "%d/%s" % (int(total.group(1)) - int(failed.group(1) if failed else 0), total.group(1)))
 
 
+# --- corpus+validator (spec 002, T075) ---------------------------------------------------------
+def step_corpus_validator(ctx):
+    """The invalid corpus of tools/gen_invalid_corpus.py, truncations included, written into the build
+    directory, then the validator rows of loomora_tests (every file gives its code, severity, entry and
+    item; every truncate-* is rejected; the large-* files warn when the limits are lowered)."""
+    bdir = ctx.build_dir / "default"
+    exe = find_exe(bdir, "loomora_tests.exe" if IS_WINDOWS else "loomora_tests")
+    if exe is None:
+        return ctx.skip("corpus+validator", "loomora_tests is not built on this host (Catch2 submodule missing?)")
+    corpus = exe.parent / "corpus"  # the directory compiled into loomora_tests as FMT_CORPUS_DIR
+    log = ctx.log("corpus+validator")
+    rc, _ = run_logged(log, [sys.executable, ROOT / "tools" / "gen_invalid_corpus.py", corpus])
+    if rc != 0:
+        return ctx.fail("corpus+validator", "gen_invalid_corpus status %d" % rc, log)
+    rc, _ = run_logged(log, [exe, "[validator]"], cwd=exe.parent)
+    m = re.search(r"All tests passed \((\d+) assertions? in (\d+) test cases?\)", log_text(log))
+    if rc != 0 or not m:
+        return ctx.fail("corpus+validator", "loomora_tests [validator] status %d" % rc, log)
+    n = len(list(corpus.glob("*.loomora")))
+    ctx.ok("corpus+validator", "%d files, %s assertions" % (n, m.group(1)))
+# --- end of corpus+validator ----------------------------------------------------------------------
+
+
 def step_std(ctx):
     if IS_WINDOWS and shutil.which("g++") is None:
         return ctx.skip("std", "no g++ on this host (clang with the MSVC STL cannot do strict C++11); run quick in WSL")
@@ -525,6 +548,7 @@ def make_plan(ctx):
     else:
         for ui in UIS:
             S.append(("run_vectors linux " + ui, {"vectors", ui}, "tools/run_vectors.py on the Linux %s UI" % ui, (lambda u: lambda c: step_vectors(c, u))(ui), True))
+    S.append(("corpus+validator", {"corpus", "validator"}, "corpus with truncations into the build dir, then the validator rows of loomora_tests", step_corpus_validator, True))  # T075
     S.append(("std", {"std"}, "tools/check_std.py (strict C++11 backend, clean C API)", step_std, False))
     S.append(("ui-logic", {"ui-logic"}, "tools/check_ui_logic.py (no UI builds the greeting; self-test first)", step_ui_logic, False))
     S.append(("records", {"records"}, "tools/validate_records.py (fetches the docs submodule when missing)", step_records, False))

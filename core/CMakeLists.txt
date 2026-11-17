@@ -77,3 +77,9 @@ endif()
 if(LOOMORA_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
+
+# --- fuzz targets (spec 002, T072): core/fuzz/CMakeLists.txt ---------------------------------------
+if(LOOMORA_BUILD_FUZZ)
+  add_subdirectory(fuzz)
+endif()
+# --- end of fuzz targets ----------------------------------------------------------------------------
