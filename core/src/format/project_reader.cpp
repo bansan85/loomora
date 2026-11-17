@@ -737,8 +737,8 @@ void ReaderPass::load_layouts() {
                     if (fr == nullptr)
                         fr = r.frame(c.parent);
                     const bool is3d = fr != nullptr && fr->frame.kind == model::kFrame3D;
-                    const std::uint64_t triangles =
-                        (fr != nullptr && fr->frame.has_mesh) ? fr->frame.mesh.triangles : model::kAnyTriangleCount;
+                    // face.triangle against the mesh is a rule of the validator (nail.outside_frame)
+                    const std::uint64_t triangles = model::kAnyTriangleCount;
                     const ZipEntry *ne = r.zip_.find(nails);
                     try {
                         std::unique_ptr<ZipEntryStream> s = r.zip_.open_entry(*ne, nullptr);
@@ -966,8 +966,7 @@ int ProjectReader::open(std::unique_ptr<Source> source, loomora_progress_fn prog
             report.add(kWarning, "warn.light_project", kManifestName,
                        "this is a light copy: it has no source images and no settings and cannot be edited");
         reader->complete_ = pass.complete;
-        if (reader->complete_)
-            validate_semantic(*reader, report);
+        validate_semantic(*reader, report); // every rule that the records already read allow
     } catch (const FormatError &e) {
         code = e.code();
         if (e.has_issue())

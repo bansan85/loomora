@@ -16,7 +16,9 @@
 //   6. the manifest against the content (manifest.counts, manifest.order, manifest.next_id,
 //      manifest.features);
 //   7. warn.light_project for a light copy;
-//   8. validate_semantic (validate/validator.hpp): the cross-item rules, a later task.
+//   8. validate_semantic (validate/validator.hpp): the cross-item rules (references, nails against the
+//      frame, spool lengths, thresholds, distances, origin, thumbnails). It always runs; when an item
+//      could not be read (complete() is false) it keeps to the rules that the records read allow.
 // An error does not stop the pass when it is safe to continue; every issue goes to the Report.
 // The memory held by an open project is the manifest, the parsed small items and one index entry
 // per 1,024 nails of each layout; nails, steps and mesh data are read by range from the archive.
