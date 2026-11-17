@@ -9,6 +9,12 @@
 // whose writer differs by one byte fails here (FR-004, the "same bytes on every platform" rule); the
 // file is read back and every field compared; every truncation of the small `empty` file, and a
 // sample of the truncations of `basic`, is rejected without a crash.
+//
+// T084: the light references. `multi-light` (the light export of `multi`, every item) and `one` (the
+// light export of ONE result of `multi`, the Cube result) are exported through the public C API
+// (loomora_project_export_stream) and their SHA-256 compared with golden constants, the same on every
+// platform; read back, their content is checked (items, identifiers, nails, steps, no source or processed
+// image, no settings, no UV, mesh positions, indices and normals equal to the full file).
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -29,6 +35,8 @@ const char kGoldenBasic[] = "fcdf97f0257076ba1c3ecae1867e57ebdc397440286a278f2cb
 const char kGoldenEmpty[] = "8ca4dc6a2139539feb87f92b11cc0d5685fdff051fa044b692a7be5d984d7913";
 const char kGoldenEscape[] = "b17920aabf9cc165a5c3b9290ba15f22e99903592426a8e55c96dc67ae570e2a";
 const char kGoldenMulti[] = "8bcd3ae91876dcf6048c3a5dc689754a8eab90367faed373942b819a7c3f8607";
+const char kGoldenMultiLight[] = "b32c8a390657d4f56ec9bd448e6c291e9781dfbb3b34b8164d049af67a7c4a8d";
+const char kGoldenOne[] = "fc3fb5ebd929689bd7ee32da020b279ca81b3412c6c947eda8c9e7e3ddb846c5";
 
 typedef std::vector<std::uint8_t> Bytes;
 
@@ -295,6 +303,214 @@ void test_multi() {
     loomora_project_close(p);
 }
 
+
+// ---- the light references (T084): `multi-light` and `one` ---------------------------------------------
+
+// Light export of `p`: every item, or the `n` results of `ids`. Clean = no error in the report.
+bool export_light(const loomora_project *p, const std::uint32_t *ids, std::size_t n, Bytes &out) {
+    out.clear();
+    loomora_report *report = 0;
+    const int32_t rc = loomora_project_export_stream(p, LOOMORA_PROFILE_LIGHT, ids, n, basic_project::kModifiedAt, 0,
+                                                     collect, &out, &report);
+    const bool clean = report == 0 || loomora_report_error_count(report) == 0;
+    if (report != 0)
+        loomora_report_free(report);
+    return rc == 0 && clean;
+}
+
+// Opens a light file: no error, and the one warning that says "light project".
+bool open_light(const Bytes &b, loomora_project **p) {
+    loomora_report *report = 0;
+    *p = 0;
+    const int32_t rc = loomora_project_open_memory(b.empty() ? 0 : &b[0], b.size(), 0, 0, p, &report);
+    const bool ok = report != 0 && loomora_report_error_count(report) == 0 && loomora_report_count(report) == 1;
+    if (report != 0)
+        loomora_report_free(report);
+    return rc == 0 && *p != 0 && ok && loomora_project_is_light(*p) == 1;
+}
+
+bool same_nail_list(const loomora_project *a, const loomora_project *b, std::uint32_t layout) {
+    const std::int64_t n = loomora_layout_nail_count(a, layout);
+    if (n <= 0 || n != loomora_layout_nail_count(b, layout))
+        return false;
+    std::vector<loomora_nail> x(static_cast<std::size_t>(n)), y(static_cast<std::size_t>(n));
+    if (loomora_layout_read_nails(a, layout, 0, x.size(), &x[0]) != n || loomora_layout_read_nails(b, layout, 0, y.size(), &y[0]) != n)
+        return false;
+    for (std::size_t i = 0; i < x.size(); ++i)
+        if (x[i].id != y[i].id || x[i].kind != y[i].kind || x[i].flags != y[i].flags || x[i].x != y[i].x ||
+            x[i].y != y[i].y || x[i].z != y[i].z || x[i].diameter != y[i].diameter || x[i].face_triangle != y[i].face_triangle)
+            return false;
+    return true;
+}
+
+bool same_step_list(const loomora_project *a, const loomora_project *b, std::uint32_t result) {
+    const std::int64_t n = loomora_result_step_count(a, result);
+    if (n <= 0 || n != loomora_result_step_count(b, result))
+        return false;
+    std::vector<loomora_step> x(static_cast<std::size_t>(n)), y(static_cast<std::size_t>(n));
+    if (loomora_result_read_steps(a, result, 0, x.size(), &x[0]) != n || loomora_result_read_steps(b, result, 0, y.size(), &y[0]) != n)
+        return false;
+    for (std::size_t i = 0; i < x.size(); ++i)
+        if (x[i].spool_index != y[i].spool_index || x[i].nail != y[i].nail || x[i].rotation != y[i].rotation ||
+            x[i].type != y[i].type || x[i].level != y[i].level)
+            return false;
+    return true;
+}
+
+// Positions, indices and normals of a frame's mesh: the same in both projects (the light rule of section 7).
+bool same_mesh_geometry(const loomora_project *a, const loomora_project *b, std::uint32_t frame) {
+    loomora_mesh_info ia = loomora_mesh_info(), ib = loomora_mesh_info();
+    if (loomora_frame_mesh_info(a, frame, &ia) != 0 || loomora_frame_mesh_info(b, frame, &ib) != 0 ||
+        ia.vertices != ib.vertices || ia.triangles != ib.triangles || (ia.flags & LOOMORA_MESH_NORMALS) != (ib.flags & LOOMORA_MESH_NORMALS))
+        return false;
+    const std::size_t nv = static_cast<std::size_t>(ia.vertices), nt = static_cast<std::size_t>(ia.triangles);
+    std::vector<float> va(nv * 3), vb(nv * 3), na(nv * 3), nb(nv * 3);
+    std::vector<std::uint32_t> ta(nt * 3), tb(nt * 3);
+    if (loomora_frame_read_vertices(a, frame, 0, nv, &va[0]) != static_cast<std::int64_t>(nv) ||
+        loomora_frame_read_vertices(b, frame, 0, nv, &vb[0]) != static_cast<std::int64_t>(nv) ||
+        loomora_frame_read_triangles(a, frame, 0, nt, &ta[0]) != static_cast<std::int64_t>(nt) ||
+        loomora_frame_read_triangles(b, frame, 0, nt, &tb[0]) != static_cast<std::int64_t>(nt) ||
+        loomora_frame_read_normals(a, frame, 0, nv, &na[0]) != static_cast<std::int64_t>(nv) ||
+        loomora_frame_read_normals(b, frame, 0, nv, &nb[0]) != static_cast<std::int64_t>(nv))
+        return false;
+    return std::memcmp(&va[0], &vb[0], va.size() * sizeof(float)) == 0 && std::memcmp(&ta[0], &tb[0], ta.size() * sizeof(std::uint32_t)) == 0 &&
+           std::memcmp(&na[0], &nb[0], na.size() * sizeof(float)) == 0;
+}
+
+bool same_item_json(const loomora_project *a, const loomora_project *b, int32_t kind, std::uint32_t id) {
+    std::vector<std::uint8_t> x(1 << 16), y(1 << 16);
+    const std::int64_t nx = loomora_project_item_json(a, kind, id, &x[0], x.size());
+    const std::int64_t ny = loomora_project_item_json(b, kind, id, &y[0], y.size());
+    return nx > 0 && nx == ny && std::memcmp(&x[0], &y[0], static_cast<std::size_t>(nx)) == 0;
+}
+
+// What a light project never holds: the source and processed images, the settings, the UVs.
+void check_light_content(const loomora_project *l, const char *tag, const std::uint32_t *images, std::size_t n_images,
+                         const std::uint32_t *results, std::size_t n_results, std::uint32_t cube_frame) {
+    const std::string t = tag;
+    for (std::size_t i = 0; i < n_images; ++i) {
+        const std::string dir = "images/" + basic_project::num(images[i]);
+        check(loomora_project_entry_size(l, (dir + "/source.png").c_str()) < 0, (t + ": no source image").c_str());
+        check(loomora_project_entry_size(l, (dir + "/target.png").c_str()) < 0, (t + ": no processed image").c_str());
+        check(loomora_project_entry_size(l, (dir + "/thumb.png").c_str()) > 0, (t + ": the image thumbnail stays").c_str());
+    }
+    for (std::size_t i = 0; i < n_results; ++i) {
+        const std::string dir = "results/" + basic_project::num(results[i]);
+        check(loomora_project_entry_size(l, (dir + "/settings.json").c_str()) < 0, (t + ": no result settings").c_str());
+        check(loomora_project_entry_size(l, (dir + "/thumb.png").c_str()) > 0, (t + ": the result thumbnail stays").c_str());
+    }
+    loomora_mesh_info info = loomora_mesh_info();
+    check(loomora_frame_mesh_info(l, cube_frame, &info) == 0 && info.vertices == 8 && info.triangles == 12 &&
+              info.flags == LOOMORA_MESH_NORMALS,
+          (t + ": the cube mesh keeps its normals and has no UVs").c_str());
+    float uv[16];
+    check(loomora_frame_read_uvs(l, cube_frame, 0, 8, uv) == 0, (t + ": no UV to read").c_str());
+}
+
+// The light export of the whole `multi` project, and of one of its results (the Cube result, which has a
+// 3D frame and two views): archive hashes, read-back, light content, mesh geometry equal to the full file.
+void test_light() {
+    loomora_editor *e = 0;
+    multi_project::Ids ids;
+    check(multi_project::build_multi(&e, &ids) == 0, "light: build multi");
+    if (e == 0)
+        return;
+    Bytes full;
+    check(save(e, full), "light: save multi");
+    loomora_editor_close(e);
+    loomora_project *p = 0;
+    check(open_clean(full, &p), "light: multi reads back");
+    if (p == 0)
+        return;
+    check(loomora_project_is_light(p) == 0, "light: multi is a full project");
+
+    // multi-light: every item
+    Bytes all, all2;
+    check(export_light(p, 0, 0, all) && export_light(p, 0, 0, all2) && all == all2, "multi-light: exporting twice gives the same bytes");
+    const std::string hex_all = digest(all);
+    check(hex_all == kGoldenMultiLight, "multi-light: SHA-256 of the archive equals the golden value");
+    if (hex_all != kGoldenMultiLight) {
+        std::fputs("  multi-light sha256 = ", stdout);
+        std::fputs(hex_all.c_str(), stdout);
+        std::fputs("\n", stdout);
+    }
+    check(all.size() < full.size(), "multi-light: smaller than the full file");
+    loomora_project *l = 0;
+    check(open_light(all, &l), "multi-light: reads back as a light project, one warning");
+    if (l != 0) {
+        check(loomora_project_count(l, LOOMORA_KIND_FRAME) == 3 && loomora_project_count(l, LOOMORA_KIND_LAYOUT) == 5 &&
+                  loomora_project_count(l, LOOMORA_KIND_IMAGE) == 4 && loomora_project_count(l, LOOMORA_KIND_SPOOL) == 6 &&
+                  loomora_project_count(l, LOOMORA_KIND_RESULT) == 5,
+              "multi-light: item counts");
+        const std::uint32_t layouts[5] = {ids.layout_a1, ids.layout_a2, ids.layout_b, ids.layout_b_unused, ids.layout_3d};
+        const std::uint32_t results[5] = {ids.result_a1, ids.result_a2, ids.result_b, ids.result_3d, ids.result_shared};
+        bool same = true;
+        for (int i = 0; i < 5; ++i)
+            same = same && same_nail_list(p, l, layouts[i]) && same_step_list(p, l, results[i]) &&
+                   same_item_json(p, l, LOOMORA_KIND_LAYOUT, layouts[i]);
+        check(same, "multi-light: nails, steps and layout JSON equal those of the full file");
+        bool spools = true;
+        for (int i = 0; i < 6; ++i)
+            spools = spools && same_item_json(p, l, LOOMORA_KIND_SPOOL, ids.spool[i]);
+        check(spools, "multi-light: spool JSON equals that of the full file");
+        check(same_mesh_geometry(p, l, ids.frame_3d), "multi-light: mesh positions, indices and normals equal those of the full file");
+        check_light_content(l, "multi-light", ids.image, 4, results, 5, ids.frame_3d);
+        loomora_project_close(l);
+    }
+    check(accepted_prefixes(all, 600, 173) == 0, "multi-light: every sampled truncation is rejected");
+
+    // one: a single result
+    Bytes one, one2;
+    check(export_light(p, &ids.result_3d, 1, one) && export_light(p, &ids.result_3d, 1, one2) && one == one2,
+          "one: exporting twice gives the same bytes");
+    const std::string hex_one = digest(one);
+    check(hex_one == kGoldenOne, "one: SHA-256 of the archive equals the golden value");
+    if (hex_one != kGoldenOne) {
+        std::fputs("  one sha256 = ", stdout);
+        std::fputs(hex_one.c_str(), stdout);
+        std::fputs("\n", stdout);
+    }
+    check(one.size() < all.size(), "one: smaller than multi-light");
+    loomora_project *o = 0;
+    check(open_light(one, &o), "one: reads back as a light project, one warning");
+    if (o != 0) {
+        check(loomora_project_count(o, LOOMORA_KIND_FRAME) == 1 && loomora_project_count(o, LOOMORA_KIND_LAYOUT) == 1 &&
+                  loomora_project_count(o, LOOMORA_KIND_IMAGE) == 2 && loomora_project_count(o, LOOMORA_KIND_SPOOL) == 2 &&
+                  loomora_project_count(o, LOOMORA_KIND_RESULT) == 1,
+              "one: item counts (the result and what it uses)");
+        std::uint32_t got[2] = {0, 0};
+        check(loomora_project_ids(o, LOOMORA_KIND_RESULT, got, 2) == 1 && got[0] == ids.result_3d, "one: the result keeps its identifier");
+        check(loomora_project_ids(o, LOOMORA_KIND_FRAME, got, 2) == 1 && got[0] == ids.frame_3d, "one: the frame keeps its identifier");
+        check(loomora_project_ids(o, LOOMORA_KIND_LAYOUT, got, 2) == 1 && got[0] == ids.layout_3d, "one: the layout keeps its identifier");
+        check(loomora_project_ids(o, LOOMORA_KIND_IMAGE, got, 2) == 2 && got[0] == ids.image[2] && got[1] == ids.image[3],
+              "one: the two images of the views");
+        check(loomora_project_ids(o, LOOMORA_KIND_SPOOL, got, 2) == 2 && got[0] == ids.spool[4] && got[1] == ids.spool[5],
+              "one: the two spools of the result");
+        std::uint8_t probe[8];
+        check(loomora_project_item_json(o, LOOMORA_KIND_SPOOL, ids.spool[0], probe, sizeof probe) < 0 &&
+                  loomora_project_item_json(o, LOOMORA_KIND_RESULT, ids.result_a1, probe, sizeof probe) < 0,
+              "one: the items the result does not use are not in the file");
+        check(loomora_result_step_count(o, ids.result_3d) == multi_project::kMultiSteps3D && same_step_list(p, o, ids.result_3d) &&
+                  same_nail_list(p, o, ids.layout_3d) && same_mesh_geometry(p, o, ids.frame_3d),
+              "one: steps, nails and mesh geometry equal those of the full file");
+        const std::uint32_t images[2] = {ids.image[2], ids.image[3]};
+        check_light_content(o, "one", images, 2, &ids.result_3d, 1, ids.frame_3d);
+        loomora_project_close(o);
+    }
+    // The subset of a light file is the same file as the light subset of the full file.
+    loomora_project *l2 = 0;
+    Bytes via_light;
+    if (open_light(all, &l2)) {
+        check(export_light(l2, &ids.result_3d, 1, via_light) && via_light == one,
+              "one: exported from multi-light it is the same file as exported from multi");
+        loomora_project_close(l2);
+    } else {
+        check(false, "one: multi-light opens for the second export");
+    }
+    check(accepted_prefixes(one, one.size(), 7) == 0, "one: every sampled truncation is rejected");
+    loomora_project_close(p);
+}
+
 } // namespace
 
 int main() {
@@ -312,6 +528,7 @@ int main() {
     test_empty();
     test_escape();
     test_multi();
+    test_light();
     std::fputs(g_failures == 0 ? "format selftest: ok\n" : "format selftest: FAILED\n", stdout);
     return g_failures == 0 ? 0 : 1;
 }
