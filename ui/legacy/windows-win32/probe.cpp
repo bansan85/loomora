@@ -5,6 +5,7 @@
 
 #include "dynfeatures.h"
 #include "loomora.h"
+#include "project_probe.hpp"
 #include "sysinfo.h"
 
 namespace probe {
@@ -13,6 +14,7 @@ namespace {
 
 const UINT kExitDelayMs = 2000;
 const wchar_t kProbeFileName[] = L"loomora-probe.json";
+const wchar_t kProjectFileName[] = L"loomora-validate-project.txt";
 
 LARGE_INTEGER g_launch = LARGE_INTEGER();
 LARGE_INTEGER g_displayed = LARGE_INTEGER(); // zero until the first paint
@@ -90,6 +92,18 @@ bool IsWellFormedUtf16(const std::wstring &text) {
     return true;
 }
 
+// The UTF-8 form of a well-formed UTF-16 text.
+std::string ToUtf8(const std::wstring &text) {
+    if (text.empty())
+        return std::string();
+    const int size = static_cast<int>(text.size());
+    const int n = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), size, NULL, 0, NULL, NULL);
+    std::string utf8(n > 0 ? n : 0, '\0');
+    if (n > 0)
+        WideCharToMultiByte(CP_UTF8, 0, text.c_str(), size, &utf8[0], n, NULL, NULL);
+    return utf8;
+}
+
 // Milliseconds between two readings of the launch clock.
 uint32_t ElapsedMs() {
     if (!g_displayedMarked)
@@ -129,8 +143,8 @@ std::string TimestampUtc() {
     return text;
 }
 
-// Full path of loomora-probe.json: next to the executable.
-bool ProbeFilePath(std::wstring *path) {
+// Full path of the file `name`: next to the executable.
+bool FilePathNextToExecutable(const wchar_t *name, std::wstring *path) {
     std::vector<wchar_t> buffer(MAX_PATH * 4);
     const DWORD n = GetModuleFileNameW(NULL, &buffer[0], static_cast<DWORD>(buffer.size()));
     if (n == 0 || n >= buffer.size())
@@ -140,13 +154,13 @@ bool ProbeFilePath(std::wstring *path) {
     if (slash == std::wstring::npos)
         return false;
     path->resize(slash + 1);
-    *path += kProbeFileName;
+    *path += name;
     return true;
 }
 
-bool WriteFileNextToExecutable(const std::string &text) {
+bool WriteFileNextToExecutable(const wchar_t *name, const std::string &text) {
     std::wstring path;
-    if (!ProbeFilePath(&path))
+    if (!FilePathNextToExecutable(name, &path))
         return false;
     const HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, NULL,
                                     CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -169,6 +183,7 @@ void Start() {
 Options ParseCommandLine() {
     Options options = Options();
     const std::vector<std::wstring> args = SplitCommandLine(GetCommandLineW());
+    int projectOptions = 0; // --validate-project and --roundtrip-project given, with their repeats
     for (size_t i = 1; i < args.size(); ++i) {
         if (args[i] == L"--probe") {
             options.enabled = true;
@@ -179,15 +194,30 @@ Options ParseCommandLine() {
             } else {
                 options.badUsage = true;
             }
+        } else if (args[i] == L"--validate-project" || args[i] == L"--roundtrip-project") {
+            ++projectOptions;
+            options.projectMode = args[i] == L"--validate-project" ? project_probe::kValidate
+                                                                   : project_probe::kRoundtrip;
+            if (i + 1 < args.size())
+                options.projectPath = args[++i];
+            else
+                options.badUsage = true;
         }
     }
     // The input override is only meaningful in probe mode, and must be convertible to UTF-8.
     if (options.hasInput && (!options.enabled || !IsWellFormedUtf16(options.input)))
         options.badUsage = true;
+    // The three modes exclude each other, and the path must be convertible to UTF-8.
+    if (projectOptions > 1 || (projectOptions == 1 && (options.enabled || options.hasInput)) ||
+        (projectOptions == 1 && !IsWellFormedUtf16(options.projectPath)))
+        options.badUsage = true;
     return options;
 }
 
-void ReportUsage() { OutputDebugStringA("usage: loomora.exe [--probe [--probe-input <utf8>]]\n"); }
+void ReportUsage() {
+    OutputDebugStringA("usage: loomora.exe [--probe [--probe-input <utf8>] | --validate-project <path> |"
+                       " --roundtrip-project <path>]\n");
+}
 
 void MarkDisplayed() {
     if (g_displayedMarked)
@@ -230,7 +260,7 @@ void Emit(const std::string &input, const std::string &message, bool eolWarningS
         }
         line += '\n';
         OutputDebugStringA(line.c_str());
-        if (!WriteFileNextToExecutable(line)) {
+        if (!WriteFileNextToExecutable(kProbeFileName, line)) {
             OutputDebugStringA("loomora: cannot write loomora-probe.json next to the executable\n");
             g_exitStatus = 1;
         }
@@ -240,5 +270,31 @@ void Emit(const std::string &input, const std::string &message, bool eolWarningS
 }
 
 int ExitStatus() { return g_exitStatus; }
+
+int RunProject(const Options &options) {
+    std::string line;
+    std::string diagnostic;
+    int status = 2;
+    try {
+        const std::string path = ToUtf8(options.projectPath);
+        status = project_probe::Run(static_cast<project_probe::Mode>(options.projectMode), path,
+                                    &line, &diagnostic);
+        if (!diagnostic.empty())
+            OutputDebugStringA(("loomora: " + diagnostic + "\n").c_str());
+        if (line.empty())
+            return status; // nothing to print: the status says why
+        line += '\n';
+        OutputDebugStringA(line.c_str());
+        if (!WriteFileNextToExecutable(kProjectFileName, line)) {
+            OutputDebugStringA(
+                "loomora: cannot write loomora-validate-project.txt next to the executable\n");
+            if (status == 0)
+                status = 1;
+        }
+    } catch (...) { // out of memory
+        return 2;
+    }
+    return status;
+}
 
 } // namespace probe

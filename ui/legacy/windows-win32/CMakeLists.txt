@@ -13,7 +13,7 @@
 # "loomora"; the executable file is still loomora.exe (OUTPUT_NAME).
 
 set(LOOMORA_WIN32_SOURCES main.cpp sysinfo.cpp sysinfo.h dynfeatures.cpp dynfeatures.h dynload.h
-    probe.cpp probe.h resource.h)
+    probe.cpp probe.h project_probe.cpp project_probe.hpp resource.h)
 if(MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
   set(LOOMORA_WIN32_MSVC_ABI ON)
 else()
@@ -52,6 +52,11 @@ add_executable(loomora_win32 WIN32 ${LOOMORA_WIN32_SOURCES})
 set_target_properties(loomora_win32 PROPERTIES
   OUTPUT_NAME loomora CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_definitions(loomora_win32 PRIVATE UNICODE _UNICODE)
+# The round trip mode (--roundtrip-project) calls loomora_project_export_stream: it is compiled when
+# the backend has it (core/src/c_api_project_export.cpp), so that this UI builds before and after.
+if(EXISTS "${PROJECT_SOURCE_DIR}/core/src/c_api_project_export.cpp")
+  target_compile_definitions(loomora_win32 PRIVATE LOOMORA_HAVE_PROJECT_EXPORT)
+endif()
 target_link_libraries(loomora_win32 PRIVATE loomora user32 gdi32)
 if(LOOMORA_WIN32_MSVC_ABI)
   # loomora.manifest already has the trustInfo (asInvoker). Without this the linker adds its own

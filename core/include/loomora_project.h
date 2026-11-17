@@ -297,6 +297,20 @@ LOOMORA_API int32_t loomora_editor_set_order(loomora_editor *e, int32_t kind, co
 
 /* ---- end of editor: 3D, edit, dependents ---- */
 
+/* ---- export (declaration used by the UI probe) ---- */
+/* Temporary block: the declaration of contracts/c-api-project.md that the UI round-trip probe
+   (--roundtrip-project) calls. The export work declares the whole export API (this function, the
+   profile macros and loomora_project_export_path) with the export macro in its own block, which
+   replaces this one at merge. This one carries no export macro, so that the export lists of the
+   shared library stay unchanged until then. */
+#define LOOMORA_PROFILE_FULL 1
+#define LOOMORA_PROFILE_LIGHT 2
+int32_t loomora_project_export_stream(const loomora_project *p, int32_t profile,
+                                      const uint32_t *result_ids, size_t n_results,
+                                      const char *modified_at, uint32_t options,
+                                      loomora_sink_fn sink, void *user, loomora_report **report);
+/* ---- end of export (declaration used by the UI probe) ---- */
+
 #ifdef __cplusplus
 }
 #endif
