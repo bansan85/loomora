@@ -143,14 +143,14 @@ Implemented targets:
 
   macos legacy   Clang on ui/legacy/macos-appkit (T077), on a macOS host with Xcode only (the same early
                  stop elsewhere): Objective-C and AppKit WITHOUT ARC, the sources compiled by the
-                 Xcode 26 Clang with -mmacosx-version-min=10.6 for x86_64 only (the macOS 26 SDK has no
-                 i386), -Werror=partial-availability (APIs newer than 10.6 fail the build; deprecation
-                 warnings are not errors, the SDK 26 headers deprecate the 10.6 names on purpose), and
+                 Xcode 26 Clang with -mmacosx-version-min=10.7 for x86_64 only (the macOS 26 SDK has no
+                 i386), -Werror=partial-availability (APIs newer than 10.7 fail the build; deprecation
+                 warnings are not errors, the SDK 26 headers deprecate the 10.7 names on purpose), and
                  linked with the C++11 libloomora.a and the libc++ DYLIB of the system (spike S11: Xcode
-                 26 ships no static libc++). Checks slice, minimum version (LC_VERSION_MIN_MACOSX 10.6)
+                 26 ships no static libc++). Checks slice, minimum version (LC_VERSION_MIN_MACOSX 10.7)
                  and linked libraries. Writes out/macos-legacy/Loomora.app and a zip made with ditto.
-                 The result is "compiled, NOT RUN on 10.6": a real 10.6 may lack that libc++ dylib.
-                 The 10.6 SDK, osxcross and the i386 slice wait for a real old Mac (spike S2, T067).
+                 The result is "compiled, NOT RUN on 10.7": a real 10.7 may lack that libc++ dylib.
+                 The 10.7 SDK, osxcross and the i386 slice wait for a real old Mac (spike S2, T067).
                  WRITTEN WITHOUT A MAC, never compiled (see macos modern).
 
   ios legacy     xcodebuild on ui/legacy/ios-uikit/Loomora.xcodeproj (T079), on a macOS host with Xcode
@@ -1570,10 +1570,10 @@ IOS_GENERIC_PLATFORM = "ios-arm64"
 MACOS_LEGACY_GENERIC_PLATFORM = "macos-x86_64"  # the Legacy macOS build has one slice
 
 # Legacy UIs (spec Clarifications, fifth session: compiled on macos-26, never run; the Xcode 5.1.1 /
-# 10.6 SDK builds wait for a real old Mac). The Legacy macOS UI is built without Xcode project.
+# 10.7 SDK builds wait for a real old Mac). The Legacy macOS UI is built without Xcode project.
 MACOS_LEGACY_DIR = common.ROOT / "ui" / "legacy" / "macos-appkit"
 IOS_LEGACY_DIR = common.ROOT / "ui" / "legacy" / "ios-uikit"
-MACOS_LEGACY_DEPLOYMENT_TARGET = "10.6"
+MACOS_LEGACY_DEPLOYMENT_TARGET = "10.7"
 MACOS_LEGACY_ARCHS = ("x86_64",)  # the macOS 26 SDK has no i386 slice
 IOS_LEGACY_DEPLOYMENT_TARGET = "12.0"  # the lowest Xcode 26 deploys to; the project says 5.0
 IOS_LEGACY_PROJECT_TARGET = "5.0"  # the floor the Xcode 5.1.1 project declares (checked, not built)
@@ -1897,7 +1897,7 @@ def run_ios_modern(args):
 
 
 def check_macos_legacy_plist(plist):
-    """The Info.plist copied into the bundle must name the executable Loomora and the 10.6 floor."""
+    """The Info.plist copied into the bundle must name the executable Loomora and the 10.7 floor."""
     with open(str(plist), "rb") as handle:
         data = plistlib.load(handle)
     wanted = {"CFBundleExecutable": "Loomora", "LSMinimumSystemVersion": MACOS_LEGACY_DEPLOYMENT_TARGET}
@@ -1909,8 +1909,8 @@ def check_macos_legacy_plist(plist):
 
 def build_macos_legacy_app(work, lib):
     """Compiles the Objective-C sources of ui/legacy/macos-appkit with the Xcode Clang (no Xcode
-    project, no ARC, x86_64, -mmacosx-version-min=10.6, partial availability is an error, deprecation
-    warnings are not: the SDK 26 headers deprecate the 10.6 names on purpose), links them with the
+    project, no ARC, x86_64, -mmacosx-version-min=10.7, partial availability is an error, deprecation
+    warnings are not: the SDK 26 headers deprecate the 10.7 names on purpose), links them with the
     backend library and libc++ (the system dylib) and the Cocoa framework, and assembles
     <work>/Loomora.app (Contents/MacOS/Loomora, Contents/Info.plist). Returns the bundle."""
     check_macos_legacy_plist(MACOS_LEGACY_DIR / "Info.plist")
@@ -1959,9 +1959,9 @@ def run_macos_legacy(args):
     facts = apple_tool_facts("macosx")
     base = apple_base_record(
         compiler,
-        "x86_64-apple-macos10.6 (Xcode %s Clang, -mmacosx-version-min=10.6), Loomora.app; COMPILED, "
-        "NOT RUN on 10.6" % facts[0],
-        "AppKit (Cocoa), Objective-C without ARC (manual retain/release), 10.6 APIs only "
+        "x86_64-apple-macos10.7 (Xcode %s Clang, -mmacosx-version-min=10.7), Loomora.app; COMPILED, "
+        "NOT RUN on 10.7" % facts[0],
+        "AppKit (Cocoa), Objective-C without ARC (manual retain/release), 10.7 APIs only "
         "(-Werror=partial-availability); libloomora.a (C++11) linked through core/include/loomora.h",
         facts, archive,
         "python tools/build.py macos legacy: cmake + ninja builds libloomora.a from core/src for x86_64 "
@@ -1970,8 +1970,8 @@ def run_macos_legacy(args):
         "-Werror=partial-availability, deprecation warnings left as warnings) and links with "
         "-lloomora -lc++ -framework Cocoa; slice x86_64 and minimum OS %s checked with lipo and otool; "
         "the app links only system libraries (%s), libc++ DYNAMICALLY (spike S11: Xcode 26 has no "
-        "static libc++, a real 10.6 may lack %s); SDK %s; artifact sha256 %s. COMPILED, NOT RUN on 10.6 "
-        "(not_tested): no 10.6 machine, the macos-26 runner is Apple silicon; the 10.6 SDK build "
+        "static libc++, a real 10.7 may lack %s); SDK %s; artifact sha256 %s. COMPILED, NOT RUN on 10.7 "
+        "(not_tested): no 10.7 machine, the macos-26 runner is Apple silicon; the 10.7 SDK build "
         "and the i386 slice wait for a real old Mac (spike S2, T067); copied to out/macos-legacy/."
         % (MACOS_LEGACY_DEPLOYMENT_TARGET, MACOS_LEGACY_DEPLOYMENT_TARGET, ", ".join(libs),
            LIBCXX_DYLIB, facts[2], common.sha256(archive)),

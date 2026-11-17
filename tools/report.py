@@ -67,7 +67,7 @@ REQ_FLOORS = (
      "Windows 2000, plain Win32 UI", 2001),
     ("windows", "modern", "Windows 10+, WinUI 3 (section 2.1)",
      "WinUI 3 needs Windows 10 1809 (research R6; source winappsdk-support)", 2015),
-    ("macos", "legacy", "macOS 11+ (section 2.1)", "macOS 10.6 Snow Leopard", 2020),
+    ("macos", "legacy", "macOS 11+ (section 2.1)", "macOS 10.7 Lion", 2020),
     ("linux", "legacy", "Ubuntu 20.04+ / Debian 11+, AppImage and Flatpak (section 2.1)",
      "any distribution with a C++11 compiler, CMake and the libX11 development files; "
      "built on the machine that runs it (ADR 0007)", 2020),
@@ -120,12 +120,12 @@ DEVIATIONS = (
      "Research R9; ADR 0006",
      [SPEC_ROOT + "research.md", "adr/0006-linux-modern-ui-gtkmm-cmake.md"]),
     ("Floors: macOS 11, iOS 15, Android API 21, Windows 10 (section 2.1)",
-     "Floors decided without Rust: macOS 10.6, iOS 5, Android 2.3 (API 9), Windows 2000, browsers "
+     "Floors decided without Rust: macOS 10.7, iOS 5, Android 2.3 (API 9), Windows 2000, browsers "
      "of November 2011 through the JavaScript build. What was tried is in section 5.",
      "Spec Clarifications (second session)",
      [SPEC]),
     ("Architectures and tiers by Rust target availability (section 2.1.1)",
-     "x86 and x64 on Windows, Linux and macOS 10.6; ARMv6/ARMv7 and x86 on Android 2.3; ARMv7 and "
+     "x86 and x64 on Windows, Linux and macOS 10.7; ARMv6/ARMv7 and x86 on Android 2.3; ARMv7 and "
      "arm64 on iOS; PowerPC, MIPS and Itanium are out of scope. A tier no longer depends on a Rust "
      "toolchain.",
      "Spec Clarifications (second session)",
