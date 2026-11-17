@@ -13,6 +13,7 @@
 #include "loomora.h"
 #include "main_window.hpp"
 #include "probe.hpp"
+#include "project_probe.hpp"
 
 namespace {
 
@@ -88,6 +89,10 @@ int main(int argc, char** argv) {
                      static_cast<unsigned>(loomora_abi_version()), LOOMORA_ABI_VERSION);
         return 1;
     }
+    // --validate-project / --roundtrip-project: no window, no display (project_probe.hpp).
+    const project_probe::Request project = project_probe::ParseArgs(argc, argv);
+    if (project.present)
+        return project_probe::RunRequest(project, argv[0]);
     const loomora::ProbeOptions options = loomora::parse_probe_args(argc, argv);
     if (options.bad_usage || (options.has_input && !Glib::ustring(options.input).validate())) {
         std::fprintf(stderr, "usage: %s [--probe [--probe-input <utf8>]]\n", argv[0]);

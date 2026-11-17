@@ -69,6 +69,7 @@
 #include "keys.hpp"
 #include "loomora.h"
 #include "probe.hpp"
+#include "project_probe.hpp"
 #ifdef LOOMORA_XLIB_HAVE_XFT
 #include "xftfonts.hpp"
 #endif
@@ -1039,6 +1040,10 @@ int RunProgram(int argc, char **argv) {
                      static_cast<unsigned>(loomora_abi_version()), LOOMORA_ABI_VERSION);
         return 1;
     }
+    // --validate-project / --roundtrip-project: no window, no display (project_probe.hpp).
+    const project_probe::Request project = project_probe::ParseArgs(argc, argv);
+    if (project.present)
+        return project_probe::RunRequest(project, argv[0]);
     const probe::Options probeOptions = probe::ParseArgs(argc, argv);
     if (probeOptions.badUsage || (probeOptions.input != nullptr && !Utf8Valid(probeOptions.input))) {
         std::fprintf(stderr, "usage: %s [--probe [--probe-input <utf8>]]\n", argv[0]);

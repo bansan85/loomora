@@ -97,7 +97,7 @@ if(NOT LOOMORA_XLIB_HAVE_XFT)
   message(STATUS "Linux Legacy UI: built with the CORE FONT text path (fallback xlib-core-font-glyphs: '?' for a character the core font lacks, probe marker glyph-substitution)")
 endif()
 
-set(LOOMORA_XLIB_SOURCES main.cpp keys.cpp keys.hpp probe.cpp probe.hpp)
+set(LOOMORA_XLIB_SOURCES main.cpp keys.cpp keys.hpp probe.cpp probe.hpp project_probe.cpp project_probe.hpp)
 if(LOOMORA_XLIB_HAVE_XFT)
   list(APPEND LOOMORA_XLIB_SOURCES xftfonts.cpp xftfonts.hpp)
 endif()
@@ -107,6 +107,11 @@ set_target_properties(loomora_xlib PROPERTIES
   OUTPUT_NAME loomora-xlib CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 target_include_directories(loomora_xlib SYSTEM PRIVATE ${LOOMORA_X11_INCLUDE_DIRS})
+# The round trip mode (--roundtrip-project) calls loomora_project_export_stream: it is compiled when
+# the backend has it (core/src/c_api_project_export.cpp), so that this UI builds before and after.
+if(EXISTS "${PROJECT_SOURCE_DIR}/core/src/c_api_project_export.cpp")
+  target_compile_definitions(loomora_xlib PRIVATE LOOMORA_HAVE_PROJECT_EXPORT)
+endif()
 target_compile_options(loomora_xlib PRIVATE -Wall -Wextra -pedantic)
 target_link_libraries(loomora_xlib PRIVATE loomora ${LOOMORA_X11_LIBRARIES})
 if(LOOMORA_XLIB_HAVE_XFT)
