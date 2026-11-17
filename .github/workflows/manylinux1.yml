@@ -124,7 +124,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # docs/implementation holds the platform record linux-centos-5.11-x86_64 that
-          # run_vectors.py reads; third_party/catch2 is not needed here.
+          # run_vectors.py reads; third_party/zlib and third_party/rapidjson are needed by the
+          # backend; third_party/catch2 is not needed here.
           submodules: recursive
           persist-credentials: false
       - name: Prepare the log folder

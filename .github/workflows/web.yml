@@ -110,6 +110,10 @@ jobs:
         with:
           submodules: false
           persist-credentials: false
+      # The backend links zlib and includes RapidJSON (the .loomora format, ADR 0018): both are git
+      # submodules, fetched alone (shallow), without the docs repository.
+      - name: Fetch the zlib and RapidJSON submodules
+        run: git submodule update --init --depth 1 third_party/zlib third_party/rapidjson
       - name: Install the node of the host
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
