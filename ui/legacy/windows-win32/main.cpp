@@ -206,6 +206,8 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int show) {
         probe::ReportUsage();
         return 2;
     }
+    if (options.projectMode != 0) // --validate-project / --roundtrip-project: no window
+        return probe::RunProject(options);
     g_initialInput = Truncated(options.hasInput ? options.input : LoadText(IDS_DEFAULT_INPUT));
 
     dynfeatures::Init();
