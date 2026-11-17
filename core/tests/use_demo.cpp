@@ -2,7 +2,7 @@
 // written only against the public C API (loomora.h). It opens a project, lists it and reads from it;
 // it never writes to the project, never creates a file beside it. tools/check_readonly.py runs it on
 // a read-only reference file and checks that nothing changed. Host program: not built for the cross
-// targets or the self-test builds. `export` and `edit` are added by later stories.
+// targets or the self-test builds. `edit` is added by a later story.
 //
 //   loomora_use_demo list FILE
 //   loomora_use_demo result FILE ID [FIRST [COUNT]]     steps of a result (default: the first 5)
@@ -12,6 +12,11 @@
 //                                                       the fingerprint again (it must not change)
 //   loomora_use_demo write-basic FILE TITLE             test support: writes the `basic` reference
 //                                                       project, with this title, to FILE (atomic replace)
+//   loomora_use_demo write-small FILE                   test support: writes a project of 3 frames (one 3D with
+//                                                       UVs), 5 layouts, 4 images with pixels, 6 spools and 5
+//                                                       results to FILE
+//   loomora_use_demo export FILE OUT full|light [ID...] writes a copy of FILE to OUT (atomic replace) in that
+//                                                       profile, with only the results ID... when given
 //
 // Output is plain lines. Exit status: 0 success, 1 error (message on stderr), 2 usage.
 #ifndef _CRT_SECURE_NO_WARNINGS
@@ -29,6 +34,7 @@
 
 #include "../include/loomora.h"
 #include "basic_project.hpp"
+#include "export_project.hpp"
 
 namespace {
 
@@ -235,9 +241,60 @@ int write_basic(const char *path, const char *title) {
 
 int usage() {
     std::fputs("usage: loomora_use_demo list FILE | result FILE ID [FIRST [COUNT]] | thumb FILE image|result ID OUT |\n"
-               "                       hold FILE | write-basic FILE TITLE\n",
+               "                       hold FILE | write-basic FILE TITLE | write-small FILE |\n"
+               "                       export FILE OUT full|light [ID...]\n",
                stderr);
     return 2;
+}
+
+int write_small(const char *path) {
+    loomora_editor *e = 0;
+    int32_t rc = export_project::build_pixels(&e, 0);
+    if (rc != 0)
+        return fail("cannot build the project", rc);
+    rc = loomora_editor_save_path(e, path, "2026-11-18T00:00:00Z", 0, 0, 0, 0);
+    loomora_editor_close(e);
+    if (rc != 0)
+        return fail("cannot save the project", rc);
+    std::printf("wrote %s\n", path);
+    return 0;
+}
+
+// The light or subset copy of a project (loomora_project_export_path), written with the time of write-basic.
+int export_copy(const char *path, const char *out_path, const char *profile, int count, char **ids_text) {
+    int32_t which = 0;
+    if (std::strcmp(profile, "full") == 0)
+        which = LOOMORA_PROFILE_FULL;
+    else if (std::strcmp(profile, "light") == 0)
+        which = LOOMORA_PROFILE_LIGHT;
+    else
+        return usage();
+    std::vector<std::uint32_t> ids;
+    for (int i = 0; i < count; ++i)
+        ids.push_back(static_cast<std::uint32_t>(std::strtoul(ids_text[i], 0, 10)));
+    Project pr;
+    int32_t rc = pr.open(path);
+    if (rc != 0)
+        return fail("cannot open the project", rc);
+    loomora_report *report = 0;
+    rc = loomora_project_export_path(pr.p, out_path, which, ids.empty() ? 0 : &ids[0], ids.size(),
+                                     "2026-11-18T00:00:00Z", 0, 0, 0, &report);
+    if (report != 0) {
+        const std::int64_t n = loomora_report_count(report);
+        for (std::int64_t i = 0; i < n; ++i) {
+            uint8_t text[512];
+            const std::int64_t len = loomora_report_text(report, static_cast<size_t>(i), 3, text, sizeof text - 1);
+            if (len > 0 && len < static_cast<std::int64_t>(sizeof text)) {
+                text[len] = 0;
+                std::fprintf(stderr, "report: %s\n", reinterpret_cast<const char *>(text));
+            }
+        }
+        loomora_report_free(report);
+    }
+    if (rc != 0)
+        return fail("cannot export the project", rc);
+    std::printf("exported %s (%s, %s)\n", out_path, profile, ids.empty() ? "all results" : "chosen results");
+    return 0;
 }
 
 } // namespace
@@ -246,6 +303,10 @@ int main(int argc, char **argv) {
     if (argc < 3)
         return usage();
     const std::string cmd = argv[1];
+    if (cmd == "export" && argc >= 5)
+        return export_copy(argv[2], argv[3], argv[4], argc - 5, argv + 5);
+    if (cmd == "write-small" && argc == 3)
+        return write_small(argv[2]);
     if (cmd == "list" && argc == 3)
         return list(argv[2]);
     if (cmd == "result" && argc >= 4 && argc <= 6)
