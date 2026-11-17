@@ -72,6 +72,15 @@ const int kCloexec = O_CLOEXEC;
 const int kCloexec = 0;
 #endif
 
+// A source is opened without waiting: a plain open of a named pipe blocks until a writer appears,
+// so a path naming a FIFO would hang before the "not a regular file" check. The flag changes
+// nothing for a regular file, which is the only kind that is kept.
+#ifdef O_NONBLOCK
+const int kNonblock = O_NONBLOCK;
+#else
+const int kNonblock = 0;
+#endif
+
 // One read or write call never asks for more than this: some systems fail a transfer over
 // 2 GiB with EINVAL.
 const std::size_t kMaxChunk = 1u << 30;
@@ -274,7 +283,7 @@ class PosixSink : public Sink {
 std::unique_ptr<Source> open_file_source(const std::string &utf8_path) {
     int fd;
     do {
-        fd = ::open(utf8_path.c_str(), O_RDONLY | kCloexec);
+        fd = ::open(utf8_path.c_str(), O_RDONLY | kCloexec | kNonblock);
     } while (fd < 0 && errno == EINTR);
     if (fd < 0)
         throw FormatError(LOOMORA_ERR_IO, errno_text("cannot open", utf8_path));
