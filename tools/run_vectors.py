@@ -2575,6 +2575,17 @@ def self_test():
            (os.path.basename(split_project_path(os.path.join("a", "b", "c d.loomora"))[1]),
             os.path.basename(split_project_path(os.path.join("a", "b", "c d.loomora"))[0])),
            ("c d.loomora", "b"))
+    # the exit status the Android launcher reads from the line (an activity has no exit status)
+    expect("an Android OK line is status 0", android_project_status("OK a.loomora: 0 errors, 1 warning"), 0)
+    expect("an Android round trip line is status 0",
+           android_project_status("roundtrip ok OK a.loomora: 0 errors, 0 warnings"), 0)
+    expect("an Android FAIL line with counts is status 1",
+           android_project_status("FAIL a.loomora: 1 error, 0 warnings"), 1)
+    expect("an Android FAIL line with an I/O error code is status 2",
+           android_project_status("FAIL a.loomora: error -10"), 2)
+    expect("an Android FAIL line with another error code is status 1",
+           android_project_status("FAIL a.loomora: error -7"), 1)
+    expect("an Android line that is not a project line has no status", android_project_status("hello"), None)
     print("self-test %s" % ("FAILED" if failures else "passed"))
     return 1 if failures else 0
 
