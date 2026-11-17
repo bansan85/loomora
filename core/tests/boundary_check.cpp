@@ -105,6 +105,20 @@ long call_static_strings() {
 
 long call_abi() { return static_cast<long>(loomora_abi_version()); }
 
+long call_format_version() {
+    int32_t major = 0;
+    int32_t minor = 0;
+    return static_cast<long>(loomora_format_version(&major, &minor)) + major + minor;
+}
+
+long call_format_limit() { return static_cast<long>(loomora_format_limit(LOOMORA_LIMIT_NAILS_PER_LAYOUT)); }
+
+long call_uuid() {
+    const uint8_t random16[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+    char out[37];
+    return loomora_uuid4_from_random(random16, out) + static_cast<long>(out[0]);
+}
+
 struct Case {
     const char *name;
     Call call;
@@ -119,7 +133,10 @@ int main() {
                           {"loomora_probe_record", call_probe},
                           {"loomora_probe_record (sizing call)", call_probe_sizing},
                           {"loomora_eol_warning / loomora_build_compiler", call_static_strings},
-                          {"loomora_abi_version", call_abi}};
+                          {"loomora_abi_version", call_abi},
+                          {"loomora_format_version", call_format_version},
+                          {"loomora_format_limit", call_format_limit},
+                          {"loomora_uuid4_from_random", call_uuid}};
     int failures = 0;
     long total_injected = 0;
 

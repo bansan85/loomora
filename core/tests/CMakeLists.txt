@@ -46,6 +46,27 @@ if(LOOMORA_TARGET_WEB)
 endif()
 add_test(NAME selftest COMMAND loomora_selftest)
 
+# --- loomora_format_selftest: the .loomora format, plain C++11 without a framework -----------
+# Same special cases as loomora_selftest (the Windows 2000 GetThreadId shim, LOOMORA_AVOID_IOSTREAM
+# honoured by format_selftest.cpp, the Emscripten exported main). Cross-compiled and run on every
+# target. It uses the internal headers of core/src (limits(), testing.hpp) through the static
+# library, so it needs no compile definition.
+add_executable(loomora_format_selftest format_selftest.cpp)
+target_include_directories(loomora_format_selftest PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
+target_include_directories(loomora_format_selftest SYSTEM PRIVATE "${LOOMORA_RAPIDJSON_DIR}")
+target_link_libraries(loomora_format_selftest PRIVATE loomora)
+set_target_properties(loomora_format_selftest PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON
+                                                         CXX_EXTENSIONS OFF)
+if(LOOMORA_TARGET_WIN2000)
+  target_sources(loomora_format_selftest PRIVATE
+    "${PROJECT_SOURCE_DIR}/ui/legacy/windows-win32/getthreadid_shim.cpp")
+endif()
+if(LOOMORA_TARGET_WEB)
+  target_link_options(loomora_format_selftest PRIVATE
+    "-sEXPORTED_FUNCTIONS=@${PROJECT_SOURCE_DIR}/bridge/wasm/exports-selftest.txt")
+endif()
+add_test(NAME format_selftest COMMAND loomora_format_selftest)
+
 # --- loomora_tests: Catch2 --------------------------------------------------------------
 # The backend is complete (greet, is_eol, eol_warning, probe_record), so loomora_tests is part
 # of the default build and registered with ctest. It needs the Catch2 submodule
@@ -57,12 +78,35 @@ set(LOOMORA_CATCH2_DIR "${PROJECT_SOURCE_DIR}/third_party/catch2/single_include"
 if(NOT LOOMORA_BUILD_CATCH2_TESTS)
   message(STATUS "Catch2 tests disabled (LOOMORA_BUILD_CATCH2_TESTS=OFF)")
 elseif(EXISTS "${LOOMORA_CATCH2_DIR}/catch2/catch.hpp")
+  # The tests of the .loomora format (spec 002) are every format/test_*.cpp, picked up by glob
+  # (CONFIGURE_DEPENDS): a new test file needs no edit here.
+  file(GLOB LOOMORA_FORMAT_TESTS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/format/test_*.cpp")
+  # The headers of the public C API are compiled as C89 and as C++98 by two tiny libraries
+  # (format/header_c89.c, format/header_cpp98.cpp) that test_c_header.cpp calls.
+  add_library(loomora_header_c89 STATIC format/header_c89.c)
+  target_include_directories(loomora_header_c89 PRIVATE "${PROJECT_SOURCE_DIR}/core/include")
+  set_target_properties(loomora_header_c89 PROPERTIES C_STANDARD 90 C_STANDARD_REQUIRED ON
+                                                      C_EXTENSIONS OFF)
+  add_library(loomora_header_cpp98 STATIC format/header_cpp98.cpp)
+  target_include_directories(loomora_header_cpp98 PRIVATE "${PROJECT_SOURCE_DIR}/core/include")
+  set_target_properties(loomora_header_cpp98 PROPERTIES CXX_STANDARD 98 CXX_STANDARD_REQUIRED ON
+                                                        CXX_EXTENSIONS OFF)
+  if(NOT MSVC OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    target_compile_options(loomora_header_c89 PRIVATE -pedantic-errors -Wall -Wextra -Werror)
+    target_compile_options(loomora_header_cpp98 PRIVATE -pedantic-errors -Wall -Wextra -Werror)
+  endif()
+
   add_executable(loomora_tests
-    test_main.cpp test_greet.cpp test_eol.cpp test_probe.cpp "${LOOMORA_VECTORS_INC}")
+    test_main.cpp test_greet.cpp test_eol.cpp test_probe.cpp ${LOOMORA_FORMAT_TESTS}
+    "${LOOMORA_VECTORS_INC}")
   add_dependencies(loomora_tests loomora_vectors)
   target_include_directories(loomora_tests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}"
-                                                   "${LOOMORA_CATCH2_DIR}")
-  target_link_libraries(loomora_tests PRIVATE loomora)
+                                                   "${LOOMORA_CATCH2_DIR}"
+                                                   "${PROJECT_SOURCE_DIR}/core/src")
+  target_include_directories(loomora_tests SYSTEM PRIVATE "${LOOMORA_RAPIDJSON_DIR}")
+  target_link_libraries(loomora_tests PRIVATE loomora loomora_zlib loomora_header_c89
+                                              loomora_header_cpp98)
   set_target_properties(loomora_tests PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON
                                                  CXX_EXTENSIONS OFF)
   add_test(NAME loomora_tests COMMAND loomora_tests)

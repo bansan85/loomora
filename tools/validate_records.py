@@ -337,6 +337,7 @@ NOT_A_FALLBACK = OrderedDict([
     ("LOOMORA_BUILD_LINUX_MODERN", "build option: which targets exist"),
     ("LOOMORA_BUILD_WIN32_LEGACY", "build option: which targets exist"),
     ("LOOMORA_BUILD_SHARED", "build option: static library only or shared library too"),
+    ("LOOMORA_BUILD_FUZZ", "build option: whether the fuzz targets of core/fuzz exist"),
     ("LOOMORA_BUILD_SHARED_LIB", "export macro of the shared library"),
     ("LOOMORA_USE_DLL", "import macro of the Windows DLL"),
     ("LOOMORA_TARGET_ANDROID", "toolchain marker: adds the Android UI target"),
