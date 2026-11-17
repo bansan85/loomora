@@ -15,11 +15,16 @@ int main(int argc, char **argv) {
     LMProbeOptions options = LMProbeParseArgs(argc, argv);
     NSString *abiError = [AppDelegate abiMismatchMessage];
     if (options.badUsage) {
-        fputs("usage: Loomora [--probe [--probe-input <utf8>]]\n", stderr);
+        fputs("usage: Loomora [--probe [--probe-input <utf8>] | --validate-project <path> |"
+              " --roundtrip-project <path>]\n",
+              stderr);
         status = 2;
-    } else if (options.enabled && abiError != nil) {
+    } else if ((options.enabled || options.projectMode != LMProjectModeNone) && abiError != nil) {
         fprintf(stderr, "loomora: %s\n", [abiError UTF8String]);
         status = 1;
+    } else if (options.projectMode != LMProjectModeNone) {
+        // --validate-project / --roundtrip-project: no window, the line goes to stdout.
+        status = LMProjectProbeRun(options.projectMode, options.projectPath);
     } else {
         NSApplication *application = [NSApplication sharedApplication];
         AppDelegate *delegate = [[AppDelegate alloc] initWithInitialInput:options.input
