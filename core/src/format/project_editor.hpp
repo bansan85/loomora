@@ -168,8 +168,23 @@ struct MeshInput {
                   normals(nullptr), uvs(nullptr) {}
 };
 
+// What an export keeps of an open project (project_export.hpp, FR-017, FR-018).
+struct ExportSelection {
+    bool light;                          // the light profile: nothing that is not needed to use the project
+    bool all_items;                      // true: every item (`results` is ignored); false: the closure of `results`
+    std::vector<std::uint32_t> results;  // identifiers of the chosen results (each must exist)
+    ExportSelection() : light(false), all_items(true) {}
+};
+
 class ProjectEditor {
   public:
+    // The staged content of an export of `base` (a full or a light project): the items of `selection`, all
+    // still "in the archive" (copy-through) except what the light profile rewrites (frame descriptions
+    // without construction and UVs, mesh.bin without its UV section, images without source and target,
+    // results without settings). Defined in project_export.cpp, which explains the rules. A light
+    // `base` with a full `selection` is FormatError(LOOMORA_ERR_READ_ONLY_PROJECT); an unknown result
+    // FormatError(LOOMORA_ERR_NOT_FOUND). The writer then writes it like any other editor.
+    ProjectEditor(std::shared_ptr<const ProjectReader> base, const ExportSelection &selection);
     // A new full, editable, empty project. `project_id` is a lowercase UUID v4 and `created_at` an
     // ISO 8601 UTC time (FormatError(LOOMORA_ERR_INVALID) otherwise); `title` up to 1,024 bytes.
     ProjectEditor(const std::string &project_id, const std::string &title, const std::string &created_at);
