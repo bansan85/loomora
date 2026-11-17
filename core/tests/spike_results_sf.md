@@ -15,7 +15,8 @@ sha256 of the source: `89c5c9b4a8dbe4ca14591476a0c7f14d84ba13d18acf1548a47c10a1e
 |---|---|---|
 | Windows 11 x64, clang (Visual Studio 18 LLVM) + Ninja, CMake target | yes | `S-F1: ok` |
 | WSL Ubuntu 26.04, g++ 15.2 `-std=c++11 -pedantic-errors -Wall -Wextra -O2` (zlib sources with gcc `-w`) | yes | `S-F1: ok` |
-| MinGW-w64 `mingw-w64-win2000-i686.cmake` (Windows 2000 VM) | not run | |
+| MinGW-w64 `mingw-w64-win2000-i686.cmake`, GCC 13-win32 (Ubuntu 26.04 cross build in WSL), `.exe` run on Windows 11 x64 (not on a Windows 2000 VM) | yes | `S-F1: ok`, the three lines identical to the two above except `sizeof(void*)=4` |
+| same toolchain on the Windows 2000 VM | not run | |
 | `android-ndk-r15c.cmake` (emulator or device) | not run | |
 | `emscripten-js-fastcomp.cmake` (Node) | not run | |
 
@@ -28,7 +29,15 @@ rapidjson: 2000 doubles, 45684 bytes, sha256(json)=9dff655478f4534e34de87a66054c
 ```
 
 A toolchain that prints these three lines produces the same deflate bytes and the same JSON text.
-No fallback is needed on the two hosts. Not measured: the three old toolchains.
+No fallback is needed on the two hosts. Not measured: the Android and Emscripten toolchains, nor the Windows 2000 VM.
+
+MinGW-w64 win2000 (T059, cross-architecture phase): `loomora_spike_fmt_deps.exe` built from WSL with
+`cmake/toolchains/mingw-w64-win2000-i686.cmake` (`_WIN32_WINNT=0x0500`, msvcrt, static libgcc and libstdc++, the
+GetThreadId and condition variable shim linked in), run on Windows 11 x64 (32-bit process): the `zlib` level 6 and
+level 1 lines and the `rapidjson` line are byte for byte the three lines above (same `sha256(deflated)` `0f01cbcd...`,
+`2d7f429d...` and `sha256(json)` `9dff6554...`), so zlib and RapidJSON need no fallback with the MinGW-w64 toolchain.
+Its import table passes `tools/check_imports.py --arch x86` (69 imports, 5 on `verify` entries of
+`tools/win2000_imports.json`: `msvcrt.dll!__p___initenv`, `__p___mb_cur_max`, `__p__iob`, `_lock`, `_unlock`).
 
 ## S-F3: file operations (T010, `tools/guest/fileio_probe.c`)
 

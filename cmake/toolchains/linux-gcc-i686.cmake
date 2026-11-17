@@ -27,3 +27,11 @@ set(CMAKE_LIBRARY_ARCHITECTURE i386-linux-gnu)
 # development package is not installed pkg-config finds nothing, and the UI is built without Xft.
 set(ENV{PKG_CONFIG_LIBDIR}
     "/usr/lib/i386-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig")
+
+# Floating point (spike S-F2, spec 002 T059): on 32-bit x86 GCC computes doubles on the x87 unit with
+# 80-bit intermediates by default, and the test fixtures that build the reference projects (cos, sin,
+# rounding to 3 decimals) then differ from x86-64 in some nails, so the bytes of `multi` differ. The
+# test programs are therefore compiled with SSE2 arithmetic (core/tests/CMakeLists.txt,
+# loomora_test_fp); libloomora is unchanged. Needs a CPU with SSE2 to run the tests (Pentium 4 and later).
+# Fallback id x87-double-fixtures, platform linux-legacy-i686.
+set(LOOMORA_TEST_FP_FLAGS -msse2 -mfpmath=sse)

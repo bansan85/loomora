@@ -43,8 +43,10 @@ endif()
 # libgcc's gthr-win32.o, pulled in by the exception machinery of libstdc++, would import
 # KERNEL32!GetThreadId (Vista and later). The shim satisfies that reference inside the
 # executable; see getthreadid_shim.cpp and docs/implementation/adr/0002. The 64-bit floor (XP x64) has
-# GetThreadId and every other target has it, so those builds are left as they are.
-if(LOOMORA_TARGET_WIN2000)
+# GetThreadId and every other target has it, so on those builds the shim only holds the condition
+# variable functions (Vista and later, also missing on XP x64) that libgcc's gthr-win32-cond.o imports
+# (LOOMORA_TARGET_WINXP64, mingw-w64-win-x86_64.cmake; Windows 2000 build: both parts).
+if(LOOMORA_TARGET_WIN2000 OR LOOMORA_TARGET_WINXP64)
   list(APPEND LOOMORA_WIN32_SOURCES getthreadid_shim.cpp)
 endif()
 

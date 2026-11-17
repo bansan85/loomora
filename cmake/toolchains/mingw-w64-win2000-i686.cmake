@@ -51,3 +51,11 @@ set(CMAKE_SHARED_LINKER_FLAGS_INIT "-static-libgcc -static-libstdc++")
 
 # Build-time programs (Python for the test vectors) are the host ones.
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+
+# Floating point (spike S-F2, spec 002 T059): 32-bit x86 GCC computes doubles on the x87 unit with
+# 80-bit intermediates by default; the test fixtures that build the reference projects (cos, sin,
+# rounding to 3 decimals) then give other nails than on x86-64 and the bytes of `multi` differ. The test
+# programs are compiled with SSE2 arithmetic (core/tests/CMakeLists.txt, loomora_test_fp); libloomora
+# and the UI are unchanged. Running them needs a CPU with SSE2 (the Windows 2000 floor itself does not).
+# Fallback id x87-double-fixtures, platform windows-2000-x86.
+set(LOOMORA_TEST_FP_FLAGS -msse2 -mfpmath=sse)

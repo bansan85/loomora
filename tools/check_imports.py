@@ -131,7 +131,9 @@ def parse_objdump(text):
             imports.setdefault(dll, [])
             in_table = False
             continue
-        if dll and re.match(r"\s*vma:\s+Hint/Ord", line):
+        # binutils before 2.39 prints "vma: Hint/Ord Member-Name Bound-To", later ones
+        # "vma: Ordinal Hint Member-Name Bound-To"
+        if dll and re.match(r"\s*vma:\s+(Hint/Ord|Ordinal\s+Hint)", line):
             in_table = True
             continue
         if not in_table:
@@ -140,7 +142,9 @@ def parse_objdump(text):
             in_table = False
             dll = None
             continue
-        m = re.match(r"\s*[0-9a-fA-F]+\s+\d+\s+(\S+)\s*$", line)
+        # "<address> <hint> <name>" (older), "<address> <ordinal or <none>> <hint hex> <name>" (newer)
+        m = (re.match(r"\s*[0-9a-fA-F]+\s+\d+\s+(\S+)\s*$", line) or
+             re.match(r"\s*[0-9a-fA-F]+\s+<none>\s+[0-9a-fA-F]+\s+(\S+)\s*$", line))
         if m:
             imports[dll].append(m.group(1))
         else:
@@ -166,6 +170,10 @@ def check_imports(imports, odd, data, arch, allowlist_name="tools/win2000_import
         failures.append("no import table found in the objdump output")
     for dll in sorted(imports):
         known = allowed.get(dll)
+        if not imports[dll]:
+            # a DLL named in the table whose functions were not parsed: an unknown objdump layout
+            # must fail, not pass with "0 imports" (binutils 2.39 changed the layout)
+            failures.append("%s: no imported function parsed (unknown objdump layout?)" % dll)
         for function in sorted(imports[dll]):
             where = "%s!%s" % (dll, function)
             if known is None:
@@ -363,6 +371,21 @@ The Import Tables (interpreted .idata section contents)
 """
 
 
+FAKE_OBJDUMP_NEW = """loomora.exe:     file format pei-i386
+
+The Import Tables (interpreted .idata section contents)
+ vma:            Hint    Time      Forward  DLL       First
+                 Table   Stamp     Chain    Name      Thunk
+ 0014d000	0014d03c 00000000 00000000 0014d8cc 0014d19c
+
+	DLL Name: KERNEL32.dll
+	vma:     Ordinal  Hint  Member-Name  Bound-To
+	0014d19c  <none>  0092  CloseHandle
+	0014d1a0  <none>  0384  InitializeConditionVariable
+
+"""
+
+
 def fake_dll(names):
     """A minimal PE32 DLL whose export table holds `names` plus one nameless (ordinal) export."""
     text = b"".join(n.encode("ascii") + b"\0" for n in names)
@@ -402,6 +425,15 @@ def self_test():
                        "user32.dll": ["MessageBoxW"]} and not odd,
            "fabricated import table parsed into dll -> functions")
 
+    arch, imports_new, odd_new = parse_objdump(FAKE_OBJDUMP_NEW)
+    expect(imports_new == {"kernel32.dll": ["CloseHandle", "InitializeConditionVariable"]} and
+           not odd_new, "import table in the layout of binutils 2.39 and later parsed")
+    failures, _ = check_imports(imports_new, odd_new, data, "x86")
+    expect(len(failures) == 1 and "InitializeConditionVariable" in failures[0],
+           "x86: a Vista-only function in the new objdump layout is rejected: %s" % failures)
+    failures, _ = check_imports({"kernel32.dll": []}, [], data, "x86")
+    expect(len(failures) == 1 and "no imported function parsed" in failures[0],
+           "a DLL without a parsed function fails instead of passing with 0 imports")
     failures, verify = check_imports(imports, odd, data, "x86")
     expect(len(failures) == 1 and "kernel32.dll!GetThreadId" in failures[0],
            "x86: the Vista-only kernel32.dll!GetThreadId is rejected, and only it: %s" % failures)
