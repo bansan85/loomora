@@ -411,11 +411,11 @@ void parse_frame_json(const std::string &text, model::Frame &out) {
         fr.name = f.string("name", model::kMaxNameBytes);
         if (!model::parse_frame_kind(f.string("kind", 64), fr.kind))
             json::fail("frame", "schema.value", "kind must be 2d or 3d");
-        if (fr.kind == model::kFrame3D)
-            json::fail("frame", "schema.value", "3D frames are not supported by this version of the editor");
         const json::Fields dims = f.object("dimensions");
         fr.width_mm = dims.number("width_mm");
         fr.height_mm = dims.number("height_mm");
+        if (fr.kind == model::kFrame3D)
+            fr.depth_mm = dims.number("depth_mm");
         if (f.has("background"))
             fr.background = f.string("background", 16);
         read_shape(f.object("outline"), fr.outline);
@@ -429,6 +429,30 @@ void parse_frame_json(const std::string &text, model::Frame &out) {
         }
         if (f.has("surface") && !model::parse_surface(f.string("surface", 64), fr.surface))
             json::fail("frame", "schema.value", "surface is not a known surface");
+        if (f.has("body") && !model::parse_body(f.string("body", 64), fr.body))
+            json::fail("frame", "schema.value", "body must be solid, shell or guide");
+        // The optional description of the mesh: only what the caller knows (the counts and flags are the
+        // editor's, derived from the mesh it is given).
+        if (f.has("mesh")) {
+            const json::Fields m = f.object("mesh");
+            fr.has_mesh = true;
+            if (m.has("watertight"))
+                fr.mesh.watertight = m.boolean("watertight");
+            if (m.has("manifold"))
+                fr.mesh.manifold = m.boolean("manifold");
+            if (m.has("source")) {
+                const json::Fields s = m.object("source");
+                fr.mesh.has_source = true;
+                fr.mesh.source_name = s.string("name", model::kMaxNameBytes);
+                if (s.has("sha256"))
+                    fr.mesh.source_sha256 = s.string("sha256", 64);
+            }
+            if (m.has("construction")) {
+                if (!m.get("construction").IsObject())
+                    json::fail("frame", "schema.type", "mesh.construction must be an object");
+                fr.mesh.construction_json = compact_value(m.get("construction"));
+            }
+        }
         out = fr;
     });
 }
@@ -438,6 +462,8 @@ void parse_layout_json(const std::string &text, model::Layout &out) {
         json::Fields f(doc, "layout", "");
         model::Layout l;
         l.name = f.string("name", model::kMaxNameBytes);
+        if (f.has("frame")) // 0 when absent: the editor compares it with the layout's frame on a replace
+            l.frame = f.u32("frame");
         out = l;
     });
 }

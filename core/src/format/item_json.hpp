@@ -11,7 +11,10 @@
 //                      `thumbnail` and `settings`) are ignored: the editor derives them. A text that
 //                      is not valid JSON or lacks a field throws FormatError(LOOMORA_ERR_INVALID_ITEM)
 //                      carrying the schema.* issue.
-//                      Only 2D frames are read for now ("kind":"3d" is refused).
+//                      A frame is read as 2D or 3D (depth_mm, body, and the optional description of the
+//                      "mesh" object: watertight, manifold, source, construction; the counts and flags
+//                      of the mesh are the editor's). A layout's "frame" is read when present (0 when
+//                      absent) so a replace can refuse a change of it.
 //
 // The rules of the data model are NOT checked here (model::check_* do it, with the item identifier
 // the editor allocates).
