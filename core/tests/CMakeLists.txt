@@ -123,3 +123,22 @@ target_include_directories(loomora_spike_fmt_deps SYSTEM PRIVATE "${LOOMORA_RAPI
 target_link_libraries(loomora_spike_fmt_deps PRIVATE loomora_zlib)
 set_target_properties(loomora_spike_fmt_deps PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON
                                                          CXX_EXTENSIONS OFF)
+
+# --- reader corpus (spec 002, T035) ---------------------------------------------------------
+# format/test_project_reader.cpp opens the files of tools/gen_invalid_corpus.py (independent of
+# the C++ code). The corpus is generated into the build directory at build time and its path is
+# passed to the tests as FMT_CORPUS_DIR; the tests say so and do nothing when it is absent.
+if(TARGET loomora_tests)
+  set(FMT_CORPUS_DIR "${CMAKE_CURRENT_BINARY_DIR}/corpus")
+  add_custom_command(
+    OUTPUT "${FMT_CORPUS_DIR}/corpus.json"
+    COMMAND "${Python3_EXECUTABLE}" "${LOOMORA_TOOLS_DIR}/gen_invalid_corpus.py"
+            "${FMT_CORPUS_DIR}" --skip-truncate
+    DEPENDS "${LOOMORA_TOOLS_DIR}/gen_invalid_corpus.py" "${LOOMORA_TOOLS_DIR}/loomora_pyfmt.py"
+    COMMENT "Generating the .loomora corpus"
+    VERBATIM)
+  add_custom_target(loomora_corpus DEPENDS "${FMT_CORPUS_DIR}/corpus.json")
+  add_dependencies(loomora_tests loomora_corpus)
+  target_compile_definitions(loomora_tests PRIVATE FMT_CORPUS_DIR="${FMT_CORPUS_DIR}")
+endif()
+# --- end of reader corpus ---------------------------------------------------------------------
