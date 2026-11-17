@@ -13,6 +13,8 @@ if(LOOMORA_BUILD_TESTS)
   enable_testing()
 endif()
 
+# zlib (submodule third_party/zlib; deflate/inflate of the .loomora format), before the core that links it.
+include(cmake/loomora_zlib.cmake)
 add_subdirectory(core)
 
 # The host-msvc preset (loomora.dll for the WinUI 3 UI) turns the Legacy UI off: it is built with
