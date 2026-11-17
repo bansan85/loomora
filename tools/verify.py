@@ -522,8 +522,10 @@ def step_cli_validate(ctx):
     if exe is None:
         return ctx.skip(name, "the host command `loomora validate` was not built here")
     log = ctx.log(name)
+    corpus = ctx.build_dir / "corpus"  # under the build directory (never /tmp), regenerated each run
+    shutil.rmtree(str(corpus), ignore_errors=True)
     rc, _ = run_logged(log, [sys.executable, ROOT / "tools" / "check_cli_validate.py", "--loomora", exe,
-                             "--jobs", ctx.jobs])
+                             "--corpus", corpus, "--jobs", ctx.jobs])
     m = re.search(r"check_cli_validate: (\d+) corpus file\(s\).*?, (\d+) failed; (\d+) option row\(s\), (\d+) failed",
                   log_text(log))
     if rc == 0 and m:

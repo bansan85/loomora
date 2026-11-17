@@ -4,8 +4,9 @@
 Usage:
   python tools/check_cli_validate.py --loomora PATH_TO_EXE [--corpus DIR] [--jobs N] [-v]
 
---corpus DIR is a directory written by `python tools/gen_invalid_corpus.py DIR` (it holds corpus.json).
-Without it the corpus is generated into a temporary directory that is removed at the end.
+--corpus DIR is a directory written by `python tools/gen_invalid_corpus.py DIR` (it holds corpus.json);
+when DIR has no corpus.json the corpus is generated into it and kept. Without --corpus it is generated
+into a temporary directory that is removed at the end.
 
 What it runs (standard library only; the program is started as a child process, nothing of Loomora
 is imported):
@@ -325,14 +326,15 @@ def main(argv=None):
 
     own_dir = None
     corpus = args.corpus
-    if corpus is None:
-        own_dir = tempfile.mkdtemp(prefix="loomora-corpus-")
-        corpus = own_dir
+    if corpus is None or not os.path.isfile(os.path.join(corpus, "corpus.json")):
+        if corpus is None:
+            own_dir = corpus = tempfile.mkdtemp(prefix="loomora-corpus-")  # removed at the end
         gen = subprocess.run([sys.executable, os.path.join(HERE, "gen_invalid_corpus.py"), corpus],
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         if gen.returncode != 0:
             print("check_cli_validate: the corpus generator failed:\n" + gen.stdout.decode("utf-8", "replace"), file=sys.stderr)
-            shutil.rmtree(own_dir, ignore_errors=True)
+            if own_dir:
+                shutil.rmtree(own_dir, ignore_errors=True)
             return 2
     corpus = os.path.abspath(corpus)
     try:
