@@ -114,3 +114,12 @@ else()
   message(STATUS "Catch2 submodule not checked out (git submodule update --init): "
                  "loomora_tests is not defined")
 endif()
+
+# --- spike S-F1 (spec 002, T009): zlib and RapidJSON on a toolchain ---------------------------
+# Not part of the default build or of ctest: build it by hand with
+# `cmake --build <dir> --target loomora_spike_fmt_deps` and run it on each toolchain.
+add_executable(loomora_spike_fmt_deps EXCLUDE_FROM_ALL spike_fmt_deps.cpp)
+target_include_directories(loomora_spike_fmt_deps SYSTEM PRIVATE "${LOOMORA_RAPIDJSON_DIR}")
+target_link_libraries(loomora_spike_fmt_deps PRIVATE loomora_zlib)
+set_target_properties(loomora_spike_fmt_deps PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON
+                                                         CXX_EXTENSIONS OFF)
