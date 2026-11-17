@@ -150,7 +150,10 @@ void mutate_range(Bytes &b, std::size_t lo, std::size_t hi, Rng &rng, bool keep_
     if (hi <= lo || hi > b.size())
         return;
     const std::size_t len = hi - lo;
-    switch (rng.below(keep_size ? 8 : 12)) {
+    // Inside a JSON entry most edits change a number (an id, a count, a coordinate): the file stays
+    // well formed, so the edit reaches the model and the semantic rules instead of the JSON parser.
+    const bool json = keep_size && (b[lo] == '{' || b[lo] == '[');
+    switch (json && rng.chance(85) ? 4 : rng.below(keep_size ? 8 : 12)) {
     case 0: // flip a bit
         b[lo + rng.below(len)] ^= static_cast<std::uint8_t>(1u << rng.below(8));
         break;
@@ -353,7 +356,8 @@ int main(int argc, char **argv) {
         const double elapsed = std::chrono::duration<double>(Clock::now() - start).count();
         if ((iterations != 0 && executed >= iterations) || (iterations == 0 && elapsed >= seconds))
             break;
-        input = seeds[rng.below(seeds.size())];
+        // Two thirds of the inputs start from an all-stored seed: every entry of it can be edited in place.
+        input = seeds[(seeds.size() > plain && rng.chance(65)) ? plain + rng.below(seeds.size() - plain) : rng.below(seeds.size())];
         mutate(input, seeds, rng, max_len);
         g_current = &input;
         g_iteration = executed;
