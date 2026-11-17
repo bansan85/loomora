@@ -1002,6 +1002,10 @@ def run_android_legacy(args):
         check_android_standards(build_dir)
         lib = build_dir / "ui" / "legacy" / "android-views" / "libloomora_jni.so"
         selftest = build_dir / "core" / "tests" / "loomora_selftest"
+        # the test programs run on the emulator with adb (spec 002 T060, T009): the .loomora format
+        # self-test, the reference generator and the zlib / RapidJSON spike
+        extra_tests = [build_dir / "core" / "tests" / name
+                       for name in ("loomora_format_selftest", "loomora_refgen")]
         for path in (lib, selftest):
             if not path.is_file():
                 sys.exit("build finished but %s is missing" % path)
@@ -1010,6 +1014,9 @@ def run_android_legacy(args):
         target_dir = out_dir / "selftest" / abi
         target_dir.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(str(selftest), str(target_dir / "loomora_selftest"))
+        for path in extra_tests:
+            if path.is_file():
+                shutil.copyfile(str(path), str(target_dir / path.name))
         print("%s: needs %s; exports %d JNI function(s); %d undefined symbol(s), none missing "
               "from the API %d libraries (linked with --no-undefined)"
               % (abi, ", ".join(facts[abi][0]), len(facts[abi][1]), len(facts[abi][2]),

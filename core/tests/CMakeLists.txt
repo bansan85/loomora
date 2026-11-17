@@ -144,8 +144,9 @@ endif()
 # --- loomora_refgen: writes the `basic` reference project (spec 002, T039). Host only ----------
 # Also built by the MinGW-w64 Windows toolchains (an .exe run on Windows) and by the i686 Linux
 # toolchain (run natively on the 64-bit host) for the cross-architecture identity of the files (T059);
-# not by the Web, Android or iOS cross builds, which cannot run it.
-if(NOT LOOMORA_TARGET_WEB AND NOT LOOMORA_TARGET_ANDROID AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS"
+# and by the Android NDK r15c toolchain (run with adb on the emulator, T060); not by the Web or iOS
+# cross builds, which cannot run it.
+if(NOT LOOMORA_TARGET_WEB AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS"
    AND (NOT CMAKE_CROSSCOMPILING OR CMAKE_SYSTEM_NAME STREQUAL "Windows"
         OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
   add_executable(loomora_refgen refgen.cpp)
