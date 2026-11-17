@@ -7,6 +7,7 @@ using System;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Windows.ApplicationModel.DynamicDependency;
 
 namespace Loomora.WinUI;
@@ -32,8 +33,18 @@ internal static partial class Program
         {
             // no standard error
         }
-        if (!Probe.Enabled)
+        if (!Probe.Enabled && Probe.ProjectMode == 0)
             MessageBox(0, message, "Loomora", 0x10 /* MB_OK | MB_ICONERROR */);
+    }
+
+    // The project probe modes (contracts/ui-validate-project.md): the backend only, so neither the
+    // Windows App Runtime nor a window is needed. The line goes to standard output, in UTF-8.
+    private static int RunProject()
+    {
+        int status = ProjectProbe.Run(Probe.ProjectMode, Probe.ProjectPath, out string line);
+        if (line.Length != 0)
+            Probe.WriteToStandardOutput(line + '\n', new UTF8Encoding(false));
+        return status;
     }
 
     [STAThread]
@@ -43,7 +54,8 @@ internal static partial class Program
         Probe.ParseCommandLine(args);
         if (Probe.BadUsage)
         {
-            Console.Error.WriteLine("usage: Loomora.WinUI.exe [--probe [--probe-input <utf8>]]");
+            Console.Error.WriteLine("usage: Loomora.WinUI.exe [--probe [--probe-input <utf8>] | " +
+                                    "--validate-project <path> | --roundtrip-project <path>]");
             return 2;
         }
 
@@ -60,6 +72,9 @@ internal static partial class Program
             Fail("The engine (loomora.dll, same architecture as this program) cannot be loaded: " + e.Message);
             return 1;
         }
+
+        if (Probe.ProjectMode != 0) // --validate-project / --roundtrip-project: no window, no runtime
+            return RunProject();
 
         if (!Bootstrap.TryInitialize(WindowsAppSdkMajorMinor, out int result))
         {

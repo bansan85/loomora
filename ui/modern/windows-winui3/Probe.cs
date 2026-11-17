@@ -1,4 +1,5 @@
-// Probe mode of the Windows Modern UI (ui-contract.md): --probe and --probe-input <utf8>.
+// Probe mode of the Windows Modern UI (ui-contract.md): --probe and --probe-input <utf8>, and the
+// project modes --validate-project <path> and --roundtrip-project <path> (ProjectProbe.cs).
 //
 // The probe line is built by the backend (loomora_probe_record); this file only measures, converts
 // and writes it: to standard output (attached to the console of the parent when the process has
@@ -27,6 +28,8 @@ internal static partial class Probe
     internal static bool Enabled { get; private set; }
     internal static bool HasInput { get; private set; }
     internal static string Input { get; private set; } = string.Empty;
+    internal static int ProjectMode { get; private set; } // ProjectProbe.Validate or .Roundtrip, 0 if none
+    internal static string ProjectPath { get; private set; } = string.Empty;
     internal static bool BadUsage { get; private set; }
     internal static int ExitStatus { get; set; }
 
@@ -56,6 +59,7 @@ internal static partial class Probe
 
     internal static void ParseCommandLine(string[] args)
     {
+        int projectOptions = 0; // --validate-project and --roundtrip-project given, with their repeats
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i] == "--probe")
@@ -74,9 +78,22 @@ internal static partial class Probe
                     BadUsage = true;
                 }
             }
+            else if (args[i] == "--validate-project" || args[i] == "--roundtrip-project")
+            {
+                projectOptions++;
+                ProjectMode = args[i] == "--validate-project" ? ProjectProbe.Validate : ProjectProbe.Roundtrip;
+                if (i + 1 < args.Length)
+                    ProjectPath = args[++i];
+                else
+                    BadUsage = true;
+            }
         }
         // The input override is only meaningful in probe mode, and must be convertible to UTF-8.
         if (HasInput && (!Enabled || !IsWellFormedUtf16(Input)))
+            BadUsage = true;
+        // The three modes exclude each other, and the path must be convertible to UTF-8.
+        if (projectOptions > 1 || (projectOptions == 1 && (Enabled || HasInput)) ||
+            (projectOptions == 1 && !IsWellFormedUtf16(ProjectPath)))
             BadUsage = true;
     }
 
@@ -121,7 +138,10 @@ internal static partial class Probe
     private static string TimestampUtc() =>
         DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
 
-    private static void WriteToStandardOutput(string line)
+    internal static void WriteToStandardOutput(string line) => WriteToStandardOutput(line, Encoding.ASCII);
+
+    // The project line carries the file name as given, so it is UTF-8.
+    internal static void WriteToStandardOutput(string line, Encoding encoding)
     {
         try
         {
@@ -141,7 +161,7 @@ internal static partial class Probe
                 return; // no console: the file is the output
             using (stream)
             {
-                byte[] bytes = Encoding.ASCII.GetBytes(line);
+                byte[] bytes = encoding.GetBytes(line);
                 stream.Write(bytes, 0, bytes.Length);
                 stream.Flush();
             }
