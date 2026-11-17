@@ -27,13 +27,13 @@ slower than 5 s** (slowest input 0.26 s). Nothing to fix, so no regression file 
 - Wall time: run 1 was 2,746 s (45.8 min, 10.2 million inputs, under the one-hour limit); run 2 was 720 s.
   Throughput with 15 processes on 16 threads: 220 to 330 inputs/s per loop process, about 390 inputs/s per libFuzzer process
   (about 1,500 inputs/s for one process alone).
-- libFuzzer final stats: slowest unit 0 s (< 1 s), peak RSS 480 to 490 MB, coverage 140 to 142 edges-features plateau
-  (142 reached in the first minutes), 92 to 186 units added per process.
+- libFuzzer final stats: slowest unit 0 s (< 1 s), peak RSS 480 to 490 MB, final coverage 140 to 143 libFuzzer coverage points (plateau
+  reached in the first minutes), 92 to 186 units added per process.
 - Run 1 had two libFuzzer processes (hostile seed set) that exited at start because the seed argument was a file, not a
   directory; run 2 redoes that seed set with the right argument (they are not counted in the totals above).
 
 ## Result
 
 No sanitizer report, no crash artifact (`crash-*`, `timeout-*`, `leak-*`, `oom-*`), no input over 5 s. Opened vs rejected
-inputs and the most frequent first errors are printed by each loop process (about 4 % of mutants still open).
+inputs and the most frequent first errors are printed by each loop process (13 % of the loop mutants still open and pass validation (78,360 of 600,000 for the first process)).
 Logs: `$HOME/loomora-build/fuzz-logs/run1`, `run2` (not committed).
