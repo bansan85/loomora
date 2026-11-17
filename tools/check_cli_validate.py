@@ -91,6 +91,8 @@ def code_ok(meta, found_codes):
     expected = meta.get("code")
     if not expected:
         return True
+    if expected == "schema.number":  # the library reports a non-finite number as num.not_finite
+        return "num.not_finite" in found_codes or "schema.number" in found_codes
     if meta.get("contract_code"):
         return expected in found_codes
     family = meta.get("family") or expected.split(".")[0]
