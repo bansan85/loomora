@@ -30,7 +30,7 @@ them into the repository; asking the owner first is required before any image go
 docs/implementation (see CLAUDE.md).
 
 --only NAME,...  limit the checks; a NAME is a kind (build, ctest, vectors, std, ui-logic, records, diff,
-                 screenshots, sanitizer, variants, wsl) or a UI (legacy, modern) or a variant id
+                 screenshots, sanitizer, variants, wsl, format, format-files, readonly) or a UI (legacy, modern) or a variant id
                  (gtk-floor, gtk4, i686, xlib-corefont); the checks matching any NAME run.
 --variants       also build / run the non-default variants (Linux: GTK 3.10 floor, GTK 4, i686
                  Xlib, Xlib core-font run), in quick or full. Only on request or when the files
@@ -512,6 +512,32 @@ def step_corefont(ctx):
     run_vectors(ctx, "legacy", ctx.exes.get("legacy"), "xlib-corefont", {"LOOMORA_XLIB_NO_XFT": "1"})
 
 
+# ---- format checks (spec 002): reference files and read-only use mode -----------------------------
+def step_format_files(ctx):
+    """T039: loomora_refgen writes basic, empty and escape40; the independent Python reader accepts them."""
+    bdir = ctx.build_dir / "default"
+    refgen = find_exe(bdir, "loomora_refgen.exe" if IS_WINDOWS else "loomora_refgen")
+    if refgen is None:
+        return ctx.fail("format-files", "loomora_refgen is not built")
+    out = ctx.build_dir / "format-files"
+    shutil.rmtree(str(out), ignore_errors=True)
+    out.mkdir(parents=True)
+    log = ctx.log("format-files")
+    rc, _ = run_logged(log, [refgen, out])
+    if rc != 0:
+        return ctx.fail("format-files", "loomora_refgen status %d" % rc, log)
+    rc, _ = run_logged(log, [sys.executable, ROOT / "tools" / "check_loomora.py", "--canonical", out])
+    ctx.ok("format-files", "basic, empty, escape40 pass check_loomora --canonical") if rc == 0 else ctx.fail("format-files", "check_loomora status %d" % rc, log)
+
+
+def step_readonly(ctx):
+    """T042: use mode is read-only (SC-012) and a replace under a reader keeps old and new apart."""
+    log = ctx.log("readonly")
+    rc, _ = run_logged(log, [sys.executable, ROOT / "tools" / "check_readonly.py", "--build-dir", ctx.build_dir / "default"])
+    ctx.ok("readonly") if rc == 0 else ctx.fail("readonly", "check_readonly status %d" % rc, log)
+# ---- end of format checks ---------------------------------------------------------------------------
+
+
 # ---- plan and main -----------------------------------------------------------------------------
 
 def make_plan(ctx):
@@ -519,6 +545,8 @@ def make_plan(ctx):
     S = []
     S.append(("build", {"build", "legacy", "modern"}, "configure and build core + the UIs of this host (default variant)", step_build, True))
     S.append(("ctest", {"ctest"}, "ctest of the default build", step_ctest, True))
+    S.append(("format-files", {"format-files", "format"}, "loomora_refgen output checked by tools/check_loomora.py --canonical", step_format_files, True))
+    S.append(("readonly", {"readonly", "format"}, "tools/check_readonly.py (use mode writes nothing; replace under a reader)", step_readonly, True))
     if IS_WINDOWS:
         S.append(("run_vectors windows legacy", {"vectors", "legacy"}, "tools/run_vectors.py on the Win32 executable", lambda c: step_vectors(c, "legacy"), True))
         S.append(("run_vectors windows modern", {"vectors", "modern"}, "tools/run_vectors.py on the WinUI 3 build of tools/build.py windows modern (skipped when not built)", step_vectors_winui, True))
