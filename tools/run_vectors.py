@@ -1145,6 +1145,25 @@ ANDROID_ACTIVITY = ANDROID_PACKAGE + "/.MainActivity"
 ANDROID_TAG = "LOOMORA_PROBE"
 ANDROID_INPUT_FILE = "/data/local/tmp/loomora-probe-input.txt"
 ANDROID_MAX_EXTRA_BYTES = 1500  # longest text given as the plain probe_input extra
+ANDROID_PROJECT_TAG = "LOOMORA_VALIDATE"  # logcat tag of the project modes (spec 002, T091)
+ANDROID_PROJECT_DIR = "/data/local/tmp"  # where the launcher pushes the .loomora file the app reads
+ANDROID_PROJECT_EXTRAS = {"--validate-project": "validate_project", "--roundtrip-project": "roundtrip_project"}
+# LOOMORA_ERR_* of a failure that leaves no report to read: the command line exits with status 2 for them
+ANDROID_UNREADABLE_CODES = (-3, -4, -10, -16, -22)
+
+
+def android_project_status(line):
+    """The exit status the command line gives for the line a project mode logged (an Android activity has
+    no exit status): 0 for `OK ...` and `roundtrip ok ...`, 2 for `FAIL name: error <code>` with a code
+    that leaves nothing to read, 1 for any other `FAIL ...`; None when the line is neither."""
+    if line.startswith("OK ") or line.startswith("roundtrip ok "):
+        return 0
+    m = re.search(r"^(?:roundtrip )?FAIL .*: error (-?[0-9]+)$", line)
+    if m and int(m.group(1)) in ANDROID_UNREADABLE_CODES:
+        return 2
+    if line.startswith("FAIL ") or line.startswith("roundtrip FAIL "):
+        return 1
+    return None
 
 
 def adb_executable(args):
@@ -1345,6 +1364,88 @@ class AndroidLegacyLauncher(Launcher):
                 break
             time.sleep(0.5)
         return RunResult(status, line + "\n", stderr, time.time() - start)
+
+    def _project_log(self, tag, level):
+        """The lines logged to `tag` (at `level` or above) since the last `logcat -c`."""
+        out = self._adb("logcat", "-d", "-v", "raw", "-s", "%s:%s" % (tag, level), timeout=30)[1]
+        return [l for l in (e.strip("\r") for e in out.split("\n")) if l and not l.startswith("-----")]
+
+    def run_project(self, ui_args, cwd, timeout):
+        """A project mode (spec 002, T088, T091) on the device: the file is pushed to /data/local/tmp, the
+        activity is started with the intent extra `validate_project` or `roundtrip_project` (the path on
+        the device) and the line is read from logcat (tag LOOMORA_VALIDATE). `ui_args` is the command-line
+        form of the other launchers (--validate-project NAME, --roundtrip-project NAME, --probe); a mode
+        without a path becomes a boolean extra, which the UI refuses. The UI prints the path it was given,
+        so the device directory is removed from the line before the comparison with the command (which
+        prints the name it was given). An activity has no exit status: the status is read from the line
+        (android_project_status); a usage error logs nothing and gives the status 2."""
+        start = time.time()
+        names = [a for a in ui_args if not a.startswith("--")]
+        device_path = None
+        if names:
+            device_path = "%s/%s" % (ANDROID_PROJECT_DIR, names[0])
+            self._adb("shell", "rm -f " + device_path)  # a missing file stays missing on the device too
+            if (Path(cwd) / names[0]).is_file():
+                self._adb("push", str(Path(cwd) / names[0]), device_path)
+                self._adb("shell", "chmod 644 " + device_path)
+        extras = []
+        i = 0
+        while i < len(ui_args):
+            arg = ui_args[i]
+            has_path = i + 1 < len(ui_args) and not ui_args[i + 1].startswith("--")
+            if arg in ANDROID_PROJECT_EXTRAS:
+                key = ANDROID_PROJECT_EXTRAS[arg]
+                extras.append("--es %s %s" % (key, device_path) if has_path else "--ez %s true" % key)
+                i += 2 if has_path else 1
+            elif arg == "--probe":
+                extras.append("--ez probe true")
+                i += 1
+            else:
+                return RunResult(None, "", "", 0.0, "unknown argument %r for an Android project mode" % arg)
+        expect_line = len(extras) == 1 and extras[0].startswith("--es ")
+        self._adb("shell", "am force-stop " + self.package)
+        self._adb("logcat", "-c")
+        # no -W: a project mode finishes its activity at once and `am start -W` then waits for ever
+        cmd = "am start -n %s/%s %s" % (self.package, self.activity, " ".join(extras))
+        code, out, err = self._adb("shell", cmd, timeout=60)
+        if code != 0 or "Error" in out:
+            return RunResult(None, "", err, time.time() - start,
+                             "am start failed: %s %s" % (out.strip()[:300], err.strip()[:300]))
+        while expect_line and time.time() - start < timeout and not self._project_log(ANDROID_PROJECT_TAG, "I"):
+            time.sleep(0.5)
+        # the UI finishes by itself, after a usage error as well: wait until it has been resumed (at most 5 s;
+        # it may be gone already) and is no longer resumed
+        seen = False
+        appear_by = time.time() + 5
+        deadline = time.time() + 11
+        still_resumed = False
+        while True:
+            top = self._adb("shell", "dumpsys activity activities")[1]
+            resumed = [l for l in top.splitlines() if "esumed" in l and self.package in l]
+            seen = seen or bool(resumed)
+            if not resumed and (seen or expect_line or time.time() > appear_by):
+                break
+            if time.time() > deadline:
+                still_resumed = True
+                break
+            time.sleep(0.5)
+        time.sleep(0.5)
+        lines = self._project_log(ANDROID_PROJECT_TAG, "I")
+        line = "\n".join(lines)
+        if device_path:
+            line = line.replace(device_path, names[0])
+        crashed = "FATAL EXCEPTION" in self._adb("logcat", "-d", "-s", "AndroidRuntime:E")[1]
+        errors = "; ".join(self._project_log(ANDROID_PROJECT_TAG + "_ERROR", "E"))
+        if crashed or errors or still_resumed:
+            stderr = "FATAL EXCEPTION in logcat" if crashed else (errors or "the activity is still resumed 6 s "
+                                                                  "after the project line")
+            return RunResult(1, line + "\n" if line else "", stderr, time.time() - start)
+        if not line:
+            if expect_line:
+                return RunResult(None, "", "", time.time() - start, "no project line in logcat after %s s" % timeout)
+            return RunResult(2, "", "", time.time() - start)
+        status = android_project_status(line)
+        return RunResult(status if status is not None else 1, line + "\n", "", time.time() - start)
 
 
 class AndroidModernLauncher(AndroidLegacyLauncher):
