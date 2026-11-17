@@ -4,7 +4,11 @@
 # project never apply to it (it is a C target). One pinned source, so the compressed bytes depend on
 # the project and not on the platform's zlib (FR-004). Upgrading it changes the bytes (reference
 # hashes change in a visible commit).
-set(LOOMORA_ZLIB_DIR "${PROJECT_SOURCE_DIR}/third_party/zlib")
+# (a parent project that is not the repository root, such as the Gradle build of the Android Modern UI,
+# sets LOOMORA_ZLIB_DIR before including this file)
+if(NOT LOOMORA_ZLIB_DIR)
+  set(LOOMORA_ZLIB_DIR "${PROJECT_SOURCE_DIR}/third_party/zlib")
+endif()
 if(NOT EXISTS "${LOOMORA_ZLIB_DIR}/zlib.h")
   message(FATAL_ERROR "third_party/zlib is empty: run `git submodule update --init third_party/zlib third_party/rapidjson`")
 endif()

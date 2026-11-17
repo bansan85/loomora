@@ -13,9 +13,15 @@
 #
 # Parameters:
 #   LOOMORA_ANDROID_NDK  path of the r15c NDK (or the environment variable of the same name)
-#   ANDROID_ABI          armeabi (default), armeabi-v7a, x86 or arm64-v8a
+#   ANDROID_ABI          armeabi (default), armeabi-v7a, x86, x86_64 or arm64-v8a
 #                        (mips builds too, but the spec has no MIPS platform: not shipped)
-#   LOOMORA_ANDROID_API  API level of the sysroot (default 9; 21 for arm64-v8a, the first level
+#   LOOMORA_ANDROID_PIE  ON: position independent code and executables (-fPIE, -pie). Android 5.0 (API 21)
+#                        and later refuse to run a non-PIE executable, and Android before 4.1 (API 16) cannot
+#                        run a PIE one: the test programs (loomora_selftest, loomora_format_selftest,
+#                        loomora_refgen) of the x86 ABI are built twice, with LOOMORA_ANDROID_API=9 (not PIE,
+#                        for the API 16 emulator) and with LOOMORA_ANDROID_API=16 and PIE ON (for API 21 and
+#                        later). The libraries of the APK are shared objects: not affected. Default OFF.
+#   LOOMORA_ANDROID_API  API level of the sysroot (default 9; 21 for arm64-v8a and x86_64, the first level
 #                        that has the 64-bit ABI, so the 64-bit library is a 21+ library)
 #
 # The C++ runtime is gnustl linked STATICALLY into the library (libgnustl_static.a, libsupc++.a):
@@ -28,7 +34,8 @@
 
 set(CMAKE_SYSTEM_NAME Linux)
 # The test projects of CMake (compiler detection) read the same toolchain file.
-set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES LOOMORA_ANDROID_NDK ANDROID_ABI LOOMORA_ANDROID_API)
+set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES LOOMORA_ANDROID_NDK ANDROID_ABI LOOMORA_ANDROID_API
+    LOOMORA_ANDROID_PIE)
 set(LOOMORA_TARGET_ANDROID TRUE)
 
 if(NOT LOOMORA_ANDROID_NDK AND DEFINED ENV{LOOMORA_ANDROID_NDK})
@@ -92,6 +99,19 @@ elseif(ANDROID_ABI STREQUAL "arm64-v8a")
   if(LOOMORA_ANDROID_API LESS 21)
     set(LOOMORA_ANDROID_API 21)
   endif()
+elseif(ANDROID_ABI STREQUAL "x86_64")
+  # Not in the APK of the Legacy UI (its range stops at API 23, where x86_64 devices run the x86 library);
+  # built for the test programs run natively on the x86_64 emulators (API 24 and 35).
+  set(_target x86_64-none-linux-android)
+  set(_arch x86_64)
+  set(_gcc_dir x86_64-4.9)
+  set(_tool_prefix x86_64-linux-android-)
+  set(_include_triple x86_64-linux-android)
+  set(CMAKE_SYSTEM_PROCESSOR x86_64)
+  set(_abi_flags "")
+  if(LOOMORA_ANDROID_API LESS 21)
+    set(LOOMORA_ANDROID_API 21)
+  endif()
 elseif(ANDROID_ABI STREQUAL "mips")
   set(_target mipsel-none-linux-android)
   set(_arch mips)
@@ -132,6 +152,9 @@ set(_common "-target ${_target} --sysroot=${_sysroot} -gcc-toolchain ${_gcc_root
 -isystem ${_unified} -isystem ${_unified}/${_include_triple} -D__ANDROID_API__=${LOOMORA_ANDROID_API} \
 -fPIC -ffunction-sections -fdata-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes \
 ${_abi_flags}")
+if(LOOMORA_ANDROID_PIE)
+  set(_common "${_common} -fPIE")
+endif()
 set(CMAKE_C_FLAGS_INIT "${_common}")
 set(CMAKE_CXX_FLAGS_INIT
     "${_common} -isystem ${_stl}/include -isystem ${_stl}/libs/${ANDROID_ABI}/include")
@@ -141,6 +164,9 @@ set(_link "-target ${_target} --sysroot=${_sysroot} -gcc-toolchain ${_gcc_root} 
 -no-canonical-prefixes -Wl,--as-needed -Wl,--gc-sections -Wl,-z,noexecstack -Wl,-z,relro \
 -Wl,-z,now -Wl,--exclude-libs,ALL -L${_stl}/libs/${ANDROID_ABI}")
 set(CMAKE_EXE_LINKER_FLAGS_INIT "${_link}")
+if(LOOMORA_ANDROID_PIE)
+  set(CMAKE_EXE_LINKER_FLAGS_INIT "${_link} -pie")
+endif()
 set(CMAKE_SHARED_LINKER_FLAGS_INIT "${_link} -Wl,--no-undefined")
 set(_stl_libs "-lgnustl_static -lsupc++")
 if(ANDROID_ABI STREQUAL "armeabi")
