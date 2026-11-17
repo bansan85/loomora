@@ -140,13 +140,20 @@ if(LOOMORA_TARGET_WIN2000 OR LOOMORA_TARGET_WINXP64)
   target_sources(loomora_spike_fmt_deps PRIVATE
     "${PROJECT_SOURCE_DIR}/ui/legacy/windows-win32/getthreadid_shim.cpp")
 endif()
+if(LOOMORA_TARGET_WEB)
+  # The spike does not link libloomora: only its main() is exported (the toolchain's list would
+  # name functions that are not there).
+  target_link_options(loomora_spike_fmt_deps PRIVATE
+    "-sEXPORTED_FUNCTIONS=@${PROJECT_SOURCE_DIR}/bridge/wasm/exports-main.txt")
+endif()
 
 # --- loomora_refgen: writes the `basic` reference project (spec 002, T039). Host only ----------
 # Also built by the MinGW-w64 Windows toolchains (an .exe run on Windows) and by the i686 Linux
 # toolchain (run natively on the 64-bit host) for the cross-architecture identity of the files (T059);
-# not by the Web, Android or iOS cross builds, which cannot run it.
-if(NOT LOOMORA_TARGET_WEB AND NOT LOOMORA_TARGET_ANDROID AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS"
-   AND (NOT CMAKE_CROSSCOMPILING OR CMAKE_SYSTEM_NAME STREQUAL "Windows"
+# also by the Web builds, run by node with NODERAWFS (the module writes the real files of the host);
+# not by the Android or iOS cross builds, which cannot run it.
+if(NOT LOOMORA_TARGET_ANDROID AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS"
+   AND (NOT CMAKE_CROSSCOMPILING OR LOOMORA_TARGET_WEB OR CMAKE_SYSTEM_NAME STREQUAL "Windows"
         OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
   add_executable(loomora_refgen refgen.cpp)
   target_link_libraries(loomora_refgen PRIVATE loomora)
@@ -157,6 +164,13 @@ if(NOT LOOMORA_TARGET_WEB AND NOT LOOMORA_TARGET_ANDROID AND NOT CMAKE_SYSTEM_NA
   endif()
   set_target_properties(loomora_refgen PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON
                                                   CXX_EXTENSIONS OFF)
+  # Web: node only (the files are written through the file system of node, NODERAWFS), and the
+  # exported main() kept as for the self-tests.
+  if(LOOMORA_TARGET_WEB)
+    target_link_options(loomora_refgen PRIVATE
+      "-sEXPORTED_FUNCTIONS=@${PROJECT_SOURCE_DIR}/bridge/wasm/exports-selftest.txt"
+      -sENVIRONMENT=node -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1)
+  endif()
 endif()
 # --- loomora_use_demo: the use-mode client run by tools/check_readonly.py (spec 002, T042). Host only ---
 if(NOT LOOMORA_TARGET_WIN2000 AND NOT LOOMORA_TARGET_WEB AND NOT CMAKE_CROSSCOMPILING)

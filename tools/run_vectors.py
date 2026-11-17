@@ -1425,6 +1425,47 @@ class WebNodeLauncher(Launcher):
         return RunResult(res.returncode, res.stdout.decode("utf-8", "replace"),
                          res.stderr.decode("utf-8", "replace"), time.time() - start)
 
+    def run_project(self, ui_args, cwd, timeout):
+        """A project mode (T093): the options of the other UIs become the query of the page
+        (`--validate-project F` is `?validate_project=F`, `--probe` is `probe`, a mode without its path is
+        the name alone), the file is read from `cwd` by the page's XMLHttpRequest / fetch. The harness
+        prints the line of <pre id="validate-project"> then `data-status: N` and exits with N: the
+        stdout of this run is the line only, the status is N."""
+        start = time.time()
+        modes = {"--validate-project": "validate_project", "--roundtrip-project": "roundtrip_project"}
+        parts, i = [], 0
+        while i < len(ui_args):
+            arg = ui_args[i]
+            if arg in modes:
+                if i + 1 < len(ui_args) and not ui_args[i + 1].startswith("--"):
+                    parts.append("%s=%s" % (modes[arg], urllib.parse.quote(ui_args[i + 1], safe="")))
+                    i += 1
+                else:
+                    parts.append(modes[arg])
+            elif arg == "--probe":
+                parts.append("probe")
+            else:
+                return RunResult(None, "", "", 0.0, "unknown option for the Web page: %s" % arg)
+            i += 1
+        cmd = self.command() + ["--files", str(cwd), "--timeout", str(timeout)]
+        try:
+            res = subprocess.run(cmd, input=("?" + "&".join(parts)).encode("ascii"),
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout + 10)
+        except subprocess.TimeoutExpired:
+            return RunResult(None, "", "", time.time() - start, "timeout after %s s" % timeout)
+        except OSError as e:
+            return RunResult(None, "", "", time.time() - start, "cannot start node: %s" % e)
+        out = res.stdout.decode("utf-8", "replace").replace("\r\n", "\n")
+        status, lines = res.returncode, []
+        for line in out.splitlines():
+            if line.startswith("data-status: "):
+                if line[13:].isdigit():
+                    status = int(line[13:])
+            elif not line.startswith("title: "):
+                lines.append(line)
+        return RunResult(status, "".join(l + "\n" for l in lines), res.stderr.decode("utf-8", "replace"),
+                         time.time() - start)
+
 
 # ---- Web legacy page in Firefox 10 in a VirtualBox guest (T093, spike S5) -------------------------
 
@@ -1478,6 +1519,7 @@ class WebProbeServer(object):
     def __init__(self, dist_dir, port=0, host="0.0.0.0"):
         import http.server
         self.dist = Path(dist_dir)
+        self.files_dir = None    # folder of the bundled .loomora of a project probe mode (Chrome), or None
         self.requests = []       # (utc time text, client, method, path, status, bytes, user agent)
         self.posts = {}
         self.events = {}
@@ -1521,6 +1563,11 @@ class WebProbeServer(object):
                     name = "/index.html"
                 target = owner.dist / name.lstrip("/")
                 if "/" in name.lstrip("/") or not target.is_file():
+                    # a file bundled with the page for a project probe mode (files_dir, set by the launcher)
+                    target = (owner.files_dir / urllib.parse.unquote(name.lstrip("/"))
+                              if owner.files_dir is not None and "/" not in urllib.parse.unquote(name.lstrip("/"))
+                              else owner.dist / "?")
+                if not target.is_file():
                     self._send(404, b"not found")
                     return
                 self._send(200, target.read_bytes(), WEB_CONTENT_TYPES.get(target.suffix, "application/octet-stream"))
@@ -1842,6 +1889,18 @@ def chrome_version(exe):
     return None
 
 
+def parse_dumped_project(dom):
+    """(title, line, data-status) of a DOM dumped by `chrome --dump-dom` after a project probe mode: the
+    text and the data-status attribute of <pre id="validate-project"> (None when it is absent)."""
+    import html
+    title = re.search(r"<title>(.*?)</title>", dom, re.S)
+    pre = re.search(r'<pre\b([^>]*\bid="validate-project"[^>]*)>(.*?)</pre>', dom, re.S)
+    status = re.search(r'\bdata-status="(\d+)"', pre.group(1)) if pre else None
+    return (html.unescape(title.group(1)) if title else None,
+            html.unescape(pre.group(2)) if pre else None,
+            int(status.group(1)) if status else None)
+
+
 def parse_dumped_dom(dom):
     """(title, probe text) of a DOM dumped by `chrome --dump-dom` (the probe text is None when
     <pre id="probe"> is absent): what the Modern page shows at the end of a probe run."""
@@ -1935,6 +1994,45 @@ class WebChromeHostLauncher(Launcher):
 
     def extra_evidence(self):
         return {"server-requests.txt": self.server.log_text()}
+
+    def run_project(self, ui_args, cwd, timeout):
+        """A project mode (T093) in Chrome: the same query as WebNodeLauncher.run_project, the bundled
+        file served from `cwd` (WebProbeServer.files_dir) next to the page; the line and the status are
+        read from <pre id="validate-project" data-status> of the dumped DOM."""
+        start = time.time()
+        self.run_number += 1
+        modes = {"--validate-project": "validate_project", "--roundtrip-project": "roundtrip_project"}
+        parts, i = [], 0
+        while i < len(ui_args):
+            if ui_args[i] in modes:
+                if i + 1 < len(ui_args) and not ui_args[i + 1].startswith("--"):
+                    parts.append("%s=%s" % (modes[ui_args[i]], urllib.parse.quote(ui_args[i + 1], safe="")))
+                    i += 1
+                else:
+                    parts.append(modes[ui_args[i]])
+            elif ui_args[i] == "--probe":
+                parts.append("probe")
+            else:
+                return RunResult(None, "", "", 0.0, "unknown option for the Web page: %s" % ui_args[i])
+            i += 1
+        profile = os.path.join(self.profiles, "run%d" % self.run_number)
+        self.server.files_dir = Path(cwd)
+        url = "http://%s:%d/index.html?%s" % (WEB_LOOPBACK, self.server.port, "&".join(parts))
+        cmd = [self.exe] + list(WEB_CHROME_FLAGS) + ["--dump-dom", "--virtual-time-budget=%d" % WEB_CHROME_VIRTUAL_MS,
+                                                     "--user-data-dir=" + profile, url]
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self.kill(self.chrome_pids(profile))
+            return RunResult(None, "", "", time.time() - start, "timeout after %s s (chrome.exe terminated)" % timeout)
+        except OSError as e:
+            return RunResult(None, "", "", time.time() - start, "cannot start chrome.exe: %s" % e)
+        title, line, status = parse_dumped_project(res.stdout.decode("utf-8", "replace"))
+        self.kill(self.chrome_pids(profile))
+        if title != "LOOMORA_VALIDATE_DONE" or status is None:
+            return RunResult(None, "", "", time.time() - start,
+                             "title %r, data-status %r (the page did not finish the project mode)" % (title, status))
+        return RunResult(status, (line.strip() + "\n") if line and line.strip() else "", "", time.time() - start)
 
     def run(self, text, timeout):
         start = time.time()

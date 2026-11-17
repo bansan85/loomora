@@ -26,6 +26,11 @@
 //   --ua STRING    navigator.userAgent of the context (default "node page-harness"); for example
 //                  "Mozilla/5.0 (Windows NT 5.0; rv:10.0) Gecko/20100101 Firefox/10.0" shows the
 //                  end-of-life notice (the harness then checks that the record and the page agree).
+//   --files DIR    the folder the bundled .loomora file of a project probe mode (?validate_project=NAME,
+//                  ?roundtrip_project=NAME, spec 002) is read from by the page's XMLHttpRequest (Legacy)
+//                  or fetch (Modern), before the dist folder. In that mode the harness waits for
+//                  LOOMORA_VALIDATE_DONE, prints the content of <pre id="validate-project"> (one line,
+//                  the one of `loomora validate --quiet`) and "data-status: N", and exits with N.
 //   --typing TEXT  after the first greeting, set the field to TEXT and fire onkeyup, then check
 //                  the greeting follows (the event handling of the page).
 //
@@ -37,6 +42,7 @@
 // greeting is displayed (no probe), then prints, one per line:
 //   the probe record (the content of <pre id="probe">), a JSON line, when there is one
 //   "title: <document.title>", "greeting: <text of the greeting element>"
+// (a project probe mode prints the line of <pre id="validate-project"> and "data-status: N" instead, see --files)
 // and exits 0 when everything is consistent (probe done, greeting equal to the record's message,
 // "core" matching --path, "ui_variant" matching --variant), 1 otherwise (the reason on standard error),
 // 2 on a usage error.
@@ -52,6 +58,7 @@ for (var ai = 2; ai < process.argv.length; ai++) {
   var a = process.argv[ai];
   if (a === "--verbose") opts.verbose = true;
   else if (a === "--dist") opts.dist = process.argv[++ai];
+  else if (a === "--files") opts.files = process.argv[++ai];
   else if (a === "--path") opts.path = process.argv[++ai];
   else if (a === "--variant") opts.variant = process.argv[++ai];
   else if (a === "--streaming") opts.streaming = process.argv[++ai];
@@ -85,6 +92,8 @@ Node.prototype.appendChild = function (child) {
   if (child.tagName === "script" && child.src && attached(this)) loadScript(child);
   return child;
 };
+Node.prototype.setAttribute = function (name, value) { this.attrs[name] = String(value); };
+Node.prototype.getAttribute = function (name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; };
 Node.prototype.addEventListener = function (type, listener) {
   (this.listeners[type] = this.listeners[type] || []).push(listener);
 };
@@ -198,8 +207,9 @@ if (opts.variant === "modern") {
   sandbox.WebAssembly = wa;
   sandbox.fetch = function (url) {
     var file = path.join(opts.dist, path.basename(String(url).split("?")[0]));
+    var bundled = bundledFile(url);
     var type = /\.wasm$/.test(file) && opts.streaming !== "bad-mime" ? "application/wasm" : "application/octet-stream";
-    return fs.promises.readFile(file).then(function (data) {
+    return (bundled ? Promise.resolve(bundled) : fs.promises.readFile(file)).then(function (data) {
       return new Response(data, { status: 200, headers: { "Content-Type": type } });
     }, function () { return new Response("not found", { status: 404 }); });
   };
@@ -216,6 +226,36 @@ if (opts.variant === "modern") {
                   arrayBuffer: function () { return Promise.resolve(ab); } });
       });
     });
+  };
+}
+// The bundled file of a project probe mode (T093): a name given as one percent-encoded path segment,
+// read from --files, then from the dist folder; null when there is none.
+function bundledFile(url) {
+  var name;
+  try { name = decodeURIComponent(path.basename(String(url).split("?")[0])); } catch (err) { return null; }
+  var dirs = opts.files ? [opts.files, opts.dist] : [opts.dist], i;
+  for (i = 0; i < dirs.length; i++) {
+    var file = path.join(dirs[i], name);
+    if (name !== "" && fs.existsSync(file) && fs.statSync(file).isFile()) return fs.readFileSync(file);
+  }
+  return null;
+}
+if (opts.variant === "legacy") {
+  // The XMLHttpRequest of the page's fetchBundled(): GET with responseType "arraybuffer".
+  sandbox.XMLHttpRequest = function () {
+    var xhr = this;
+    xhr.readyState = 0; xhr.status = 0; xhr.response = null; xhr.responseType = "";
+    xhr.open = function (method, url) { xhr.method = method; xhr.url = url; xhr.readyState = 1; };
+    xhr.setRequestHeader = function () {};
+    xhr.send = function () {
+      setImmediate(function () {
+        var data = xhr.method === "GET" ? bundledFile(xhr.url) : null;
+        xhr.status = data ? 200 : 404;
+        xhr.response = data ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) : null;
+        xhr.readyState = 4;
+        if (xhr.onreadystatechange) xhr.onreadystatechange();
+      });
+    };
   };
 }
 var ctx = vm.createContext(sandbox);
@@ -264,6 +304,7 @@ function loadScript(el) {
 // ---- run ---------------------------------------------------------------------------------------
 var started = Date.now();
 var probeMode = opts.query !== null && /(^|[?&])probe(=|&|$)/.test(opts.query);
+var projectMode = opts.query !== null && /(^|[?&])(validate_project|roundtrip_project)(=|&|$)/.test(opts.query);
 if (opts.variant === "modern") {
   var moduleScript = /<script[^>]*\stype="module"[^>]*\ssrc="([^"]+)"/.exec(pageHtml);
   if (!moduleScript) problem("index.html has no <script type=\"module\" src=...>");
@@ -281,8 +322,8 @@ function state() {
   return { greeting: greeting, title: title, status: status };
 }
 var timer = setInterval(function () {
-  var s = state(), err = /^LOOMORA_PROBE_ERROR/.test(s.title) || /^Error:/.test(s.status) || scriptErrors.length > 0;
-  var done = probeMode ? (s.title === "LOOMORA_PROBE_DONE" || err) : (s.greeting !== "" || err);
+  var s = state(), err = /^LOOMORA_(PROBE|VALIDATE)_ERROR/.test(s.title) || /^Error:/.test(s.status) || scriptErrors.length > 0;
+  var done = projectMode ? (s.title === "LOOMORA_VALIDATE_DONE" || err) : probeMode ? (s.title === "LOOMORA_PROBE_DONE" || err) : (s.greeting !== "" || err);
   if (done && !err && !probeMode && opts.typing !== null && !typed) {
     typed = true;
     byId.name.value = opts.typing;
@@ -293,7 +334,23 @@ var timer = setInterval(function () {
   if (done || (Date.now() - started) / 1000 > opts.timeout) { clearInterval(timer); finish(s, err, done); }
 }, 10);
 
+function finishProject(s, err, done) {
+  var el = byId["validate-project"], line = el ? textContent(el) : "";
+  var status = el ? el.getAttribute("data-status") : null;
+  var bad = [];
+  if (scriptErrors.length) bad.push("script error: " + scriptErrors[0]);
+  if (!done) bad.push("timeout after " + opts.timeout + " s");
+  if (err && !scriptErrors.length) bad.push(s.title + " " + s.status);
+  if (status === null && !bad.length) bad.push("the project element has no data-status");
+  if (line) console.log(line);
+  console.log("data-status: " + status);
+  console.log("title: " + s.title);
+  if (bad.length) { console.error("FAIL " + bad.join("; ")); process.exit(1); }
+  process.exit(Number(status));
+}
+
 function finish(s, err, done) {
+  if (projectMode) { finishProject(s, err, done); return; }
   var line = byId.probe ? textContent(byId.probe) : "";
   var bad = [];
   if (scriptErrors.length) bad.push("script error: " + scriptErrors[0]);
