@@ -131,6 +131,15 @@ if(NOT LOOMORA_TARGET_WIN2000 AND NOT LOOMORA_TARGET_WEB AND NOT CMAKE_CROSSCOMP
   set_target_properties(loomora_refgen PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON
                                                   CXX_EXTENSIONS OFF)
 endif()
+# --- loomora_use_demo: the use-mode client run by tools/check_readonly.py (spec 002, T042). Host only ---
+if(NOT LOOMORA_TARGET_WIN2000 AND NOT LOOMORA_TARGET_WEB AND NOT CMAKE_CROSSCOMPILING)
+  add_executable(loomora_use_demo use_demo.cpp)
+  target_include_directories(loomora_use_demo SYSTEM PRIVATE "${LOOMORA_RAPIDJSON_DIR}")
+  target_link_libraries(loomora_use_demo PRIVATE loomora)
+  set_target_properties(loomora_use_demo PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON
+                                                    CXX_EXTENSIONS OFF)
+endif()
+# --- end of loomora_use_demo ------------------------------------------------------------------------
 # --- reader corpus (spec 002, T035) ---------------------------------------------------------
 # format/test_project_reader.cpp opens the files of tools/gen_invalid_corpus.py (independent of
 # the C++ code). The corpus is generated into the build directory at build time and its path is
