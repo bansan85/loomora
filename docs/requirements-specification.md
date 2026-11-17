@@ -4,8 +4,8 @@ Universal String Art software (the art of stretched string).
 
 | | |
 |---|---|
-| Version | V6.5 — update after the phase 0 probe (changes and sources in Annex B); V6.4 was the consolidation of versions V1 to V5 (Gemini export "String Art Requirements Document") + the decisions of §16.1; native interface per platform, themes, non-flat supports (3D, meshes) |
-| Date | 2026-11-15 (V6.4: 2026-11-11) |
+| Version | V6.6 — `.loomora` format rewritten from spec 002 (Annex B); V6.5 was the update after the phase 0 probe (changes and sources in Annex B); V6.4 was the consolidation of versions V1 to V5 (Gemini export "String Art Requirements Document") + the decisions of §16.1; native interface per platform, themes, non-flat supports (3D, meshes) |
+| Date | 2026-11-17 (V6.5: 2026-11-15; V6.4: 2026-11-11) |
 | Status | Draft to be validated; the phase 0 probe settled only the points listed in Annex B, **every other technical choice stays provisional until the phase 0 PoC (§15.1)**; points still open in §16.2 |
 | Convention | **[P0]** essential · **[P1]** major · **[P2]** optional / V2 of the product. Unmarked: P1. |
 
@@ -455,61 +455,68 @@ Machine JSON schema (fields `from_side` / `to_side` ∈ `CW` / `CCW`):
 
 A path computed on a powerful machine (PC, Mac, Linux, server) must be importable on a workshop terminal (phone, tablet, controller).
 
-### 9.1 `.loomora` project and path format **[P1]** (validated, decision 16.5)
+### 9.1 `.loomora` project and path format **[P1]** (validated, decision 16.5; rewritten 2026-11-17 from spec 002)
+
+The byte-level specification is `specs/002-loomora-file-format/contracts/project-format.md`; this section states the requirements and the structure. Where the two differ, the contract wins.
 
 **Principles**
-- A single format for the file (import / export / sharing), the network (§9.2), Bluetooth (§9.3) and the PWA.
+- A **project** file: one self-describing archive that holds everything the person created: **several frames** (2D and 3D side by side), **several nail layouts** per frame, **several source images**, **several spools** and **several results** (string paths). One format for the file (import / export / sharing), the network (§9.2), Bluetooth (§9.3) and the PWA.
 - Self-describing, versioned, verifiable, readable without Loomora (JSON in a ZIP archive).
-- Architecture-independent: UTF-8 text, **explicit little-endian** binary (no "native" serialization: cf. big-endian PowerPC, §2.1.1).
+- Architecture-independent: UTF-8 text, **explicit little-endian** binary (no "native" serialization: cf. big-endian PowerPC, §2.1.1). The writer is deterministic: the same project and options give the same bytes on every architecture.
 - The path is **stored, not recomputed** on import: the results of a computation may differ slightly from one architecture to another (§13).
+- The file is changed **only by the application's edit mode**, on an explicit save (atomic: the previous file stays complete until the new one is). **Use mode** (select a result and weave) only reads it. The file holds **no weaving progress** and nothing the application changes while the person weaves: progress is **application data** outside the file, keyed by the project identifier and the result identifier (§10.2).
+- When a frame, a layout, an image or a spool is modified, the results computed from it are deleted, after the person confirms. Identifiers are stable and **never reused** in a project, so application data of a deleted result can never attach itself to another one.
 
 **Container**
-- ZIP archive (*stored* or *deflate* entries), extension `.loomora`, MIME type `application/vnd.loomora+zip`. First entry `mimetype`, uncompressed.
+- ZIP archive (PKWARE APPNOTE 6.3; methods *stored* and *deflate* only; ZIP64 when needed), extension `.loomora`, MIME type `application/vnd.loomora+zip`. First entry `mimetype`, stored, at offset 0.
+- Strict reader: relative UTF-8 entry names without `..`, `.`, empty component, `\`, drive letter or control character; no duplicate name after ASCII case folding; no symbolic link, device or socket; entries that do not overlap; no encryption.
 - File association in each OS (double-click, "Open with", Android / iOS share sheet, drag and drop, PWA *File Handling*).
 
 **Geometric convention (common to the whole file)**
 - Unit: millimeter. Origin: center of the support's bounding box. X to the right, Y up; Z toward the viewer (right-handed coordinate system); z = 0 for a planar support.
 - **Front** view (the viewer's side of the artwork). **CW / CCW** (§6.3) are defined in this coordinate system, seen from the nail tip (in 2D, the nail axis points toward the viewer: front view). A "mirror" export is an explicit processing step, never implicit.
 
-**Archive entries**
+**Archive entries** (one folder per item, so that adding, removing or replacing an item does not rewrite the others; `<fid>`, `<lid>`, `<iid>`, `<rid>` are the decimal identifiers of the frame, layout, image and result)
 
 | Entry | Req. | Content |
 |---|---|---|
 | `mimetype` | yes | `application/vnd.loomora+zip` |
 | `manifest.json` | yes | See below |
-| `support.json` | yes | Outer contour, exclusion zones, dimensions, background / support color |
-| `nails.json` | yes | List of nails |
-| `spools.json` | yes | List of spools (strings) |
-| `mesh.json`, `mesh.bin` | if meshed surface | Support mesh (§3.6) |
-| `views.json` | if 3D target | Projection cameras and associated target images (§3.6.5) |
-| `sequence.bin` | yes | Weaving sequence, compact binary encoding |
-| `settings.json` | no | Computation parameters for reproducibility (algorithm, seed, resolution, preprocessing, engine versions) |
-| `progress.json` | no | Weaving progress (PC ↔ phone synchronization) |
-| `media/source.*`, `media/target.png`, `media/preview.png` | no | Source image, processed target image, thumbnail |
+| `spools.json` | yes | The spools (strings) of the project |
+| `frames/<fid>/frame.json` | per frame | Frame: name, kind (`2d` / `3d`), dimensions, background color, outline and exclusion zones (type, parameters **and** resolved polyline), surface and body (§3.6.1, §3.6.2) |
+| `frames/<fid>/mesh.bin` | 3D frame with a mesh | Support mesh (§3.6) |
+| `frames/<fid>/mesh-source.<ext>` | no (full only) | Original mesh file |
+| `frames/<fid>/layouts/<lid>/layout.json`, `nails.json` | per layout | A nail layout of the frame: its description and the list of nails |
+| `images/<iid>/image.json` | per image | Image description (name, color mode, shape, dimensions) |
+| `images/<iid>/source.<ext>`, `target.png` | no (full only) | Source image, processed target image |
+| `images/<iid>/thumb.png` | yes | Thumbnail |
+| `results/<rid>/result.json`, `sequence.bin`, `thumb.png` | per result | A result: the frame, the layout, the image or images (3D: the views, §3.6.5) and the spools it uses, its weaving sequence and its thumbnail |
+| `results/<rid>/settings.json` | no (full only) | Computation parameters for reproducibility (algorithm, seed, resolution, preprocessing, engine versions); not interpreted |
+| `x-<namespace>/…` | no | Unknown entries: kept and copied on rewrite |
+
+A result refers to **one frame, one layout of that frame, one or more images and a selection of spools**; the spool numbers of its `sequence.bin` are indices into that selection.
 
 **`manifest.json`**
 - `format`: `{ "name": "loomora", "major": 1, "minor": 0 }`; `min_reader`: minimum reader version.
 - `project_id` (UUID v4, stable across exports), `title`, `created_at`, `modified_at` (UTC, ISO 8601).
 - `generator`: application, version, platform, architecture.
-- `profile`: `full` | `light` (see below).
-- `counts`: number of nails, steps, spools.
-- `entries`: for each entry, `size` and `sha256`.
-- `required_features`: list of features the reader must handle (empty for a planar project; e.g. `surface_mesh`, `string_levels`, §3.6); a reader that does not handle one rejects the file.
+- `profile`: `full` | `light` (see below); `editable` (false for `light`).
+- `counts`: number of frames, layouts, images, spools, results; `next_id`: the next identifier of each kind (it only increases); `order`: the display order of each kind.
+- `entries`: for each entry except `mimetype` and `manifest.json`, the uncompressed `size` and the `sha256`.
+- `required_features`: list of features the reader must handle (empty for a planar project; derived from the content: `surface_mesh`, `string_levels`, `multi_view_target`, §3.6); a reader that does not handle one rejects the file and names it.
 - `extensions`: free object with keys prefixed by a namespace (ignored by readers that do not know it).
 
-**`support.json`** — fields `surface` (`plane` by default; `mesh`, `primitive`, `extrusion`, `revolution`, `csg`, §3.6.2) and `body` (`solid` | `shell` | `guide`, §3.6.1); outer shape and exclusion shapes, each with its type (circle, ellipse, rectangle, heart, star, SVG…), its parameters **and** its resolved polyline (the reader does not need to know the shape to display it); board dimensions; background color.
+**`spools.json`** — array of `{ id, name, color, opacity, diameter_mm, available_length_mm?, material?, domain? }` (`domain`: `exterior` | `interior` | `both`, §3.6.4).
 
-**`nails.json`** — array of `{ id, x_mm, y_mm, z_mm?, axis?, diameter_mm, length_mm?, side?, face?, kind, label? }` (`z_mm`, `axis`, `side`, `face` for 3D, §3.6.3):
-- `id`: unique u32, not necessarily contiguous;
+**`nails.json`** (one per layout) — array of `{ id, x, y, diameter, kind, label? }`; a 3D nail adds `z`, `axis`, `length`, `side`, `face` (§3.6.3):
+- `id`: unique u32 within the layout, not necessarily contiguous;
 - `kind`: `boundary` | `exclusion_boundary` | `interior`;
-- `label`: number displayed on the template and in the player, if it differs from `id`.
-- `axis`: unit vector base → tip (default: toward the viewer); `length_mm`: length protruding from the surface; `side`: `exterior` | `interior`; `face`: attachment triangle and barycentric coordinates.
+- `label`: number displayed on the template and in the player, if it differs from `id`;
+- `axis`: unit vector base → tip (default: toward the viewer); `length`: length protruding from the surface; `side`: `exterior` | `interior`; `face`: attachment triangle and barycentric coordinates.
 
-**`spools.json`** — array of `{ id, name, color_hex, opacity, diameter_mm, length_available_m?, material?, domain? }` (`domain`: `exterior` | `interior` | `both`, §3.6.4).
+**`mesh.bin`** (non-flat supports, §3.6; little-endian) — header (`"LMMS"`, version, flags), vertex and triangle counts, positions (f32, mm), triangle indices (u32), optional normals and UVs, then a CRC32 per 1 MiB block so that ranges can be read and verified. `frame.json` carries the `body`, the flags (watertight, manifold, counts), the name and fingerprint of the original file and the optional parametric construction (primitive, extrusion, revolution, booleans) so that the frame can be edited; the original file may be attached as `mesh-source.<ext>`.
 
-**`mesh.json` / `mesh.bin`** (non-flat supports, §3.6) — `mesh.json`: units, applied transformation, `body`, flags (watertight, manifold, number of vertices and triangles), name and fingerprint of the original file, optional parametric construction (primitive, extrusion, revolution, booleans) so that it can be edited. `mesh.bin` (little-endian): positions (f32, mm), triangle indices (u32), optional normals and UVs; the original file may be attached in `media/`.
-
-**`views.json`** — projection cameras (position, orientation, orthographic or perspective, size), associated target image (`media/`) and weight (§3.6.5).
+**`result.json`** — id, name, creation time, `frame`, `layout`, the `images` used (3D: each with its view: position, target, up, orthographic or perspective projection, size and weight, §3.6.5), the `spools` used with the string length of each, the step count, whether levels are present, the thumbnail and the settings.
 
 **`sequence.bin`** (little-endian)
 ```
@@ -517,7 +524,7 @@ A path computed on a powerful machine (PC, Mac, Linux, server) must be importabl
 record: nail_id (varint) | flags u8 | level u8 (if header bit 0; pass height, 0 = base, §3.6.4)
 flags: bit 0      = rotation at this nail (0 = CW, 1 = CCW)
        bits 1–2   = type (0 segment, 1 start, 2 end, 3 reserved)
-       bits 3–7   = spool_id (0–30; 31 = escape, followed by a varint)
+       bits 3–7   = spool index (0–30 into the result's spool selection; 31 = escape, followed by a varint)
 ```
 Semantics: the records are in weaving order.
 - `start`: the spool's string is attached to the nail (knot).
@@ -526,37 +533,37 @@ Semantics: the records are in weaving order.
 
 The step list of the machine JSON (§8.3) can be reconstructed losslessly from this encoding. About 3 bytes per step (≈ 15 KB for 5,000 steps), which suits Bluetooth.
 
-**`progress.json`** — `{ project_id, revision, updated_at, device_id, index, consumed_mm_per_spool, bookmarks }`.
-- `revision`: monotonic counter per device.
-- An import **never overwrites** local progress without confirmation. If the two progress states have diverged, the user chooses (keep local, take remote, keep the furthest along).
+**No weaving progress in the file.** There is no `progress.json` and no field for the position, the string consumed or the bookmarks. The application keeps them (§10.2), keyed by `project_id` and the result identifier. Opening a project in use mode never changes a byte of it, nor its modification time.
 
-**Export profiles**
-- `full`: everything, including the source image and the parameters.
-- `light`: without `media/` or `settings.json`; used for Bluetooth and small terminals.
+**Export profiles and result subsets**
+- `full`: everything, including the source and target images, the mesh source and the parameters. Only a `full` project can be edited.
+- `light`: without the source and target images, `settings.json`, the mesh source and the mesh UVs, and **read-only**; used for Bluetooth and small terminals. The mesh geometry (positions, indices, normals) keeps identical values; thumbnails are kept.
+- Both profiles can be exported with **a subset of the results**: the file then holds the chosen results and exactly the frames, layouts, images and spools they use; `project_id` is kept.
 - The EXIF / GPS metadata of embedded images is **always stripped**.
 
 **Versioning**
-- *Minor* (added fields): a reader ignores unknown fields and, if possible, keeps unknown entries when rewriting.
-- *Major* (breaking change): an old reader rejects the file with an explicit message (`min_reader`). A recent reader can read all previous majors.
+- *Minor* (added optional fields, entries or enumeration values): a reader ignores unknown fields and keeps unknown entries when rewriting.
+- *Major* (any other change): an old reader rejects the file with an explicit message (`min_reader`). A recent reader can read all previous majors.
 
-**Mandatory validation on import**
-- Verification of `sha256` / CRC32; unique nail identifiers; valid references between entries; finite numbers; nails within the support (tolerance); warning if the minimum nail-to-nail distance is not respected.
-- Limits: maximum decompressed size 256 MB, 100,000 nails, 5,000,000 steps, 5,000,000 triangles; rejection of absolute paths, `..` and symbolic links (*zip-slip*); guard against decompression bombs; no executable content.
-- `loomora validate <file>` command (CLI).
+**Mandatory validation on import** (the reader reports every issue; the project is valid only without error)
+- Container checks; `sha256` of every entry and CRC32 (ZIP, `sequence.bin`, `mesh.bin` blocks); JSON schemas; unique identifiers per kind and valid references between entries (a layout belongs to the frame of its result, every spool of a sequence is in the result's selection); finite numbers; nails within the frame (tolerance); nails of a sequence exist in its layout; warning if the minimum nail-to-nail distance is not respected.
+- **No hard limit** on the number of elements or on the size: nothing is refused for being large. Above thresholds (starting values: 100,000 nails per layout, 5,000,000 steps per result, 5,000,000 triangles per mesh, 256 MiB decompressed, 1,000 items per kind) a **warning** is shown on opening and on saving, and never blocks. A file is refused only for an abnormal decompression ratio (a *decompression bomb*) or when an allocation or a write fails, with a defined error and nothing damaged. Reading is streamed, so memory stays bounded on 32-bit and 1–2 GB machines.
+- Rejection of absolute paths, `..` and symbolic links (*zip-slip*); no executable content.
+- `loomora validate <file>` command (CLI, Windows, Linux and macOS hosts), also available as a probe mode of every UI.
 
 **Mapping to transports**
 - **File**: system save / open / share; PWA: *File System Access*, download, *Web Share Target*.
-- **HTTP** (§9.2): `GET /project/<token>/export.loomora?profile=light|full` (resumable via `Range`); `PUT /project/<token>/progress` for `progress.json`.
-- **BLE** (§9.3): `light` profile sent as a series of entries (name, size, content) with a CRC32 per block, then verification of the manifest `sha256`; the receiver rebuilds a local `.loomora`.
+- **HTTP** (§9.2): `GET /project/<token>/export.loomora?profile=light|full&results=<ids>` (resumable via `Range`); the `results` parameter selects the results to export (all by default). No route carries progress into a project file.
+- **BLE** (§9.3): `light` profile of one or several results sent as a series of entries (name, size, content) with a CRC32 per block, then verification of the `sha256` of each entry against the manifest; the receiver rebuilds a local `.loomora`.
 - **QR code**: contains only the pairing link, never the project.
 
-**Tests**: reference files produced on each architecture and read back on the others (including big-endian and 32-bit), lossless round trip, reader fuzzing.
+**Tests**: reference files produced on each architecture and read back on the others (including big-endian and 32-bit), byte-identical output of the writer, lossless round trip (open, export, validate), a corpus of invalid files, reader fuzzing, and an independent checker written without the library.
 
 ### 9.2 Embedded web server **[P1]**
 - The software includes a micro HTTP / WebSocket server (Rust: `axum`/`tokio`), with no external dependency; its implementation is part of Loomora.
 - It can also run **headless on a server** (CLI binary) to compute remotely.
-- **QR code pairing**: URL `http://<IP>:<PORT>/project/<TOKEN>`; the phone scans it and loads the full project into its persistent local cache. mDNS / Zeroconf discovery.
-- **Bidirectional** synchronization: weaving progress is reported in real time from the phone to the PC (WebSocket).
+- **QR code pairing**: URL `http://<IP>:<PORT>/project/<TOKEN>`; the phone scans it and loads the project (all of it, or the results the person chooses: `export.loomora?results=…`, §9.1) into its persistent local cache. mDNS / Zeroconf discovery.
+- **Bidirectional** synchronization: weaving progress is reported in real time from the phone to the PC (WebSocket). Progress is **application data** keyed by the project identifier and the result identifier, never part of the `.loomora` file; its messages and its merge rules are specified with the application data, not with the file format.
 - Security: limited-use access token, listening on the local network by default, optional TLS for remote access.
 - **Privacy**: remote computation is an explicit option. The image is sent only to a server chosen and operated by the user, with their consent, never to a third-party service by default.
 
@@ -564,9 +571,9 @@ The step list of the machine JSON (§8.3) can be reconstructed losslessly from t
 For workshops without a local network or for direct machine control. `btleplug` on desktop; native bridges CoreBluetooth (iOS/macOS) and Android BLE.
 
 Custom GATT profile (proprietary 128-bit UUIDs to be generated; **do not** use the reserved 16-bit SIG space):
-- **Metadata** (Read): project ID, number of nails, number of steps, spool colors.
-- **Sequence transfer** (Write / Notify): blocks fragmented according to the negotiated MTU, **CRC32 per block**, resume on missing block.
-- **Tracking / control** (Read / Write / Notify): current step, play/pause, winding direction, confirmation acknowledgments.
+- **Metadata** (Read): project ID, the results of the project (identifier, number of nails of its layout, number of steps, spool colors).
+- **Sequence transfer** (Write / Notify): the `light` profile of the chosen result or results, as blocks fragmented according to the negotiated MTU, **CRC32 per block**, resume on missing block.
+- **Tracking / control** (Read / Write / Notify): project and result identifiers, current step, play/pause, winding direction, confirmation acknowledgments. The step is application data (§10.2), not written into the project.
 
 ---
 
@@ -584,7 +591,8 @@ Three scrolling modes:
 
 ### 10.2 Strict progress persistence **[P0]**
 - **Synchronous and transactional** write (SQLite via rusqlite) at each nail crossing.
-- Data: project ID, index of the active instruction, current spool, string length consumed, scrolling mode and display preferences.
+- Data: project ID, **result ID**, index of the active instruction, current spool, string length consumed, bookmarks, scrolling mode and display preferences. The progress is **application data**: it lives in the application's database, keyed by the project identifier (`project_id`) and the result identifier of the manifest, and is **never written into the `.loomora` file** (§9.1); opening a project and weaving never changes it. Each result of a project has its own progress.
+- Identifiers of deleted results are never reused (§9.1): the progress of a result that no longer exists in the file can be detected and never attaches itself to another result.
 - Abrupt shutdown, memory purge, battery shutdown: reopening on the last validated step, without loss.
 - The image computation is not saved (§2.4).
 
@@ -792,7 +800,7 @@ These decisions remain **provisional** until they are validated by the phase 0 P
 | 2 | Minimum iOS | **iOS 15.0**, with possible functional restrictions on missing APIs (the spec 001 target iOS 5 is untried until a trial; owner decision 2026-11-15) |
 | 3 | Persistence | **SQLite (`rusqlite`, embedded SQLite)** — chosen by default, the user having no preference: transactional, portable across 32 / 64-bit and little / big-endian, mature tooling. `redb` ruled out (less proven on exotic architectures) |
 | 4 | Speech recognition | **System API only**; feature disabled if it is absent (§10.1) |
-| 5 | `.loomora` format | Validated; specified in §9.1 |
+| 5 | `.loomora` format | Validated; specified in §9.1 (rewritten 2026-11-17 from spec 002): a **project** of several frames (2D and 3D), layouts, images, spools and results; **no weaving progress in the file** (application data, §10.2); **no hard limit** on elements or size (warnings above thresholds, refusal only for an abnormal decompression ratio or a failed allocation or write); `light` and `full` profiles; export of a subset of results |
 | 6 | PWA / WebAssembly | **In scope** (P2) |
 | 7 | Architectures | **As many as possible**, including Linux ARM 32-bit and PowerPC; tiers A / B / C (§2.1.1). PowerPC, MIPS, Itanium, Linux AArch64, ARM 32-bit and RISC-V are outside the probe scope (not built or tested by the phase 0 probe) |
 | 8 | Windows UI | **Two UIs**: **WinUI 3** (Windows 10 version 1809+, x86 / x64 / ARM64) and plain **Win32** in C++11 (Windows 2000 and later, x86 / x64); **MFC dropped** (ADR 0009); §2.1.2 |
@@ -884,3 +892,4 @@ Note (2026-11-15): the requests "Rust and not C++" and "Windows MFC version comp
 | 2026-11-15 | V6.5 | Win32 Legacy path drawing: plain GDI required, GDI+ optional and skipped where absent (§2.1.2) | Owner decision 2026-11-15 |
 | 2026-11-15 | V6.5 | Milestone G0 left pending the owner's decision on each of the 15 uncovered hypotheses (§15.1.5); Rust-named library roles left to the reading note | Owner decision 2026-11-15 |
 | 2026-11-15 | V6.5 | Status of G0 and the reading of the hypotheses matrix updated: V7 and V17 partly covered; V2 to V5, V11 to V14, V16, V18 and V20 not covered because not implemented yet; V1 not applicable; V8 pending Apple hardware (§15.1.4, §15.1.5) | Owner clarification 2026-11-15; `validation/hypotheses.json`; verdicts `android-4.1.2-x86-legacy`, `android-7.0-x86_64-modern`, `web-chrome-157-windows-11-x64-modern`, `web-firefox-10-windows-2000-x86-legacy` |
+| 2026-11-17 | V6.6 | `.loomora` format: a project holds several frames, nail layouts, images, spools and results (one folder per item) instead of one support, one nail list and one sequence; `progress.json` and its merge rules removed, progress becomes application data keyed by project and result identifiers; hard limits (256 MB, 100,000 nails, 5,000,000 steps and triangles) replaced by warning thresholds and a decompression-ratio guard; `light` profile rules and result subsets; `GET export.loomora` selects results, no progress route; BLE metadata and transfer per result; §9.1, §9.2, §9.3, §10.2, §16.1 no. 5 | Spec 002 Clarifications 2026-11-17; `specs/002-loomora-file-format/contracts/project-format.md` |
