@@ -425,3 +425,54 @@ TEST_CASE("the semantic rules on projects built through the editor", "[format][v
     REQUIRE(loomora_project_open_memory(archive.data(), archive.size(), nullptr, nullptr, &o.p, &o.r) == 0);
     REQUIRE(loomora_report_count(o.r) == 0);
 }
+
+TEST_CASE("500,000 nails on a grid are validated in linear time with a warning for the count only", "[format][validator][large]") {
+    loomora_editor *e = nullptr;
+    REQUIRE(basic_project::create(&e) == 0);
+    const char *frame =
+        "{\"name\":\"Big\",\"kind\":\"2d\",\"dimensions\":{\"width_mm\":4000,\"height_mm\":4000},"
+        "\"background\":\"#ffffff\",\"outline\":{\"type\":\"rectangle\",\"params\":{\"width_mm\":4000,"
+        "\"height_mm\":4000},\"polyline\":[[-2000,-2000],[2000,-2000],[2000,2000],[-2000,2000]]},"
+        "\"exclusions\":[],\"surface\":\"plane\"}";
+    uint32_t fid = 0, lid = 0;
+    REQUIRE(loomora_editor_add_frame(e, frame, &fid) == 0);
+    const unsigned side = 708; // 708 * 708 = 501,264 nails, 5 mm apart (diameter 2)
+    std::vector<loomora_nail> nails;
+    nails.reserve(static_cast<size_t>(side) * side);
+    for (unsigned j = 0; j < side; ++j)
+        for (unsigned i = 0; i < side; ++i) {
+            loomora_nail n = loomora_nail();
+            n.id = j * side + i;
+            n.kind = 3;
+            n.x = -1768.5 + 5.0 * i;
+            n.y = -1768.5 + 5.0 * j;
+            n.diameter = 2;
+            nails.push_back(n);
+        }
+    REQUIRE(loomora_editor_add_layout(e, fid, "{\"name\":\"Grid\"}", &nails[0], nails.size(), &lid) == 0);
+    nails.clear();
+    nails.shrink_to_fit();
+    Bytes archive;
+    struct Sink {
+        static int32_t put(void *user, const uint8_t *data, size_t len) {
+            static_cast<Bytes *>(user)->insert(static_cast<Bytes *>(user)->end(), data, data + len);
+            return 0;
+        }
+    };
+    loomora_report *sr = nullptr;
+    REQUIRE(loomora_editor_save_stream(e, basic_project::kModifiedAt, 0, &Sink::put, &archive, &sr) == 0);
+    const std::vector<Found> saved = issues_of(sr);
+    loomora_report_free(sr);
+    loomora_editor_close(e);
+    REQUIRE(saved.size() == 1);
+    REQUIRE(saved[0].code == "warn.count");
+
+    Opened o;
+    o.rc = loomora_project_open_memory(archive.data(), archive.size(), nullptr, nullptr, &o.p, &o.r);
+    const std::vector<Found> f = issues_of(o.r);
+    INFO(dump(f));
+    REQUIRE(o.rc == 0);
+    REQUIRE(f.size() == 1);
+    REQUIRE(f[0].code == "warn.count");
+    REQUIRE(f[0].message.find("501264") != std::string::npos);
+}
