@@ -38,18 +38,22 @@ Floors validated so far, under the PoC rule (the Legacy UI is run on the lowest 
 
 | Path | Content |
 |---|---|
-| `core/` | the backend: C++11 library `libloomora`, its C API (`core/include/loomora.h`) and its tests (Catch2, self-test, reference vectors in `core/tests/vectors.json`) |
+| `core/` | the backend: C++11 library `libloomora`, its C API (`core/include/loomora.h`, and `core/include/loomora_project.h` for the `.loomora` project file) and its tests (Catch2, self-test, reference vectors in `core/tests/vectors.json`); `core/src/format/` is the project file format module (ZIP container, JSON, validation); `core/fuzz/` holds the fuzz targets (option `LOOMORA_BUILD_FUZZ`) |
+| `cli/loomora/` | the host command `loomora validate` (Windows, Linux and macOS hosts) |
 | `ui/legacy/<platform>/`, `ui/modern/<platform>/` | one native interface per platform and variant (Win32, Xlib, Android views, web page, WinUI 3, gtkmm, Compose, TypeScript; AppKit, UIKit and SwiftUI folders are empty until Apple hardware is available), with no logic |
 | `bridge/` | glue with no logic: `jni/` (Android) and `wasm/` (Emscripten) |
 | `cmake/` | toolchain files: MinGW-w64, Linux i686, Android NDK r15c, Emscripten |
 | `tools/` | Python host tools: `verify.py`, `build.py`, `run_vectors.py`, `check_std.py`, `measure_sharing.py`, `prefix_check.py`, `report.py`, `validate_records.py`, and `trials/` (the drivers that produced the evidence) |
 | `specs/001-loomora-cross-platform/` | specification, plan, research, tasks, [quickstart](specs/001-loomora-cross-platform/quickstart.md), contracts |
+| `specs/002-loomora-file-format/` | the `.loomora` project file format: specification, plan, research, data model, tasks, [quickstart](specs/002-loomora-file-format/quickstart.md), [contracts](specs/002-loomora-file-format/contracts/) |
 | `docs/` | [requirements](docs/requirements-specification.md) and the [build guide](docs/building/README.md) |
 | `docs/implementation/` | git submodule (`loomora-docs`): the architecture decision records and `validation/` (platforms, verdicts, procedures, evidence, report) |
 | `third_party/catch2/` | git submodule: Catch2, used by the tests only |
+| `third_party/zlib/` | git submodule: zlib at tag v1.3.1, pinned for deterministic deflate output; only the sources the format needs are built, through `cmake/loomora_zlib.cmake` (zlib license) |
+| `third_party/rapidjson/` | git submodule: RapidJSON at commit `297637bc0a0f00dc504dbc1a47ebdaa577f8ae19`, header-only JSON reader and writer (MIT license) |
 | `.github/workflows/` | the seven CI workflows |
 
-Building the product never needs `docs/implementation/`. Clone with both submodules from GitHub:
+Building the product never needs `docs/implementation/`, but it needs the three third-party submodules (Catch2, zlib, RapidJSON: they are submodules, not copies in the repository). Clone with all the submodules from GitHub:
 
 ```
 git clone --recurse-submodules https://github.com/bansan85/loomora.git
@@ -59,6 +63,12 @@ For a clone made from a local sibling checkout of `loomora-docs` (the submodule 
 
 ```
 git -c protocol.file.allow=always submodule update --init docs/implementation
+```
+
+For a clone made without `--recurse-submodules`, fetch the third-party libraries (tests and the project file format) with:
+
+```
+git submodule update --init third_party/catch2 third_party/zlib third_party/rapidjson
 ```
 
 ## Build and run
@@ -75,6 +85,16 @@ git -c protocol.file.allow=always submodule update --init docs/implementation
 | 5 | text change, code sharing | `python tools/prefix_check.py` |
 | 6 | measurement and report | `python tools/measure_sharing.py`, `python tools/report.py [--check]` |
 | 7 | replayability | the procedures in `docs/implementation/validation/procedures/` (Windows, Linux, Android, Web) |
+
+CMake options of the backend: `LOOMORA_BUILD_TESTS` (self-test and Catch2 tests, ON), `LOOMORA_BUILD_SHARED` (also build the shared library, OFF) and `LOOMORA_BUILD_FUZZ` (OFF): builds the fuzz target `loomora_fuzz_project` of `core/fuzz/`, which feeds mutated `.loomora` files to the reader. It needs Clang with libFuzzer (`-DCMAKE_CXX_COMPILER=clang++`); it is a build of its own (for example `cmake -S . -B ~/loomora-build/fuzz -DLOOMORA_BUILD_FUZZ=ON`), never part of `verify.py quick`.
+
+Check a project file with the host command (it opens the file read-only, never changes it):
+
+```
+loomora validate [--json] [--quiet] <file> [<file> ...]
+```
+
+It prints one line per issue and one summary line per file; the exit status is 0 when every file is valid (warnings allowed), 1 when a file has an error, 2 for a usage error or an unreadable file. See [contracts/cli-validate.md](specs/002-loomora-file-format/contracts/cli-validate.md); the format itself is specified in [contracts/project-format.md](specs/002-loomora-file-format/contracts/project-format.md).
 
 Where each one runs: Windows Legacy cross-built in WSL with MinGW-w64; Windows Modern (WinUI 3), Android and the Chrome run on the Windows host; Linux and Web in WSL or on Linux (Linux binaries are always built on the machine that runs them). macOS and iOS: not available, needs Apple hardware (pending). The Windows 2000 and Firefox 10 runs need an already running virtual machine; see "Local runs (not CI)" in the build guide. Full details: [quickstart.md](specs/001-loomora-cross-platform/quickstart.md) and [docs/building/README.md](docs/building/README.md).
 
@@ -98,5 +118,6 @@ No license has been chosen yet (license and business model are still open in sec
 | to understand the engine, the code layout and the technical decisions | [docs/implementation/adr/README.md](docs/implementation/adr/README.md) (git submodule, see above to fetch it) |
 | the requirements | [docs/requirements-specification.md](docs/requirements-specification.md) |
 | the plan and the task list of the validation phase | [specs/001-loomora-cross-platform/](specs/001-loomora-cross-platform/) |
+| the `.loomora` project file format | [specs/002-loomora-file-format/](specs/002-loomora-file-format/) |
 | the results of the validation | [docs/implementation/validation/report.md](docs/implementation/validation/report.md) |
 | the rules to follow when contributing | [CLAUDE.md](CLAUDE.md) |
