@@ -20,9 +20,9 @@ Every unknown of the Technical Context is settled here. Format: **Decision**, **
 
 **Alternatives**: minizip or libzip (timestamps, extra fields, allocation of whole entries, API tied to files); miniz (single file, handy, but bundles its own deflate whose output differs from zlib's and is less documented across versions); `std::` has no ZIP. Rejected.
 
-## R3 — zlib, vendored, for deflate and inflate only
+## R3 — zlib, a pinned submodule, for deflate and inflate only
 
-**Decision**: vendor zlib 1.3.x (the files needed for `deflate`, `inflate` and `crc32`) in `third_party/zlib/` with its licence and a `VENDORED.md` (version, source hash, files kept, local changes: none). It is built as a C target `loomora_zlib` and linked into `loomora` (and into `loomora_shared`). The writer calls `deflateInit2` with fixed parameters (level 6, `Z_DEFLATED`, window 15, memLevel 8, `Z_DEFAULT_STRATEGY`) and writes through a fixed-size output buffer so chunking cannot change the stream.
+**Decision**: include zlib 1.3.1 as the git submodule `third_party/zlib` (tag v1.3.1, upstream tree untouched); the build compiles only the files needed for `deflate`, `inflate` and `crc32` (`cmake/loomora_zlib.cmake`). It is built as a C target `loomora_zlib` and linked into `loomora` (and into `loomora_shared`). The writer calls `deflateInit2` with fixed parameters (level 6, `Z_DEFLATED`, window 15, memLevel 8, `Z_DEFAULT_STRATEGY`) and writes through a fixed-size output buffer so chunking cannot change the stream.
 
 **Rationale**: zlib's deflate is pure portable C and gives the same bytes for the same input and parameters on every architecture and byte order **for one zlib version**; the system zlib differs by platform and version (and some distributions patch it), which would break FR-004. Pinning one source makes the output a property of the project. A later zlib upgrade changes the bytes: the reference hashes change with it, in a visible commit; stored (uncompressed) entries are unaffected.
 
@@ -34,7 +34,7 @@ Every unknown of the Technical Context is settled here. Format: **Decision**, **
 
 ## R4 — JSON: RapidJSON, DOM for small entries, SAX for bulk
 
-**Decision**: vendor RapidJSON's headers (MIT) in `third_party/rapidjson/`. Parsing uses `kParseFullPrecisionFlag` (correctly rounded decimal-to-double), `kParseIterativeFlag` (no recursion, so depth cannot overflow the stack), a depth limit (64) and size limit from the entry, and no NaN or Infinity (the default, which enforces "all numbers are finite"). Small entries (manifest, frame, image, result, spools) are parsed into a DOM; **`nails.json` and any large array are parsed with the SAX reader** straight into compact structures, in the order of the contract, with range access for later reads. Writing uses `Writer` (compact, no whitespace) into a buffered sink, with object keys written in the fixed order of the contract.
+**Decision**: include RapidJSON (MIT) as the git submodule `third_party/rapidjson` (pinned commit 297637bc; only its headers are used). Parsing uses `kParseFullPrecisionFlag` (correctly rounded decimal-to-double), `kParseIterativeFlag` (no recursion, so depth cannot overflow the stack), a depth limit (64) and size limit from the entry, and no NaN or Infinity (the default, which enforces "all numbers are finite"). Small entries (manifest, frame, image, result, spools) are parsed into a DOM; **`nails.json` and any large array are parsed with the SAX reader** straight into compact structures, in the order of the contract, with range access for later reads. Writing uses `Writer` (compact, no whitespace) into a buffered sink, with object keys written in the fixed order of the contract.
 
 **Rationale**: RapidJSON converts doubles with its own integer-only routines (Grisu2 for output, an exact algorithm for input), so the text depends neither on the C library, the locale nor `printf` of the platform, which differ on Windows 2000 (`msvcrt`), glibc, bionic and Emscripten. Header-only C++03-style code builds with every compiler of the floors, and SAX keeps memory low.
 

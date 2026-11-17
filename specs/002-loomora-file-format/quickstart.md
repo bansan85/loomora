@@ -7,7 +7,7 @@ How to prove, end to end, that the feature works. It lists what to run and what 
 - The repository on branch `feat/loomora-format` (or a worktree outside the repository, with its own build directory).
 - `git -c protocol.file.allow=always submodule update --init docs/implementation` when you want deliverable records, ADRs and evidence written (the build works without it).
 - CMake 3.13+, a C++11 compiler (GCC or Clang), Python 3.8+; `pip install -r tools/requirements.txt` for the schema check. For fuzzing: Clang with libFuzzer.
-- `third_party/zlib` and `third_party/rapidjson` are vendored: nothing to fetch.
+- `third_party/zlib` and `third_party/rapidjson` are git submodules (with `third_party/catch2`): `git submodule update --init third_party/catch2 third_party/zlib third_party/rapidjson`.
 
 ## 1. The whole verification of the branch
 
