@@ -6,4 +6,17 @@
  "_loomora_probe_record",
  "_loomora_format_version",
  "_loomora_format_limit",
- "_loomora_uuid4_from_random"]
+ "_loomora_uuid4_from_random",
+
+ "_loomora_editor_create",
+ "_loomora_editor_close",
+ "_loomora_editor_add_spool",
+ "_loomora_editor_add_frame",
+ "_loomora_editor_add_layout",
+ "_loomora_editor_layout_set_label",
+ "_loomora_editor_add_image",
+ "_loomora_editor_add_result",
+ "_loomora_editor_set_title",
+ "_loomora_editor_save_path",
+ "_loomora_editor_save_stream"
+]

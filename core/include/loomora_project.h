@@ -74,6 +74,82 @@ LOOMORA_API uint64_t loomora_format_limit(int32_t which);
    Returns 0, or LOOMORA_ERR_INVALID for a NULL pointer. */
 LOOMORA_API int32_t loomora_uuid4_from_random(const uint8_t random16[16], char out[37]);
 
+/* ---- editor: create and save ---- */
+
+/* Bulk data layouts (sizes in bytes, no hidden padding). */
+typedef struct {            /* 88 bytes, 8-byte aligned */
+  uint32_t id;  uint32_t kind;        /* kind: 1 boundary, 2 exclusion_boundary, 3 interior */
+  uint32_t flags;                     /* bit 0: 3D fields valid, bit 1: has label */
+  uint32_t side;                      /* 3D: 0 exterior, 1 interior */
+  double   x, y, z;
+  double   diameter, length;
+  float    axis[3];  float face_u;
+  float    face_v;   uint32_t face_triangle;   uint32_t reserved0, reserved1;
+} loomora_nail;
+typedef struct {            /* 12 bytes */
+  uint32_t nail; uint32_t spool_index;
+  uint8_t rotation;         /* 0 CW, 1 CCW */
+  uint8_t type;             /* 0 segment, 1 start, 2 end */
+  uint8_t level;            /* pass height, 0 = base (needs "levels": true in the result JSON) */
+  uint8_t reserved;
+} loomora_step;
+#define LOOMORA_MESH_NORMALS 1 /* flags of loomora_mesh_info */
+#define LOOMORA_MESH_UVS 2
+typedef struct { uint64_t vertices; uint64_t triangles; uint32_t flags; uint32_t reserved; } loomora_mesh_info; /* 24 bytes */
+
+/* Save options (bit mask). */
+#define LOOMORA_SAVE_STORE_ALL 1 /* store every entry uncompressed */
+
+/* Creates an empty full project. `project_id_random16` are 16 random bytes supplied by the caller
+   (turned into a UUID v4 as loomora_uuid4_from_random does); `title` is UTF-8 (up to 1,024 bytes);
+   `created_at` is "YYYY-MM-DDTHH:MM:SSZ". The library reads no clock and no random source.
+   On success *editor is a handle to free with loomora_editor_close. */
+LOOMORA_API int32_t loomora_editor_create(const uint8_t project_id_random16[16], const char *title,
+                                          const char *created_at, loomora_editor **editor);
+LOOMORA_API void loomora_editor_close(loomora_editor *e);
+
+/* Items are passed as UTF-8 JSON following the schemas; the identifier is allocated by the editor and
+   returned in *id (it may be NULL); the "id" field of the JSON, if present, is ignored. A failed call
+   changes nothing. Errors: LOOMORA_ERR_INVALID (null pointer), LOOMORA_ERR_INVALID_ITEM (the item does
+   not satisfy the data model), LOOMORA_ERR_NOT_FOUND (unknown frame, layout or nail). */
+LOOMORA_API int32_t loomora_editor_add_spool(loomora_editor *e, const char *json, uint32_t *id);
+/* 2D frames only for now ("kind":"2d"): a 3D frame is refused with LOOMORA_ERR_INVALID_ITEM. */
+LOOMORA_API int32_t loomora_editor_add_frame(loomora_editor *e, const char *json, uint32_t *id);
+/* `json` holds the "name"; "frame" and "nail_count" come from the arguments. The "label" bit of
+   loomora_nail.flags is ignored: labels are set with loomora_editor_layout_set_label. */
+LOOMORA_API int32_t loomora_editor_add_layout(loomora_editor *e, uint32_t frame, const char *json,
+                                              const loomora_nail *nails, size_t count, uint32_t *id);
+LOOMORA_API int32_t loomora_editor_layout_set_label(loomora_editor *e, uint32_t layout, uint32_t nail_id,
+                                                    const char *label_or_null); /* NULL removes it */
+/* `json` holds name, color_mode, shape, width_px, height_px; the pictures are PNG, JPEG or WebP
+   bytes whose metadata is stripped: `source` is required, `target_png` optional (NULL, 0), `thumb_png`
+   required (PNG within 256 x 256 px and 64 KiB). */
+LOOMORA_API int32_t loomora_editor_add_image(loomora_editor *e, const char *json,
+                                             const uint8_t *source, size_t source_len,
+                                             const uint8_t *target_png, size_t target_len,
+                                             const uint8_t *thumb_png, size_t thumb_len, uint32_t *id);
+/* `json` holds name, created_at, frame, layout, images, spools (the selection) and optionally
+   "levels"; "steps" comes from step_count. `settings_json_or_null` is a JSON object or NULL. */
+LOOMORA_API int32_t loomora_editor_add_result(loomora_editor *e, const char *json,
+                                              const loomora_step *steps, size_t step_count,
+                                              const uint8_t *thumb_png, size_t thumb_len,
+                                              const char *settings_json_or_null, uint32_t *id);
+LOOMORA_API int32_t loomora_editor_set_title(loomora_editor *e, const char *title);
+
+/* Validates the staged project, writes a new archive and replaces `path` atomically: after any
+   failure, including LOOMORA_ERR_CANCELLED from the progress callback, the previous file is intact
+   and no temporary file is left. `modified_at` is the caller's time. `options`: LOOMORA_SAVE_*.
+   `report` (may be NULL) receives a report to free with loomora_report_free: the warnings after a
+   success, the cause after a failure. */
+LOOMORA_API int32_t loomora_editor_save_path(loomora_editor *e, const char *path, const char *modified_at,
+                                             uint32_t options, loomora_progress_fn cb, void *user,
+                                             loomora_report **report);
+/* The archive is handed to `sink` in order, once complete (a non-zero return stops with LOOMORA_ERR_IO). */
+LOOMORA_API int32_t loomora_editor_save_stream(loomora_editor *e, const char *modified_at, uint32_t options,
+                                               loomora_sink_fn sink, void *user, loomora_report **report);
+
+/* ---- end of editor: create and save ---- */
+
 #ifdef __cplusplus
 }
 #endif

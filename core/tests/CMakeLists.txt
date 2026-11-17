@@ -123,3 +123,11 @@ target_include_directories(loomora_spike_fmt_deps SYSTEM PRIVATE "${LOOMORA_RAPI
 target_link_libraries(loomora_spike_fmt_deps PRIVATE loomora_zlib)
 set_target_properties(loomora_spike_fmt_deps PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON
                                                          CXX_EXTENSIONS OFF)
+
+# --- loomora_refgen: writes the `basic` reference project (spec 002, T039). Host only ----------
+if(NOT LOOMORA_TARGET_WIN2000 AND NOT LOOMORA_TARGET_WEB AND NOT CMAKE_CROSSCOMPILING)
+  add_executable(loomora_refgen refgen.cpp)
+  target_link_libraries(loomora_refgen PRIVATE loomora)
+  set_target_properties(loomora_refgen PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON
+                                                  CXX_EXTENSIONS OFF)
+endif()
