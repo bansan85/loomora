@@ -263,7 +263,9 @@ def check_compiler(family, cxx, cc, work, res, verbose):
                     "                                   \"a\", \"b\", 1, 1, -1, 0, \"\", \"t\", b, 16) +\n"
                     "         (int)loomora_format_version(0, 0) +\n"
                     "         (int)loomora_format_limit(LOOMORA_LIMIT_BOMB_RATIO) +\n"
-                    "         loomora_uuid4_from_random(b, (char *)b);\n"
+                    "         loomora_uuid4_from_random(b, (char *)b) +\n"
+                    "         loomora_project_open_path(0, 0, 0, 0, 0) + (int)loomora_report_count(0) +\n"
+                    "         (int)loomora_project_count(0, LOOMORA_KIND_FRAME);\n"
                     "}\n")
     tu_cpp = work / "header_cpp98.cpp"
     tu_cpp.write_text(tu_c.read_text().replace("(void)", "()"))

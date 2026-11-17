@@ -74,28 +74,105 @@ LOOMORA_API uint64_t loomora_format_limit(int32_t which);
    Returns 0, or LOOMORA_ERR_INVALID for a NULL pointer. */
 LOOMORA_API int32_t loomora_uuid4_from_random(const uint8_t random16[16], char out[37]);
 
-/* ---- editor: create and save ---- */
+/* ---- reader: open, read, report, validate ---- */
 
-/* Bulk data layouts (sizes in bytes, no hidden padding). */
+/* Bulk data layouts: fixed sizes, no hidden padding. */
 typedef struct {            /* 88 bytes, 8-byte aligned */
-  uint32_t id;  uint32_t kind;        /* kind: 1 boundary, 2 exclusion_boundary, 3 interior */
-  uint32_t flags;                     /* bit 0: 3D fields valid, bit 1: has label */
-  uint32_t side;                      /* 3D: 0 exterior, 1 interior */
-  double   x, y, z;
-  double   diameter, length;
-  float    axis[3];  float face_u;
-  float    face_v;   uint32_t face_triangle;   uint32_t reserved0, reserved1;
+    uint32_t id;
+    uint32_t kind;          /* 1 boundary, 2 exclusion_boundary, 3 interior */
+    uint32_t flags;         /* bit 0: 3D fields valid, bit 1: has a label */
+    uint32_t side;          /* 3D: 0 exterior, 1 interior */
+    double x, y, z;
+    double diameter, length;
+    float axis[3];
+    float face_u;
+    float face_v;
+    uint32_t face_triangle;
+    uint32_t reserved0, reserved1;
 } loomora_nail;
+
 typedef struct {            /* 12 bytes */
-  uint32_t nail; uint32_t spool_index;
-  uint8_t rotation;         /* 0 CW, 1 CCW */
-  uint8_t type;             /* 0 segment, 1 start, 2 end */
-  uint8_t level;            /* pass height, 0 = base (needs "levels": true in the result JSON) */
-  uint8_t reserved;
+    uint32_t nail;
+    uint32_t spool_index;
+    uint8_t rotation;       /* 0 CW, 1 CCW */
+    uint8_t type;           /* 0 segment, 1 start, 2 end */
+    uint8_t level;
+    uint8_t reserved;
 } loomora_step;
+
 #define LOOMORA_MESH_NORMALS 1 /* flags of loomora_mesh_info */
 #define LOOMORA_MESH_UVS 2
-typedef struct { uint64_t vertices; uint64_t triangles; uint32_t flags; uint32_t reserved; } loomora_mesh_info; /* 24 bytes */
+
+typedef struct {            /* 24 bytes */
+    uint64_t vertices;
+    uint64_t triangles;
+    uint32_t flags;
+    uint32_t reserved;
+} loomora_mesh_info;
+
+/* Opens, validates (streaming) and returns the handle. Never writes, never creates a file. On
+   success *report (if not NULL) holds the warnings; on failure *project is NULL and *report holds
+   the errors (when the container could be read). The memory variant does not copy: the buffer
+   must stay valid until loomora_project_close. The report is freed with loomora_report_free. */
+LOOMORA_API int32_t loomora_project_open_path(const char *path, loomora_progress_fn cb, void *user,
+                                              loomora_project **project, loomora_report **report);
+LOOMORA_API int32_t loomora_project_open_memory(const uint8_t *data, size_t len,
+                                                loomora_progress_fn cb, void *user,
+                                                loomora_project **project, loomora_report **report);
+LOOMORA_API void loomora_project_close(loomora_project *project);
+
+/* Validation only (no handle kept); the same report. Returns 0 or the LOOMORA_ERR_* code. */
+LOOMORA_API int32_t loomora_validate_path(const char *path, loomora_progress_fn cb, void *user,
+                                          loomora_report **report);
+LOOMORA_API int32_t loomora_validate_memory(const uint8_t *data, size_t len, loomora_progress_fn cb,
+                                            void *user, loomora_report **report);
+
+/* Variable-size results: the total length needed (>= 0) or a negative error; bytes are written
+   only when cap is at least that length. No NUL is written. */
+LOOMORA_API int64_t loomora_project_manifest(const loomora_project *p, uint8_t *buf, size_t cap);
+LOOMORA_API int32_t loomora_project_is_light(const loomora_project *p); /* 1 light, 0 full */
+LOOMORA_API int64_t loomora_project_count(const loomora_project *p, int32_t kind);
+LOOMORA_API int64_t loomora_project_ids(const loomora_project *p, int32_t kind, uint32_t *ids,
+                                        size_t cap);
+LOOMORA_API int64_t loomora_project_item_json(const loomora_project *p, int32_t kind, uint32_t id,
+                                              uint8_t *buf, size_t cap);
+LOOMORA_API int64_t loomora_project_entry_size(const loomora_project *p, const char *entry);
+/* Range of any entry: returns the bytes written (fewer than cap at the end). */
+LOOMORA_API int64_t loomora_project_read_entry(const loomora_project *p, const char *entry,
+                                               uint64_t offset, uint8_t *buf, size_t cap);
+
+LOOMORA_API int64_t loomora_layout_nail_count(const loomora_project *p, uint32_t layout);
+LOOMORA_API int64_t loomora_layout_read_nails(const loomora_project *p, uint32_t layout,
+                                              uint64_t first, size_t count, loomora_nail *out);
+LOOMORA_API int64_t loomora_layout_nail_label(const loomora_project *p, uint32_t layout,
+                                              uint32_t nail_id, uint8_t *buf, size_t cap);
+LOOMORA_API int64_t loomora_result_step_count(const loomora_project *p, uint32_t result);
+LOOMORA_API int64_t loomora_result_read_steps(const loomora_project *p, uint32_t result,
+                                              uint64_t first, size_t count, loomora_step *out);
+LOOMORA_API int32_t loomora_frame_mesh_info(const loomora_project *p, uint32_t frame,
+                                            loomora_mesh_info *info);
+LOOMORA_API int64_t loomora_frame_read_vertices(const loomora_project *p, uint32_t frame,
+                                                uint64_t first, size_t count, float *xyz);
+LOOMORA_API int64_t loomora_frame_read_triangles(const loomora_project *p, uint32_t frame,
+                                                 uint64_t first, size_t count, uint32_t *abc);
+LOOMORA_API int64_t loomora_frame_read_normals(const loomora_project *p, uint32_t frame,
+                                               uint64_t first, size_t count, float *xyz);
+LOOMORA_API int64_t loomora_frame_read_uvs(const loomora_project *p, uint32_t frame, uint64_t first,
+                                           size_t count, float *uv); /* 0 written when none */
+
+/* Report: severity 1 warning, 2 error; item_kind 0 none/project or LOOMORA_KIND_*; item_id 0 when
+   none; text field 1 code, 2 entry path, 3 message (UTF-8, English). */
+LOOMORA_API int64_t loomora_report_count(const loomora_report *r);
+LOOMORA_API int64_t loomora_report_error_count(const loomora_report *r);
+LOOMORA_API int32_t loomora_report_issue(const loomora_report *r, size_t index, int32_t *severity,
+                                         int32_t *item_kind, uint32_t *item_id);
+LOOMORA_API int64_t loomora_report_text(const loomora_report *r, size_t index, int32_t field,
+                                        uint8_t *buf, size_t cap);
+LOOMORA_API void loomora_report_free(loomora_report *r);
+
+/* ---- end of reader block ---- */
+
+/* ---- editor: create and save ---- */
 
 /* Save options (bit mask). */
 #define LOOMORA_SAVE_STORE_ALL 1 /* store every entry uncompressed */

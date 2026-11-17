@@ -17,6 +17,13 @@ int loomora_header_c89_check(void) {
     int i;
     int32_t kinds[5];
     int32_t errors[13];
+    loomora_nail nail;
+    loomora_step step;
+    loomora_mesh_info mesh;
+    int64_t n;
+    int32_t severity = 0;
+    int32_t item_kind = 0;
+    uint32_t item_id = 0;
 
     for (i = 0; i < 16; i++)
         random16[i] = (uint8_t)i;
@@ -53,5 +60,38 @@ int loomora_header_c89_check(void) {
         return 3;
     if (loomora_uuid4_from_random(random16, uuid) != 0)
         return 4;
+    /* The reader block: every function must be declared and callable as C89. */
+    nail.id = 0;
+    step.nail = 0;
+    mesh.vertices = 0;
+    (void)nail;
+    (void)step;
+    (void)mesh;
+    if (loomora_project_open_path(0, 0, 0, &project, &report) != LOOMORA_ERR_INVALID)
+        return 6;
+    if (loomora_project_open_memory(0, 1, 0, 0, &project, &report) != LOOMORA_ERR_INVALID)
+        return 7;
+    if (loomora_validate_path(0, 0, 0, &report) != LOOMORA_ERR_INVALID)
+        return 8;
+    if (loomora_validate_memory(0, 1, 0, 0, &report) != LOOMORA_ERR_INVALID)
+        return 9;
+    n = loomora_project_count(0, LOOMORA_KIND_FRAME) + loomora_project_ids(0, 1, 0, 0) +
+        loomora_project_manifest(0, 0, 0) + loomora_project_item_json(0, 1, 1, 0, 0) +
+        loomora_project_entry_size(0, "x") + loomora_project_read_entry(0, "x", 0, 0, 0) +
+        loomora_layout_nail_count(0, 1) + loomora_layout_read_nails(0, 1, 0, 0, 0) +
+        loomora_layout_nail_label(0, 1, 0, 0, 0) + loomora_result_step_count(0, 1) +
+        loomora_result_read_steps(0, 1, 0, 0, 0) + loomora_frame_read_vertices(0, 1, 0, 0, 0) +
+        loomora_frame_read_triangles(0, 1, 0, 0, 0) + loomora_frame_read_normals(0, 1, 0, 0, 0) +
+        loomora_frame_read_uvs(0, 1, 0, 0, 0) + loomora_report_count(0) +
+        loomora_report_error_count(0) + loomora_report_text(0, 0, 1, 0, 0);
+    (void)n; /* the calls must link and return; the null-handle answers are tested in C++ */
+    if (loomora_project_is_light(0) != LOOMORA_ERR_INVALID)
+        return 10;
+    if (loomora_frame_mesh_info(0, 1, &mesh) != LOOMORA_ERR_INVALID)
+        return 11;
+    if (loomora_report_issue(0, 0, &severity, &item_kind, &item_id) != LOOMORA_ERR_INVALID)
+        return 12;
+    loomora_project_close(0);
+    loomora_report_free(0);
     return loomora_abi_version() == 1u ? 0 : 5;
 }
