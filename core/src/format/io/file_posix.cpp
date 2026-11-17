@@ -28,6 +28,9 @@
 
 #include <fcntl.h>
 #include <sys/stat.h>
+#if defined(__ANDROID__) && defined(__ANDROID_API__) && __ANDROID_API__ < 12
+#include <sys/syscall.h>
+#endif
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -46,14 +49,45 @@ namespace {
 
 #if LOOMORA_FMT_LSEEK64
 typedef off64_t file_off_t;
+#if defined(__ANDROID__) && defined(__ANDROID_API__) && __ANDROID_API__ < 12
+// Android 2.3 (API 9 to 11): the libc has pread / pwrite with a 32-bit off_t only (pread64 and
+// pwrite64 come with API 12), so the 64-bit system calls are made directly. ARM EABI wants the
+// 64-bit offset in an even register pair: one padding argument before it.
+inline ssize_t pread_at(int fd, void *buf, std::size_t len, file_off_t off) {
+    const unsigned long lo = static_cast<unsigned long>(static_cast<std::uint64_t>(off) & 0xFFFFFFFFu);
+    const unsigned long hi = static_cast<unsigned long>(static_cast<std::uint64_t>(off) >> 32);
+#if defined(__arm__)
+    return static_cast<ssize_t>(syscall(__NR_pread64, fd, buf, len, 0, lo, hi));
+#else
+    return static_cast<ssize_t>(syscall(__NR_pread64, fd, buf, len, lo, hi));
+#endif
+}
+inline ssize_t pwrite_at(int fd, const void *buf, std::size_t len, file_off_t off) {
+    const unsigned long lo = static_cast<unsigned long>(static_cast<std::uint64_t>(off) & 0xFFFFFFFFu);
+    const unsigned long hi = static_cast<unsigned long>(static_cast<std::uint64_t>(off) >> 32);
+#if defined(__arm__)
+    return static_cast<ssize_t>(syscall(__NR_pwrite64, fd, buf, len, 0, lo, hi));
+#else
+    return static_cast<ssize_t>(syscall(__NR_pwrite64, fd, buf, len, lo, hi));
+#endif
+}
+#else
 inline ssize_t pread_at(int fd, void *buf, std::size_t len, file_off_t off) {
     return pread64(fd, buf, len, off);
 }
 inline ssize_t pwrite_at(int fd, const void *buf, std::size_t len, file_off_t off) {
     return pwrite64(fd, buf, len, off);
 }
+#endif
+#if defined(__ANDROID__) && defined(__ANDROID_API__) && __ANDROID_API__ < 21
+// bionic before API 21 declares no fstat64 / stat64 function, but its `struct stat` already has
+// the layout of the kernel's stat64 (a 64-bit st_size) and fstat() the system call of that layout.
+inline int fstat_of(int fd, struct stat *st) { return fstat(fd, st); }
+typedef struct stat StatBuf;
+#else
 inline int fstat_of(int fd, struct stat64 *st) { return fstat64(fd, st); }
 typedef struct stat64 StatBuf;
+#endif
 #else
 typedef off_t file_off_t;
 inline ssize_t pread_at(int fd, void *buf, std::size_t len, file_off_t off) {

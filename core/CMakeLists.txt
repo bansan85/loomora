@@ -13,7 +13,10 @@ list(APPEND LOOMORA_SOURCES ${LOOMORA_FORMAT_SOURCES})
 # Internal headers are included as "format/report.hpp", "internal/config.hpp"; RapidJSON is a
 # SYSTEM include so -pedantic-errors -Werror never applies to it; zlib is the C library
 # loomora_zlib (cmake/loomora_zlib.cmake, its own flags).
-set(LOOMORA_RAPIDJSON_DIR "${PROJECT_SOURCE_DIR}/third_party/rapidjson/include")
+# A parent project that is not the repository root (the Gradle build of the Android Modern UI) sets it first.
+if(NOT LOOMORA_RAPIDJSON_DIR)
+  set(LOOMORA_RAPIDJSON_DIR "${PROJECT_SOURCE_DIR}/third_party/rapidjson/include")
+endif()
 
 # Fuzz targets (core/fuzz, libFuzzer; Clang only): OFF by default.
 option(LOOMORA_BUILD_FUZZ "Build the fuzz targets of core/fuzz (Clang with libFuzzer)" OFF)

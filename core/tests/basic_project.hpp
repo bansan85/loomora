@@ -100,7 +100,7 @@ inline double round3(double v) { return std::floor(v * 1000.0 + 0.5) / 1000.0; }
 
 inline std::string num(unsigned long v) {
     char buf[32];
-    std::snprintf(buf, sizeof buf, "%lu", v);
+    snprintf(buf, sizeof buf, "%lu", v);
     return buf;
 }
 

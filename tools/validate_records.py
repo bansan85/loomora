@@ -331,6 +331,9 @@ CODE_SWITCH_RES = (
 # marker, an export macro, an include guard: no old and no new system path is chosen by them).
 NOT_A_FALLBACK = OrderedDict([
     ("LOOMORA_ANDROID_NDK", "the directory of the NDK, a path"),
+    ("LOOMORA_ANDROID_PIE", "toolchain parameter: the test programs for Android 5.0 and later are linked as PIE (the system refuses another kind); the libraries and the APK are not affected"),
+    ("LOOMORA_RAPIDJSON_DIR", "the directory of the RapidJSON submodule, a path (a parent project that is not the repository root sets it)"),
+    ("LOOMORA_ZLIB_DIR", "the directory of the zlib submodule, a path (a parent project that is not the repository root sets it)"),
     ("LOOMORA_EMSCRIPTEN_ROOT", "the directory of Emscripten, a path"),
     ("LOOMORA_BUILD_TESTS", "build option: which targets exist"),
     ("LOOMORA_BUILD_CATCH2_TESTS", "build option: which targets exist"),

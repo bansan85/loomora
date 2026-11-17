@@ -124,7 +124,7 @@ struct Sha256 {
         update(len, 8);
         char out[65];
         for (int i = 0; i < 8; ++i)
-            std::snprintf(out + 8 * i, 9, "%08x", static_cast<unsigned>(h[i]));
+            snprintf(out + 8 * i, 9, "%08x", static_cast<unsigned>(h[i]));
         return std::string(out, 64);
     }
 };

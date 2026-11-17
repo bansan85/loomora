@@ -8,6 +8,11 @@ get_filename_component(LOOMORA_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../.." ABSO
 
 # The backend's own target property is CXX_STANDARD 11; nothing is set globally.
 set(LOOMORA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+# The format module (spec 002) needs the pinned zlib and RapidJSON of the submodules, as the top-level
+# CMakeLists.txt provides them; this project's source directory is not the repository root.
+set(LOOMORA_ZLIB_DIR "${LOOMORA_ROOT}/third_party/zlib")
+set(LOOMORA_RAPIDJSON_DIR "${LOOMORA_ROOT}/third_party/rapidjson/include")
+include(${LOOMORA_ROOT}/cmake/loomora_zlib.cmake)
 add_subdirectory(${LOOMORA_ROOT}/core ${CMAKE_CURRENT_BINARY_DIR}/core)
 
 add_library(loomora_jni SHARED ${LOOMORA_ROOT}/bridge/jni/loomora_jni.cpp)
