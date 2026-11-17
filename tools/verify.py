@@ -614,7 +614,9 @@ def step_ui_project(ctx):
 
 # ---- format checks (spec 002): reference files and read-only use mode -----------------------------
 def step_format_files(ctx):
-    """T039/T054: loomora_refgen writes basic, empty, escape40 and multi; the independent Python reader accepts them."""
+    """T039/T054/T084: loomora_refgen writes basic, empty, escape40, multi, multi-light and one; the independent
+    Python reader accepts them (light rules included), the light files match their expected content and their
+    meshes keep the geometry of multi (--compare-mesh)."""
     bdir = ctx.build_dir / "default"
     refgen = find_exe(bdir, "loomora_refgen.exe" if IS_WINDOWS else "loomora_refgen")
     if refgen is None:
@@ -631,7 +633,15 @@ def step_format_files(ctx):
     if rc != 0:
         return ctx.fail("format-files", "multi.expected.json is not what tools/gen_reference.py writes", log)
     rc, _ = run_logged(log, [sys.executable, ROOT / "tools" / "check_loomora.py", "--canonical", "--expect", expected, out])
-    ctx.ok("format-files", "basic, empty, escape40, multi pass check_loomora --canonical, multi matches its expected JSON") if rc == 0 else ctx.fail("format-files", "check_loomora status %d" % rc, log)
+    if rc != 0:
+        return ctx.fail("format-files", "check_loomora status %d" % rc, log)
+    for light in ("multi-light", "one"):
+        rc, _ = run_logged(log, [sys.executable, ROOT / "tools" / "check_loomora.py", "--compare-mesh",
+                                 out / "multi.loomora", out / (light + ".loomora")])
+        if rc != 0:
+            return ctx.fail("format-files", "check_loomora --compare-mesh multi %s status %d" % (light, rc), log)
+    ctx.ok("format-files", "basic, empty, escape40, multi, multi-light, one pass check_loomora --canonical, "
+           "multi and the light files match their expected JSON, light meshes keep the geometry of multi")
 
 
 def step_readonly(ctx):

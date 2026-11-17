@@ -36,5 +36,7 @@
   {"id":4,"name":"Cube","frame":3,"layout":5,"images":[3,4],"views":true,"spools":[[5,800],[6,810]],"steps":240,"steps_crc32":"8c61d8b7","first_steps":[[0,0,0,1],[10,1,1,1],[17,1,0,0],[21,0,1,0],[7,1,0,0],[11,0,1,0],[21,1,0,0],[1,0,1,0],[11,1,0,0],[15,0,1,0],[1,1,0,0],[5,0,1,0]],"last_steps":[[15,1,0,0],[19,0,1,0],[5,1,0,0],[9,0,1,0],[19,1,0,0],[23,0,1,0],[9,1,0,0],[13,0,1,0],[23,1,0,0],[3,0,1,0],[10,0,0,2],[20,1,1,2]]},
   {"id":5,"name":"Circle again","frame":1,"layout":1,"images":[3],"views":false,"spools":[[1,3000],[3,3010],[5,3020],[6,3030]],"steps":500,"steps_crc32":"d8ab7e7e","first_steps":[[0,0,0,1],[10,1,1,1],[20,2,0,1],[30,3,1,1],[31,1,0,0],[41,2,1,0],[51,3,0,0],[49,0,1,0],[59,1,0,0],[69,2,1,0],[79,3,0,0],[77,0,1,0]],"last_steps":[[59,1,0,0],[69,2,1,0],[79,3,0,0],[77,0,1,0],[87,1,0,0],[97,2,1,0],[107,3,0,0],[105,0,1,0],[112,0,0,2],[2,1,1,2],[12,2,0,2],[22,3,1,2]]}
  ],
- "combinations_without_result": [[2,4]]
+ "combinations_without_result": [[2,4]],
+ "light_files": ["multi-light.loomora","one.loomora"],
+ "one": {"file":"one.loomora","result":4,"frames":[3],"layouts":[5],"images":[3,4],"spools":[5,6],"counts":{"frames":1,"layouts":1,"images":2,"spools":2,"results":1},"required_features":["surface_mesh","multi_view_target"],"combinations_without_result":[]}
 }
