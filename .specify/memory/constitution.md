@@ -1,50 +1,46 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!--
+Sync Impact Report (temporaire, à retirer avant le commit)
+Version : 1.0.0 → 1.0.1 (PATCH : correction du principe IX, builds par plateforme)
+Principe modifié : IX. Builds (liste par plateforme). Aucun ajout ni retrait.
+TODO différés : aucun.
+-->
+
+# Constitution Loomora
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Backend unique en C++11
+Le backend est compilé en C++11 (propriété de cible, jamais global), sans seconde implémentation. UI Legacy en C++11, UI Modernes jusqu'à C++17.
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+### II. Une seule frontière : l'API C
+Aucune logique dans les UI. Pas de type C++ ni d'exception dans l'en-tête ; les données passent par des tampons de l'appelant. L'API est additive tant que `LOOMORA_ABI_VERSION` n'est pas changé par le propriétaire.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+### III. Replis par cas
+Un repli ne vise que la plateforme, le compilateur ou la version fautive, jamais le plus restrictif pour tous. Chacun est déclaré dans `validation/fallbacks.json`.
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+### IV. Tests d'abord
+Les tests sont écrits avant le code. `python tools/verify.py quick` vérifie toute branche ; `full` seulement pour un changement graphique ; pas de capture pour vérifier que ça marche.
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### V. Preuves sobres
+Une preuve n'est stockée que si elle montre du nouveau. Aucune image sans accord du propriétaire.
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+### VI. Flux Git
+`master` ne contient que des merges `--no-ff`. Tout changement est sur une branche dédiée. Aucun merge ni déplacement du pointeur du sous-module docs sans accord explicite du propriétaire.
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+### VII. Commits
+En anglais, Conventional Commits, titre de 50 caractères au plus, impératif.
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+### VIII. Documentation d'implémentation
+ADR, validation et évidence vivent dans le sous-module `docs/implementation` ; les specs Spec Kit dans `specs/`. Le build n'a jamais besoin du sous-module.
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+### IX. Builds
+Linux Legacy et Modern : compilés depuis WSL. Windows Legacy : cross-compilé avec MinGW-w64 depuis WSL ; Windows Modern : avec Visual Studio. Apple : compilé depuis les VM VirtualBox. WebAssembly : depuis WSL avec Emscripten. Tout build WSL est sous `$HOME`.
+
+### X. Outils hôtes
+Python 3.8+ avec la bibliothèque standard (`jsonschema` accepté).
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+Ces principes priment sur toute autre pratique. Toute dérogation exige un ADR (raison et alternative plus simple écartée). Amendement : modification de ce fichier validée par le propriétaire, version sémantique (MAJOR retrait ou redéfinition d'un principe, MINOR ajout, PATCH reformulation). Chaque revue de plan ou d'analyse vérifie la conformité.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+**Version**: 1.0.1 | **Ratified**: 2026-11-17 | **Last Amended**: 2026-11-17
