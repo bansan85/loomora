@@ -156,5 +156,8 @@ if(TARGET loomora_tests)
   add_custom_target(loomora_corpus DEPENDS "${FMT_CORPUS_DIR}/corpus.json")
   add_dependencies(loomora_tests loomora_corpus)
   target_compile_definitions(loomora_tests PRIVATE FMT_CORPUS_DIR="${FMT_CORPUS_DIR}")
+  # The expected content of `multi` written by tools/gen_reference.py (T054).
+  target_compile_definitions(loomora_tests PRIVATE
+    FMT_MULTI_EXPECTED="${CMAKE_CURRENT_SOURCE_DIR}/format/multi.expected.json")
 endif()
 # --- end of reader corpus ---------------------------------------------------------------------
