@@ -31,7 +31,7 @@ Application data (progress, bookmarks) is **not** part of the model; it refers t
 | `min_reader` | string `"M.m"` | not above `format` |
 | `project_id` | UUID v4 string | lowercase, canonical form |
 | `title` | string (UTF-8) | up to 1,024 bytes, may be empty |
-| `created_at`, `modified_at` | ISO 8601 UTC, `YYYY-MM-DDTHH:MM:SS[.fff]Z` | `modified_at` ≥ `created_at` is not enforced; both supplied by the caller (R6, FR-004) |
+| `created_at`, `modified_at` | ISO 8601 UTC, `YYYY-MM-DDTHH:MM:SS[.fff]Z` | `modified_at` ≥ `created_at` is not enforced; both supplied by the caller (R6, FR-004). The shape (month 01-12, day 01-31, hour 00-23, minute 00-59, second 00-60) decides acceptance; a time that is not a real date (day beyond the month with the Gregorian leap rule, second 60) still opens and gets the warning `warn.timestamp` |
 | `generator` | `{application, version, platform, architecture}` strings | informational |
 | `profile` | `full` or `light` | `light` implies `editable:false` |
 | `editable` | boolean | false for `light` |

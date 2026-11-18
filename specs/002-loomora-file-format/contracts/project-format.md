@@ -189,7 +189,7 @@ An export with a result subset (FR-018) writes the chosen results and exactly th
 
 ## 8. Reading rules (summary of validation)
 
-In this order (research R11): container checks (§1), manifest parse, version and features, per-entry size and SHA-256 and ZIP CRC-32, JSON schema checks, identifiers and references, numeric checks, nails against frames (and the frame origin, a warning), `sequence.bin` and `mesh.bin` decoding, thresholds and nail distance warnings. The first error does not stop the pass when it is safe to continue; every issue is reported (CLI) and the project is valid only if there is no error.
+In this order (research R11): container checks (§1), manifest parse, version and features, per-entry size and SHA-256 and ZIP CRC-32, JSON schema checks, identifiers and references, numeric checks, nails against frames (and the frame origin, a warning), `sequence.bin` and `mesh.bin` decoding, thresholds, time stamp (`warn.timestamp`) and nail distance warnings. The first error does not stop the pass when it is safe to continue; every issue is reported (CLI) and the project is valid only if there is no error.
 
 ## 9. Versioning (FR-020, FR-021)
 

@@ -88,6 +88,11 @@ struct Validator {
                   std::string(what) + " names the entry " + ref.entry + ", which is not in the archive");
     }
 
+    // ---- time stamps ------------------------------------------------------------------------------
+    void timestamps();
+    void timestamp(const std::string &entry, ItemKind kind, std::uint32_t id, const char *field,
+                   const std::string &value);
+
     // ---- frames ---------------------------------------------------------------------------------
     void frames();
     void frame_exclusions(const FrameRecord &fr);
@@ -447,6 +452,24 @@ void Validator::layouts() {
 
 // ---- thresholds ------------------------------------------------------------------------------------------------
 
+// A time stamp that has the right shape but is not a real date and time (2026-02-31, second 60) still
+// opens: the warning names the entry and the field.
+void Validator::timestamp(const std::string &entry, ItemKind kind, std::uint32_t id, const char *field,
+                          const std::string &value) {
+    if (model::is_iso8601_utc(value) && !model::is_calendar_time(value))
+        warning(report, "warn.timestamp", entry, kind, id,
+                std::string(field) + " " + value + " is not a real date and time (checked: days of the month, hour, minute, second 00-59)");
+}
+
+void Validator::timestamps() {
+    const model::Manifest &m = rd.manifest();
+    timestamp(kManifestEntry, kItemNone, 0, "created_at", m.created_at);
+    timestamp(kManifestEntry, kItemNone, 0, "modified_at", m.modified_at);
+    for (std::map<std::uint32_t, ResultRecord>::const_iterator it = rd.results().begin(); it != rd.results().end();
+         ++it)
+        timestamp(it->second.entry, kItemResult, it->second.result.id, "created_at", it->second.result.created_at);
+}
+
 void Validator::thresholds() {
     ThresholdFacts facts;
     facts.frames = rd.frames().size();
@@ -516,6 +539,7 @@ void validate_semantic(const ProjectReader &reader, Report &report) {
     if (v.full)
         v.layouts();
     v.thumbnails();
+    v.timestamps();
     v.thresholds();
 }
 

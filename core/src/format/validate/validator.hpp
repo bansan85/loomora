@@ -19,6 +19,9 @@
 //   warn.nail_distance           two nails closer than the sum of their radii (warning, one per layout)
 //   warn.origin_offset           bounding-box centre of a frame more than 0.01 mm from the origin (warning)
 //   warn.thumbnail_size          a thumbnail above 256 px or 64 KiB (warning)
+//   warn.timestamp               a created_at / modified_at of the manifest or a result's created_at that has
+//                                the right shape but is not a real date and time (2026-02-31, second 60)
+//                                (warning, one per field; the file still opens)
 #ifndef LOOMORA_FORMAT_VALIDATE_VALIDATOR_HPP
 #define LOOMORA_FORMAT_VALIDATE_VALIDATOR_HPP
 

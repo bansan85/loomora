@@ -18,6 +18,7 @@
 #include "../../include/loomora.h"
 #include "../basic_project.hpp"
 #include "format/limits.hpp"
+#include "format/model/common.hpp"
 #include "format/project_reader.hpp"
 #include "format/validate/geometry.hpp"
 #include <cmath>
@@ -200,7 +201,8 @@ void item_of_entry(const std::string &entry, int &kind, std::uint32_t &id) {
 
 bool names_item(const std::string &code) {
     return code.compare(0, 4, "ref.") == 0 || code.compare(0, 5, "nail.") == 0 || code.compare(0, 6, "spool.") == 0 ||
-           code == "warn.nail_distance" || code == "warn.origin_offset" || code == "warn.thumbnail_size";
+           code == "warn.nail_distance" || code == "warn.origin_offset" || code == "warn.thumbnail_size" ||
+           code == "warn.timestamp";
 }
 
 std::string dump(const std::vector<Found> &v) {
@@ -274,6 +276,64 @@ TEST_CASE("every corpus file gives exactly its documented code, severity, entry 
     }
     REQUIRE(checked >= 100);
     REQUIRE(semantic >= 20);
+}
+
+TEST_CASE("a calendar-invalid time stamp opens with warn.timestamp naming the entry and the field", "[format][validator]") {
+    if (!have_corpus())
+        return;
+    struct Expect {
+        const char *file, *entry, *field;
+    };
+    const Expect expect[] = {
+        {"warning-warn.timestamp.loomora", "manifest.json", "created_at"},
+        {"warning-warn.timestamp-leap-second.loomora", "manifest.json", "modified_at"},
+        {"warning-warn.timestamp-result.loomora", "results/1/result.json", "created_at"},
+    };
+    for (size_t k = 0; k < sizeof(expect) / sizeof(expect[0]); ++k) {
+        INFO(expect[k].file);
+        const std::string path = std::string(FMT_CORPUS_DIR) + "/" + expect[k].file;
+        Opened o;
+        o.rc = loomora_project_open_path(path.c_str(), nullptr, nullptr, &o.p, &o.r);
+        const std::vector<Found> found = issues_of(o.r);
+        INFO("issues:\n" << dump(found));
+        REQUIRE(o.rc == 0);
+        REQUIRE(o.p != nullptr);
+        REQUIRE(found.size() == 1);
+        CHECK(found[0].severity == 1);
+        CHECK(found[0].code == "warn.timestamp");
+        CHECK(found[0].entry == expect[k].entry);
+        CHECK(found[0].message.find(expect[k].field) != std::string::npos);
+    }
+}
+
+TEST_CASE("is_calendar_time: months, leap years, hour, minute and second", "[format][validator]") {
+    using loomora::format::model::is_calendar_time;
+    using loomora::format::model::is_iso8601_utc;
+    // Real times, including the leap day and a fraction.
+    CHECK(is_calendar_time("2026-11-17T09:00:00Z"));
+    CHECK(is_calendar_time("2024-02-29T23:59:59Z"));
+    CHECK(is_calendar_time("2000-02-29T00:00:00Z"));
+    CHECK(is_calendar_time("2026-12-31T23:59:59.999Z"));
+    CHECK(is_calendar_time("2026-04-30T00:00:00Z"));
+    CHECK(is_calendar_time("2026-02-28T00:00:00Z"));
+    // Right shape, not a real time: still accepted by the shape check.
+    const char *const unreal[] = {"2026-02-31T00:00:00Z", "2026-02-29T00:00:00Z", "1900-02-29T00:00:00Z",
+                                  "2100-02-29T00:00:00Z", "2026-04-31T00:00:00Z", "2026-06-31T00:00:00Z",
+                                  "2026-09-31T00:00:00Z", "2026-11-31T00:00:00Z", "2026-06-30T23:59:60Z"};
+    for (size_t i = 0; i < sizeof(unreal) / sizeof(unreal[0]); ++i) {
+        INFO(unreal[i]);
+        CHECK(is_iso8601_utc(unreal[i]));
+        CHECK(!is_calendar_time(unreal[i]));
+    }
+    // Not even the shape: the shape check keeps rejecting, the calendar check says no too.
+    CHECK(!is_iso8601_utc("2026-13-01T00:00:00Z"));
+    CHECK(!is_iso8601_utc("2026-00-10T00:00:00Z"));
+    CHECK(!is_iso8601_utc("2026-01-00T00:00:00Z"));
+    CHECK(!is_iso8601_utc("2026-01-01T24:00:00Z"));
+    CHECK(!is_iso8601_utc("2026-01-01T00:60:00Z"));
+    CHECK(!is_iso8601_utc("2026-01-01T00:00:61Z"));
+    CHECK(!is_calendar_time("2026-13-01T00:00:00Z"));
+    CHECK(!is_calendar_time("not a time"));
 }
 
 TEST_CASE("the valid corpus files give an empty report and every truncate-* file is rejected", "[format][validator]") {

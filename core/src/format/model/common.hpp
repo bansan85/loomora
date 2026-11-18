@@ -45,6 +45,10 @@ bool is_hex_color(const std::string &s);
 // "YYYY-MM-DDTHH:MM:SS[.f...]Z" (shape only: digits and separators, month 01-12, day 01-31,
 // hour 00-23, minute 00-59, second 00-60).
 bool is_iso8601_utc(const std::string &s);
+// The calendar check on top of the shape: true when `s` passes is_iso8601_utc and names a real date
+// and time (days of the month with the Gregorian leap rule, second 00-59: a leap second 60 is not).
+// A file whose time stamp fails only this check still opens; the validator reports warn.timestamp.
+bool is_calendar_time(const std::string &s);
 // A UUID v4 in canonical lowercase text (8-4-4-4-12, version 4, variant 8, 9, a or b).
 bool is_uuid4(const std::string &s);
 // 64 lowercase hexadecimal characters.
