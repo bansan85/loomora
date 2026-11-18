@@ -60,6 +60,11 @@ bool is_valid_entry_name(const std::string &name, std::string *why = nullptr);
 // The ASCII case folding used to detect duplicate names.
 std::string fold_entry_name(const std::string &name);
 
+// The number of bytes to give to one call of zlib (whose lengths are 32-bit) when `remaining`
+// bytes are still to be produced: `remaining` capped at 1 GiB (or at hooks().inflate_chunk_max
+// when a test lowers it). Always at least 1 for a non-zero `remaining`, never above 2^30.
+std::size_t inflate_chunk_len(std::uint64_t remaining);
+
 struct ZipEntry {
     std::string name;
     std::uint16_t method;           // 0 stored, 8 deflate

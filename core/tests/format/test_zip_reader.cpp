@@ -883,3 +883,72 @@ TEST_CASE("a read error of the source is LOOMORA_ERR_IO", "[zip]") {
         }
     }
 }
+
+// ---- T104: zlib counts in 32 bits ----------------------------------------------------------------
+
+TEST_CASE("inflate_chunk_len never gives zlib more than 1 GiB, so a length of 2^32 never becomes 0", "[zip][inflate]") {
+    ScopedHooks scoped;
+    const std::uint64_t gib = 1ull << 30;
+    CHECK(inflate_chunk_len(0) == 0u);
+    CHECK(inflate_chunk_len(1) == 1u);
+    CHECK(inflate_chunk_len(gib) == gib);
+    CHECK(inflate_chunk_len(gib + 1) == gib);
+    // The lengths that the 32-bit cast of zlib turned into 0 (or into a small wrong value).
+    CHECK(inflate_chunk_len(1ull << 32) == gib);
+    CHECK(inflate_chunk_len(2ull << 32) == gib);
+    CHECK(inflate_chunk_len((1ull << 32) + 5) == gib);
+    CHECK(inflate_chunk_len(~0ull) == gib);
+    // A test can lower the cap, never raise it above 1 GiB.
+    hooks().inflate_chunk_max = 7;
+    CHECK(inflate_chunk_len(1ull << 32) == 7u);
+    CHECK(inflate_chunk_len(3) == 3u);
+    hooks().inflate_chunk_max = static_cast<std::size_t>(gib) * 2;
+    CHECK(inflate_chunk_len(1ull << 32) == gib);
+}
+
+TEST_CASE("a deflated entry is inflated in chunks when one read asks for more than the chunk", "[zip][inflate]") {
+    std::string content;
+    for (int i = 0; i < 3000; ++i)
+        content += static_cast<char>('a' + (i * 7 + i / 13) % 26);
+    std::vector<Entry> v;
+    v.push_back(file("d.txt", content, 8));
+    v.push_back(file("s.txt", content, 0));
+    const Archive a = build(with_mimetype(v));
+    MemorySource src(&a.bytes[0], a.bytes.size());
+    ZipReader r(src);
+    r.open();
+
+    ScopedHooks scoped;
+    hooks().inflate_chunk_max = 7; // 3,000 bytes in one read are 429 calls of zlib
+    std::uint64_t inflated = 0;
+    hooks().inflated_bytes = &inflated;
+    const char *names[2] = {"d.txt", "s.txt"};
+    for (int k = 0; k < 2; ++k) {
+        inflated = 0;
+        std::unique_ptr<ZipEntryStream> s = r.open_entry(*r.find(names[k]));
+        std::vector<char> out(content.size());
+        // One read of the whole entry: every byte must come back from this single call.
+        REQUIRE(s->read(&out[0], out.size()) == content.size());
+        CHECK(std::string(out.begin(), out.end()) == content);
+        CHECK(s->read(&out[0], out.size()) == 0u); // the end: size, length and CRC-32 verified
+        CHECK(inflated == (k == 0 ? content.size() : 0u));
+    }
+    // read_all goes through the same path, with the CRC-32 computed in chunks too.
+    const Bytes all = r.read_all(*r.find("d.txt"), 1u << 20);
+    CHECK(std::string(all.begin(), all.end()) == content);
+}
+
+TEST_CASE("a corrupt CRC-32 is still caught when the CRC is computed in chunks", "[zip][inflate]") {
+    std::vector<Entry> v;
+    Entry e = file("d.txt", std::string(500, 'x'), 8);
+    e.has_crc = true;
+    e.crc = 1234;
+    v.push_back(e);
+    const Archive a = build(with_mimetype(v));
+    MemorySource src(&a.bytes[0], a.bytes.size());
+    ZipReader r(src);
+    r.open();
+    ScopedHooks scoped;
+    hooks().inflate_chunk_max = 3;
+    CHECK_THROWS_AS(r.read_all(*r.find("d.txt"), 1000), FormatError);
+}
