@@ -368,7 +368,8 @@ class WinSink : public Sink {
     // 3. the target is renamed aside, the temporary file renamed to the target, the old file
     //    deleted (every system; a short window where the target has no file, closed again by
     //    renaming the old file back when the second step fails). ReplaceFile is not used.
-    // A virus scanner may hold a file for a moment: a failure is retried a few times.
+    // A virus scanner may hold a file for a moment: a failure is retried a few times. The tests skip
+    // step 2 (should_skip_posix_rename) to run step 3 on a system that has step 2.
     DWORD replace_target() {
         DWORD error = ERROR_SUCCESS;
         for (int attempt = 0; attempt < 6; ++attempt) {
@@ -382,7 +383,7 @@ class WinSink : public Sink {
             if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_READONLY) != 0 ||
                 (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
                 return error; // nothing to take over, or a file the user protected
-            if (posix_rename() || rename_aside())
+            if ((!should_skip_posix_rename() && posix_rename()) || rename_aside())
                 return ERROR_SUCCESS;
             Sleep(20);
         }
