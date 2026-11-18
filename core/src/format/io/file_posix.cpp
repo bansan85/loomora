@@ -7,6 +7,9 @@
 //   sink     `<target>.tmp-<random>` created with O_EXCL in the target's directory, fsync
 //            (F_FULLFSYNC on macOS), rename over the target, temporary file unlinked on failure,
 //            abort or destruction. The hooks of testing.hpp fail a write, the flush or the rename.
+//            When the target is a symbolic link (FR-028) the link is followed first: the temporary
+//            file is made in the directory of the file the link leads to and renamed over that
+//            file, so the link stays a link.
 #if !defined(_WIN32)
 
 // 64-bit file offsets for off_t on the 32-bit targets (glibc, bionic from API 21); must come
@@ -184,6 +187,56 @@ std::string random_suffix(int attempt) {
     return s;
 }
 
+// The most links followed to reach a file (Linux allows 40 in one path walk, macOS 32).
+const int kMaxLinkHops = 40;
+
+// The content of the symbolic link `path`; false when it cannot be read.
+bool read_link_text(const std::string &path, std::string &text) {
+    for (std::size_t cap = 256; cap <= (1u << 20); cap *= 4) {
+        std::string buf(cap, '\0');
+        const ssize_t n = ::readlink(path.c_str(), &buf[0], cap);
+        if (n < 0)
+            return false;
+        if (static_cast<std::size_t>(n) < cap) {
+            buf.resize(static_cast<std::size_t>(n));
+            text.swap(buf);
+            return true;
+        }
+    }
+    errno = ENAMETOOLONG;
+    return false;
+}
+
+// The path of the file a save to `path` replaces (FR-028): `path` itself unless it is a symbolic link,
+// else the end of the chain of links, which may not exist yet (a dangling link: the save creates it).
+// A relative link text is relative to the directory that holds the link. Throws LOOMORA_ERR_IO for a
+// loop of links or a link that cannot be read. Any other doubt (a missing directory, no permission)
+// returns the path unchanged, and the creation of the temporary file reports it as before.
+std::string resolve_save_target(const std::string &path) {
+    std::string cur = path;
+    for (int hops = 0; hops <= kMaxLinkHops; ++hops) {
+        struct stat st;
+        if (::lstat(cur.c_str(), &st) != 0 || !S_ISLNK(st.st_mode))
+            return cur;
+        if (hops == kMaxLinkHops) {
+            errno = ELOOP;
+            break;
+        }
+        std::string text;
+        if (!read_link_text(cur, text))
+            throw FormatError(LOOMORA_ERR_IO, errno_text("cannot read the link", cur));
+        if (text.empty())
+            throw FormatError(LOOMORA_ERR_IO, "the link '" + cur + "' is empty");
+        if (text[0] == '/') {
+            cur = text;
+        } else {
+            const std::string::size_type slash = cur.rfind('/');
+            cur = slash == std::string::npos ? text : cur.substr(0, slash + 1) + text;
+        }
+    }
+    throw FormatError(LOOMORA_ERR_IO, errno_text("cannot follow the links of", path));
+}
+
 class PosixSink : public Sink {
   public:
     PosixSink(const std::string &target, const std::string &temp, int fd)
@@ -356,9 +409,11 @@ std::unique_ptr<Source> open_file_source(const std::string &utf8_path) {
 std::unique_ptr<Sink> create_file_sink(const std::string &utf8_target_path) {
     if (utf8_target_path.empty())
         throw FormatError(LOOMORA_ERR_IO, "empty target path");
+    // A symbolic link is followed: the real file is replaced, in its own directory, and the link stays.
+    const std::string target = resolve_save_target(utf8_target_path);
     // O_EXCL: never open a temporary file another process (or a stale run) already made.
     for (int attempt = 0; attempt < 100; ++attempt) {
-        const std::string temp = utf8_target_path + ".tmp-" + random_suffix(attempt);
+        const std::string temp = target + ".tmp-" + random_suffix(attempt);
         const int fd = ::open(temp.c_str(), O_RDWR | O_CREAT | O_EXCL | kCloexec, 0666);
         if (fd < 0) {
             if (errno == EEXIST || errno == EINTR)
@@ -366,14 +421,14 @@ std::unique_ptr<Sink> create_file_sink(const std::string &utf8_target_path) {
             throw FormatError(LOOMORA_ERR_IO, errno_text("cannot create", temp));
         }
         try {
-            return std::unique_ptr<Sink>(new PosixSink(utf8_target_path, temp, fd));
+            return std::unique_ptr<Sink>(new PosixSink(target, temp, fd));
         } catch (...) {
             ::close(fd);
             ::unlink(temp.c_str());
             throw;
         }
     }
-    throw FormatError(LOOMORA_ERR_IO, "cannot find an unused temporary file name for '" + utf8_target_path + "'");
+    throw FormatError(LOOMORA_ERR_IO, "cannot find an unused temporary file name for '" + target + "'");
 }
 
 } // namespace format

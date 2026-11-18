@@ -8,6 +8,11 @@
 #include <string>
 #include <vector>
 
+#ifndef _WIN32
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 #include "../../include/loomora.h"
 #include "../../src/c_api_project_handles.hpp"
 #include "../basic_project.hpp"
@@ -222,3 +227,64 @@ TEST_CASE("a cancelled progress callback leaves the previous file intact", "[for
     CHECK(now != previous);
     loomora_editor_close(big);
 }
+
+#ifndef _WIN32
+// FR-028: a save or an export to a path that is a symbolic link replaces the file the link points to,
+// in its own directory, and the link stays a link. (The sink itself is tested in test_file_io.cpp,
+// also on Windows.)
+TEST_CASE("a save and an export through a symbolic link replace the target and keep the link", "[format][atomic][symlink]") {
+    fstest::ScratchDir dir("atomic-link");
+    const std::string real = dir.file("real.loomora");
+    const std::string link = dir.file("link.loomora");
+    REQUIRE(symlink("real.loomora", link.c_str()) == 0);
+
+    // The target does not exist yet (dangling link): the save creates it.
+    loomora_editor *e = new_basic();
+    REQUIRE(save(e, link, basic_project::kModifiedAt) == 0);
+    struct stat st;
+    REQUIRE(lstat(link.c_str(), &st) == 0);
+    CHECK(S_ISLNK(st.st_mode));
+    Bytes first;
+    REQUIRE(fstest::read_file(real, first));
+    REQUIRE(!first.empty());
+    CHECK(dir.names().size() == 2);
+
+    // Another save replaces the target through the link.
+    loomora_editor *other = nullptr;
+    REQUIRE(basic_project::build_escape(&other) == 0);
+    REQUIRE(save(other, link, basic_project::kModifiedAt) == 0);
+    loomora_editor_close(other);
+    Bytes second;
+    REQUIRE(fstest::read_file(real, second));
+    CHECK(second != first);
+    REQUIRE(lstat(link.c_str(), &st) == 0);
+    CHECK(S_ISLNK(st.st_mode));
+    CHECK(dir.names().size() == 2);
+
+    // A failed save leaves the target as it was.
+    {
+        ScopedHooks scope;
+        Counter c;
+        c.fail_rename_at = 1;
+        install(c);
+        CHECK(save(e, link, basic_project::kModifiedAt) == LOOMORA_ERR_IO);
+    }
+    Bytes now;
+    REQUIRE(fstest::read_file(real, now));
+    CHECK(now == second);
+    CHECK(dir.names().size() == 2);
+
+    // An export goes through the link the same way.
+    loomora_project *p = nullptr;
+    REQUIRE(loomora_project_open_memory(&second[0], second.size(), nullptr, nullptr, &p, nullptr) == 0);
+    REQUIRE(loomora_project_export_path(p, link.c_str(), LOOMORA_PROFILE_LIGHT, nullptr, 0,
+                                        basic_project::kModifiedAt, 0, nullptr, nullptr, nullptr) == 0);
+    loomora_project_close(p);
+    REQUIRE(lstat(link.c_str(), &st) == 0);
+    CHECK(S_ISLNK(st.st_mode));
+    REQUIRE(fstest::read_file(real, now));
+    CHECK(now != second);
+    CHECK(dir.names().size() == 2);
+    loomora_editor_close(e);
+}
+#endif
