@@ -35,7 +35,7 @@ Expected: the self-test builds the six reference projects (`basic`, `empty`, `es
 Outcomes:
 
 - [x] `loomora_format_selftest` prints `format selftest: ok` (exit 0) on Windows 11 x64 (clang), Linux x86_64 (g++), Linux i686 (32-bit process) and Windows 2000 i686 (MinGW, run on Windows 11).
-- [x] The same on Android (x86 on API 16 and 24, x86_64 on API 24 and 35, emulators) and on Web (Node 24, WebAssembly and JavaScript builds; Node 14, asm.js build): runs of 2026-11-17 recorded after the acceptance report, in `docs/implementation/validation/results/spec-002/android_results.md` and `web_results.md`.
+- [x] The same on Android (x86 on API 16 and 24, x86_64 on API 24 and 35, emulators) and on Web (Node 24, WebAssembly and JavaScript builds; Node 14, asm.js build): runs of 2026-11-17 recorded after the acceptance report, in `docs/implementation/validation/results/spec-002/android_results.md` and `docs/implementation/validation/results/spec-002/web_results.md`.
 - [ ] The same on the Windows 2000 VM: not run (no VM).
 
 ## 3. Several frames, layouts, images, spools and results (User Story 3, SC-011, SC-013)
@@ -132,7 +132,7 @@ Expected: no crash, no timeout above 5 s, no sanitizer report over at least 10 m
 Outcomes (short representative run, not the full hour):
 
 - [x] 120 s, 149,089 inputs (clang 23, ASan and UBSan, libFuzzer): exit 0, no crash, timeout, leak or sanitizer report.
-- [ ] The 10 million inputs or one hour of this step: not rerun here; `core/tests/fuzz_run_sc004.md` records 12.6 million inputs without finding.
+- [ ] The 10 million inputs or one hour of this step: not rerun here; `docs/implementation/validation/results/spec-002/fuzz_run_sc004.md` records 12.6 million inputs without finding.
 
 ## 9. Every UI (SC-010)
 
@@ -162,7 +162,7 @@ Outcomes:
 
 - [x] The six reference files are byte-identical (`check_loomora.py --compare`: `same`) between Windows 11 x64 (clang), Linux x86_64 (g++), Linux i686 and Windows 2000 i686 (MinGW).
 - [ ] Big-endian system or PowerPC emulation: not run (no qemu).
-- [ ] Evidence under `evidence/adr-0021/<platform-id>/`: not stored by this pass; `core/tests/cross_arch_results.md` holds the hash table.
+- [ ] Evidence under `evidence/adr-0021/<platform-id>/`: not stored by this pass; `docs/implementation/validation/results/spec-002/cross_arch_results.md` holds the hash table.
 
 ## What is not covered here
 

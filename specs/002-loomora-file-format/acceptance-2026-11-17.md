@@ -13,7 +13,7 @@ Branch `feat/fmt-quickstart` (from `feat/loomora-format`, worktree `loomora-fmt-
 | 5 | ran | `gen_invalid_corpus.py --out`, `check_cli_validate.py --corpus` (and a first loop over the bare command line) | 3,348 files, 0 failed, 35 option rows, 0 failed. All 3,235 truncations exit 1. |
 | 6 | ran | `loomora_use_demo export multi.loomora one-r3.loomora light 3` (and result 4 for the 3D frame), `check_loomora.py`, `--compare-mesh`; Catch2 `[export]` (9 cases) and `[light]` (3 cases) | Result 3 export: 1 frame, 1 layout, 1 image, 2 spools, 4,204 bytes vs 21,258 (full). Mesh geometry identical, entry `sha256` differs (UVs dropped, per contract). Edit refused (Catch2). 50% test: full 89,827 bytes, light 12,147. |
 | 7 | ran | Catch2 `version skew*` | 5 cases, 635 assertions, all pass. |
-| 8 | ran, short | clang++ 23 libFuzzer + ASan + UBSan, `-max_total_time=120 -timeout=5 -max_len=262144`, seeds from `gen_invalid_corpus.py --skip-truncate` | 149,089 inputs in 121 s, exit 0, no artifact (no crash, timeout, leak, sanitizer report). Not the 10 million or one hour: `core/tests/fuzz_run_sc004.md` (12.6 M inputs) is the full proof. |
+| 8 | ran, short | clang++ 23 libFuzzer + ASan + UBSan, `-max_total_time=120 -timeout=5 -max_len=262144`, seeds from `gen_invalid_corpus.py --skip-truncate` | 149,089 inputs in 121 s, exit 0, no artifact (no crash, timeout, leak, sanitizer report). Not the 10 million or one hour: `docs/implementation/validation/results/spec-002/fuzz_run_sc004.md` (12.6 M inputs) is the full proof. |
 | 9 | ran | `run_vectors.py --validate-project` and `--roundtrip-project` on `multi.loomora` (Windows Legacy); `verify.py quick` `ui project` rows | Windows Legacy: 4 of 4 per mode; `ui project` 37/37 for Windows Legacy, Linux Legacy and Linux Modern (WSL). |
 | 10 | ran | `check_loomora.py --compare` between refgen output of Windows x64 clang, Linux x86_64 g++, Linux i686 (`linux-gcc-i686.cmake`), Windows 2000 i686 (`mingw-w64-win2000-i686.cmake`, run on Windows 11) | `same` for the six files (sha256 `fcdf97f0...`, `8ca4dc6a...`, `b17920aa...`, `b32c8a39...`, `8bcd3ae9...`, `fc3fb5eb...`). Also `check_imports.py --arch x86` on the Windows 2000 build: refgen, format_selftest, selftest, `loomora.exe` pass the allowlist (3 to 5 imports rest on `verify` entries); `loomora_tests.exe` (a development program, not delivered) has 72 imports outside it. |
 
@@ -24,8 +24,8 @@ Branch `feat/fmt-quickstart` (from `feat/loomora-format`, worktree `loomora-fmt-
 - Big-endian system or PowerPC emulation: no qemu.
 - Windows Modern UI (WinUI 3): not built on this host. Linux GTK floor and GTK 4 variants, i686 Xlib, Xlib core font: not requested.
 - Linux CentOS 5.11 / 6.10 container floors (gcc 4.8.2 devtoolset): the Docker daemon is not running; not started (explicit separate command).
-- The full hour or 10 million inputs of step 8 (short run only); SC-005 performance (see `core/tests/perf_sc005.md`); the T101 review (docs repo `validation/bug-reports/format-review-2026-11-17.md`).
-- `loomora_format_selftest.exe` of the Windows x86_64 MinGW build: `blocked_by_antivirus` (earlier result in `core/tests/cross_arch_results.md`), not retried.
+- The full hour or 10 million inputs of step 8 (short run only); SC-005 performance (see `docs/implementation/validation/results/spec-002/perf_sc005.md`); the T101 review (docs repo `validation/bug-reports/format-review-2026-11-17.md`).
+- `loomora_format_selftest.exe` of the Windows x86_64 MinGW build: `blocked_by_antivirus` (earlier result in `docs/implementation/validation/results/spec-002/cross_arch_results.md`), not retried.
 - No evidence was stored in `docs/implementation` and no image was taken.
 
 ## FR-031 (the oldest toolchain of each floor built)
