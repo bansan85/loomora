@@ -342,6 +342,8 @@ NOT_A_FALLBACK = OrderedDict([
     ("LOOMORA_BUILD_SHARED", "build option: static library only or shared library too"),
     ("LOOMORA_BUILD_FUZZ", "build option: whether the fuzz targets of core/fuzz exist"),
     ("LOOMORA_BUILD_CLI", "build option: whether the host command loomora validate (cli/loomora) exists"),
+    ("LOOMORA_SANITIZE", "build option: thread or address sanitizer for the tests, off by default, never used for a delivered binary"),
+    ("LOOMORA_SANITIZE_FLAGS", "internal variable of that option: the compile and link flags it selects"),
     ("LOOMORA_BUILD_SHARED_LIB", "export macro of the shared library"),
     ("LOOMORA_USE_DLL", "import macro of the Windows DLL"),
     ("LOOMORA_TARGET_ANDROID", "toolchain marker: adds the Android UI target"),
@@ -752,7 +754,7 @@ def check_verdicts(directory, root, platforms, deliverables, source_ids, report)
 # ---- whole tree ------------------------------------------------------------------------------
 
 KNOWN_TOP = ("sources.json", "fallbacks.json", "spikes.json", "hypotheses.json")
-KNOWN_DIRS = ("platforms", "verdicts", "deliverables", "evidence", "procedures")
+KNOWN_DIRS = ("platforms", "verdicts", "deliverables", "evidence", "procedures", "results", "bug-reports")
 
 
 def validate(validation_dir, root, require_complete=False, code_root=None):
@@ -855,8 +857,8 @@ def _good_tree():
         OrderedDict([("id", "fb-a"), ("description", "d"), ("macro", "LOOMORA_HAS_A"),
                      ("min_compiler", "gcc 7"), ("platform_ids", ["lin-1"]), ("reason", "r")])]
     tree["validation/spikes.json"] = [
-        OrderedDict([("id", "S%d" % i), ("question", "q"), ("status", "open"), ("result", ""),
-                     ("adr", "")]) for i in range(1, 12) if i != 4]
+        OrderedDict([("id", sid), ("question", "q"), ("status", "open"), ("result", ""),
+                     ("adr", "")]) for sid in SPIKE_IDS]
     tree["validation/spikes.json"][0].update(status="confirmed", result="done")
     tree["validation/spikes.json"][1].update(status="refuted", result="no", adr="adr/0002-x.md")
     tree["validation/hypotheses.json"] = [

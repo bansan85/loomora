@@ -29,6 +29,10 @@ struct Hooks {
     // Before each attempt to delete the old file renamed aside by the Windows file sink (its
     // `<target>.old-xxxxxxxx` copy): true makes that attempt fail.
     bool (*fail_delete_aside)(void *user);
+    // Before the rename with POSIX semantics (SetFileInformationByHandle) of the Windows file
+    // sink: true skips it, as on a Windows older than 10 1809 which lacks it, so that the rename
+    // aside step runs on any Windows version. Never set in production.
+    bool (*skip_posix_rename)(void *user);
     // Before an allocation of `bytes` made by the format code worth injecting (buffer growth).
     bool (*fail_alloc)(void *user, std::size_t bytes);
     // The most bytes given to one call of zlib inflate (or crc32) by the ZIP reader; 0 keeps the
@@ -40,8 +44,8 @@ struct Hooks {
     std::uint64_t *inflated_bytes;
 
     Hooks() : user(nullptr), fail_write(nullptr), fail_flush(nullptr), fail_rename(nullptr),
-              fail_delete_aside(nullptr), fail_alloc(nullptr), inflate_chunk_max(0),
-              inflated_bytes(nullptr) {}
+              fail_delete_aside(nullptr), skip_posix_rename(nullptr), fail_alloc(nullptr),
+              inflate_chunk_max(0), inflated_bytes(nullptr) {}
 };
 
 // The one table. Null hooks in production.
@@ -65,6 +69,10 @@ inline bool should_fail_rename() {
 inline bool should_fail_delete_aside() {
     const Hooks &h = hooks();
     return h.fail_delete_aside != nullptr && h.fail_delete_aside(h.user);
+}
+inline bool should_skip_posix_rename() {
+    const Hooks &h = hooks();
+    return h.skip_posix_rename != nullptr && h.skip_posix_rename(h.user);
 }
 inline bool should_fail_alloc(std::size_t bytes) {
     const Hooks &h = hooks();

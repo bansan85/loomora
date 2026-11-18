@@ -15,7 +15,9 @@
 //            target open MoveFileExW is refused (measured, S-F3): see WinSink::replace_target.
 //            When the target is a symbolic link (FR-028) it is followed where the system can tell
 //            (GetFinalPathNameByHandleW, Windows Vista and later, found at run time): the file the
-//            link leads to is replaced, in its own directory, and the link stays a link.
+//            link leads to is replaced, in its own directory, and the link stays a link. A link
+//            whose target is missing is followed too, reading the link text with DeviceIoControl
+//            (FSCTL_GET_REPARSE_POINT): the save creates the file the link names, as POSIX does.
 #if defined(_WIN32)
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -159,38 +161,197 @@ bool seek64(HANDLE h, std::uint64_t pos) {
 #endif
 }
 
-// FR-028: the path of the file a save to `wpath` replaces. When `wpath` is a symbolic link (a reparse
-// point) whose target exists, that is the final path of the target (`\\?\` form); otherwise `wpath`
-// unchanged: not a link, a link whose target is missing or is a directory, or a system without
-// GetFinalPathNameByHandleW (Windows 2000 and XP, which have no symbolic links either). The function is
-// found with GetProcAddress, never imported, so the binary still loads on the Windows 2000 floor.
-std::wstring follow_link(const std::wstring &wpath) {
-    const DWORD attributes = GetFileAttributesW(wpath.c_str());
-    if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0)
-        return wpath;
-    typedef DWORD(WINAPI * FinalPathFn)(HANDLE, LPWSTR, DWORD, DWORD);
+typedef DWORD(WINAPI *FinalPathFn)(HANDLE, LPWSTR, DWORD, DWORD);
+typedef BOOL(WINAPI *DeviceIoControlFn)(HANDLE, DWORD, LPVOID, DWORD, LPVOID, DWORD, LPDWORD, LPOVERLAPPED);
+
+// A kernel32 function by name, or null. Through a generic function pointer type: GCC's
+// -Wcast-function-type accepts void (*)().
+void (*kernel_function(const char *name))() {
     const HMODULE kernel = GetModuleHandleA("kernel32.dll");
-    const FARPROC proc = kernel != nullptr ? GetProcAddress(kernel, "GetFinalPathNameByHandleW") : nullptr;
-    if (proc == nullptr)
-        return wpath;
-    // Through a generic function pointer type: GCC's -Wcast-function-type accepts void (*)().
-    FinalPathFn final_path = reinterpret_cast<FinalPathFn>(reinterpret_cast<void (*)()>(proc));
-    // No access wanted, only the name; the open follows the link.
-    HANDLE h = CreateFileW(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE)
-        return wpath;
-    std::wstring out(static_cast<std::size_t>(MAX_PATH) + 1, L'\0');
+    const FARPROC proc = kernel != nullptr ? GetProcAddress(kernel, name) : nullptr;
+    return reinterpret_cast<void (*)()>(proc);
+}
+
+// The path of the file `h` is open on, in the `\\?\` form. False when the system cannot tell.
+bool final_path_of(FinalPathFn final_path, HANDLE h, std::wstring &out) {
+    out.assign(static_cast<std::size_t>(MAX_PATH) + 1, L'\0');
     DWORD n = final_path(h, &out[0], static_cast<DWORD>(out.size()), 0 /* VOLUME_NAME_DOS */);
     if (n >= out.size()) { // too short: n is the size needed, with the terminating NUL
         out.assign(static_cast<std::size_t>(n), L'\0');
         n = final_path(h, &out[0], static_cast<DWORD>(out.size()), 0);
     }
-    CloseHandle(h);
     if (n == 0 || n >= out.size())
-        return wpath;
+        return false;
     out.resize(n);
-    return out;
+    return true;
+}
+
+// The final path of `path` when the file (or the file its link leads to) exists. No access wanted,
+// only the name; the open follows the links.
+bool final_path_of_file(FinalPathFn final_path, const std::wstring &path, std::wstring &out) {
+    HANDLE h = CreateFileW(path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                           OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+        return false;
+    const bool ok = final_path_of(final_path, h, out);
+    CloseHandle(h);
+    return ok;
+}
+
+// `path` as an absolute path in the `\\?\` form (which Win32 does not normalise: no "." or "..").
+bool long_absolute(const std::wstring &path, std::wstring &out) {
+    if (path.compare(0, 4, L"\\\\?\\") == 0) {
+        out = path;
+        return true;
+    }
+    std::wstring full(path.size() + 300, L'\0');
+    DWORD got = GetFullPathNameW(path.c_str(), static_cast<DWORD>(full.size()), &full[0], nullptr);
+    if (got >= full.size()) {
+        full.assign(static_cast<std::size_t>(got) + 1, L'\0');
+        got = GetFullPathNameW(path.c_str(), static_cast<DWORD>(full.size()), &full[0], nullptr);
+    }
+    if (got == 0 || got >= full.size())
+        return false;
+    full.resize(got);
+    out = full.compare(0, 2, L"\\\\") == 0 ? L"\\\\?\\UNC\\" + full.substr(2) : L"\\\\?\\" + full;
+    return true;
+}
+
+// Removes the "." and ".." components of a `\\?\` path, which the system leaves alone in that form.
+// False for a path it does not understand.
+bool normalize_long(const std::wstring &path, std::wstring &out) {
+    if (path.compare(0, 4, L"\\\\?\\") != 0)
+        return false;
+    // The root is kept as it is: `\\?\C:`, `\\?\UNC\server\share`, `\\?\Volume{...}`.
+    const std::size_t root_components = path.compare(4, 4, L"UNC\\") == 0 ? 3 : 1;
+    std::size_t pos = 4;
+    for (std::size_t k = 0; k < root_components; ++k) {
+        pos = path.find(L'\\', pos);
+        if (pos == std::wstring::npos)
+            return false;
+        if (k + 1 < root_components)
+            ++pos;
+    }
+    const std::wstring root = path.substr(0, pos);
+    std::vector<std::wstring> parts;
+    std::size_t at = pos + 1;
+    while (at <= path.size()) {
+        std::size_t next = path.find(L'\\', at);
+        if (next == std::wstring::npos)
+            next = path.size();
+        const std::wstring part = path.substr(at, next - at);
+        if (part == L"..") {
+            if (!parts.empty())
+                parts.pop_back();
+        } else if (!part.empty() && part != L".") {
+            parts.push_back(part);
+        }
+        at = next + 1;
+    }
+    if (parts.empty())
+        return false;
+    out = root;
+    for (std::size_t i = 0; i < parts.size(); ++i)
+        out += L"\\" + parts[i];
+    return true;
+}
+
+// The place a symbolic link `link` (an absolute `\\?\` path) leads to, as an absolute `\\?\` path, read
+// from the link itself (FSCTL_GET_REPARSE_POINT on a handle that does not follow it), so that it works
+// when the target is missing. False when `link` is not a symbolic link, or on any failure: a junction
+// (IO_REPARSE_TAG_MOUNT_POINT) is not followed. DeviceIoControl is found at run time like the other
+// functions here, so the import table stays what the Windows 2000 check allows.
+bool read_link(FinalPathFn final_path, const std::wstring &link, std::wstring &target) {
+    DeviceIoControlFn control = reinterpret_cast<DeviceIoControlFn>(kernel_function("DeviceIoControl"));
+    if (control == nullptr)
+        return false;
+    // Not in the headers of the Windows 2000 floor, nor the REPARSE_DATA_BUFFER of a symbolic link.
+    const DWORD kFsctlGetReparsePoint = 0x000900A8;
+    const DWORD kReparseTagSymlink = 0xA000000C;
+    const DWORD kSymlinkFlagRelative = 0x1;
+    const std::size_t kHeader = 20; // tag, data length, reserved, four name offsets and lengths, flags
+    HANDLE h = CreateFileW(link.c_str(), FILE_READ_ATTRIBUTES,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                           FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+        return false;
+    std::vector<unsigned char> buffer(16u * 1024u, 0); // MAXIMUM_REPARSE_DATA_BUFFER_SIZE
+    DWORD got = 0;
+    const BOOL ok = control(h, kFsctlGetReparsePoint, nullptr, 0, &buffer[0], static_cast<DWORD>(buffer.size()),
+                            &got, nullptr);
+    CloseHandle(h);
+    if (!ok || got < kHeader)
+        return false;
+    DWORD tag = 0;
+    DWORD flags = 0;
+    WORD substitute_offset = 0;
+    WORD substitute_length = 0;
+    std::memcpy(&tag, &buffer[0], sizeof tag);
+    std::memcpy(&substitute_offset, &buffer[8], sizeof substitute_offset);
+    std::memcpy(&substitute_length, &buffer[10], sizeof substitute_length);
+    std::memcpy(&flags, &buffer[16], sizeof flags);
+    if (tag != kReparseTagSymlink || substitute_length == 0 || (substitute_offset & 1) != 0 ||
+        (substitute_length & 1) != 0 || kHeader + substitute_offset + substitute_length > got)
+        return false;
+    std::wstring text(substitute_length / sizeof(WCHAR), L'\0');
+    std::memcpy(&text[0], &buffer[kHeader + substitute_offset], substitute_length);
+
+    if ((flags & kSymlinkFlagRelative) == 0) {
+        // The substitute name of an absolute link is an NT path: `\??\C:\dir\file`.
+        if (text.compare(0, 4, L"\\??\\") != 0)
+            return false;
+        return normalize_long(L"\\\\?\\" + text.substr(4), target);
+    }
+    // Relative to the directory of the link, resolved on disk (that directory may itself be reached
+    // through a link). A rooted or drive-relative text is not handled.
+    for (std::size_t i = 0; i < text.size(); ++i)
+        if (text[i] == L'/')
+            text[i] = L'\\';
+    if (text[0] == L'\\' || (text.size() > 1 && text[1] == L':'))
+        return false;
+    const std::size_t slash = link.rfind(L'\\');
+    if (slash == std::wstring::npos)
+        return false;
+    std::wstring directory = link.substr(0, slash);
+    std::wstring real_directory;
+    if (final_path_of_file(final_path, directory, real_directory))
+        directory = real_directory;
+    return normalize_long(directory + L"\\" + text, target);
+}
+
+// FR-028: the path of the file a save to `wpath` replaces, as POSIX does: when `wpath` is a symbolic
+// link (a reparse point), the file at the end of the chain of links, in the `\\?\` form, where a link
+// whose target is missing leads to the path the save creates; otherwise `wpath` unchanged: not a link,
+// a junction, a loop or a chain of more than 40 links, any failure, or a system without
+// GetFinalPathNameByHandleW (Windows 2000 and XP, which have no symbolic links either). The functions
+// are found with GetProcAddress, never imported, so the binary still loads on the Windows 2000 floor.
+std::wstring follow_link(const std::wstring &wpath) {
+    const int kMaxHops = 40;
+    const DWORD attributes = GetFileAttributesW(wpath.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0)
+        return wpath;
+    const FinalPathFn final_path = reinterpret_cast<FinalPathFn>(kernel_function("GetFinalPathNameByHandleW"));
+    if (final_path == nullptr)
+        return wpath;
+    std::wstring current = wpath;
+    for (int hop = 0; hop <= kMaxHops; ++hop) {
+        // The end of the chain exists: the system resolves the whole of it, every link included.
+        std::wstring resolved;
+        if (final_path_of_file(final_path, current, resolved))
+            return resolved;
+        // Otherwise one link at a time, up to the missing file the last link names.
+        const DWORD a = GetFileAttributesW(current.c_str());
+        if (a == INVALID_FILE_ATTRIBUTES || (a & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
+            std::wstring absolute;
+            return hop > 0 && long_absolute(current, absolute) ? absolute : wpath;
+        }
+        std::wstring link;
+        std::wstring target;
+        if (!long_absolute(current, link) || !read_link(final_path, link, target))
+            return wpath;
+        current = target;
+    }
+    return wpath;
 }
 
 class WinSource : public Source {
@@ -368,7 +529,8 @@ class WinSink : public Sink {
     // 3. the target is renamed aside, the temporary file renamed to the target, the old file
     //    deleted (every system; a short window where the target has no file, closed again by
     //    renaming the old file back when the second step fails). ReplaceFile is not used.
-    // A virus scanner may hold a file for a moment: a failure is retried a few times.
+    // A virus scanner may hold a file for a moment: a failure is retried a few times. The tests skip
+    // step 2 (should_skip_posix_rename) to run step 3 on a system that has step 2.
     DWORD replace_target() {
         DWORD error = ERROR_SUCCESS;
         for (int attempt = 0; attempt < 6; ++attempt) {
@@ -382,7 +544,7 @@ class WinSink : public Sink {
             if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_READONLY) != 0 ||
                 (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
                 return error; // nothing to take over, or a file the user protected
-            if (posix_rename() || rename_aside())
+            if ((!should_skip_posix_rename() && posix_rename()) || rename_aside())
                 return ERROR_SUCCESS;
             Sleep(20);
         }
