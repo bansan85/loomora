@@ -30,77 +30,90 @@ cmake --build <build-dir> --target loomora_format_selftest
 <build-dir>/core/tests/loomora_format_selftest
 ```
 
-Expected: the self-test builds the reference project in memory, writes it, prints `sha256 = <64 hex>` equal to the constant in `format_selftest.cpp`, reads it back and reports `0 differences`, then runs the truncation sweep and the embedded hostile inputs (`rejected N of N`). Run the same executable on every target that can run code (Windows 2000 VM, Linux i686 and x86_64, Android, Web through Node or a browser): every one prints the same hash.
+Expected: the self-test builds the six reference projects (`basic`, `empty`, `escape40`, `multi`, `multi-light`, `one`) in memory through the public C API, saves each one (twice, same bytes), compares the SHA-256 of the archive with the golden constants of `format_selftest.cpp`, reads it back and compares its content, and checks that sampled truncations are rejected. It prints `format selftest: ok` and exits with status 0; on a failure it prints one `FAIL: <check>` line per failed check (and `<name> sha256 = <hex>` after a hash mismatch), then `format selftest: FAILED`, and exits with status 1. Run the same executable on every target that can run code (Windows 2000 VM, Linux i686 and x86_64, Android, Web through Node or a browser): every one prints `format selftest: ok`, which means the same six hashes.
 
 Outcomes:
 
-- [x] `loomora_format_selftest` prints `format selftest: ok` (exit 0) on Windows 11 x64 (clang), Linux x86_64 (g++), Linux i686 (32-bit process) and Windows 2000 i686 (MinGW, run on Windows 11): the goldens of the six reference files are compared inside the program. It does not print `sha256 = <hex>`, `0 differences` or `rejected N of N` (the text above is out of date).
-- [ ] The same hash on Windows 2000 VM, Android, Web: not run (no VM, NDK or Emscripten).
+- [x] `loomora_format_selftest` prints `format selftest: ok` (exit 0) on Windows 11 x64 (clang), Linux x86_64 (g++), Linux i686 (32-bit process) and Windows 2000 i686 (MinGW, run on Windows 11).
+- [x] The same on Android (x86 on API 16 and 24, x86_64 on API 24 and 35, emulators) and on Web (Node 24, WebAssembly and JavaScript builds; Node 14, asm.js build): runs of 2026-11-17 recorded after the acceptance report, in `docs/implementation/validation/results/spec-002/android_results.md` and `docs/implementation/validation/results/spec-002/web_results.md`.
+- [ ] The same on the Windows 2000 VM: not run (no VM).
 
 ## 3. Several frames, layouts, images, spools and results (User Story 3, SC-011, SC-013)
 
-The reference project `multi` (3 frames: two 2D, one 3D; 5 layouts, two on one 2D frame; 4 images of mixed color mode and shape; 6 spools; 5 results, one frame-and-layout combination without result) is built by `tools/gen_reference.py` and `loomora_refgen`.
+The reference project `multi` (3 frames: two 2D, one 3D; 5 layouts, two on one 2D frame; 4 images of mixed color mode and shape; 6 spools; 5 results, one frame-and-layout combination without result) is built by `loomora_refgen`; `tools/gen_reference.py` describes it independently.
 
 ```text
-<build-dir>/core/tests/loomora_refgen --out <dir>
-python tools/check_loomora.py <dir>/multi-full.loomora <dir>/multi-light.loomora
-loomora validate <dir>/multi-full.loomora
+cmake --build <build-dir> --target loomora_refgen loomora_cli loomora_tests
+<build-dir>/core/tests/loomora_refgen <dir>
+python tools/check_loomora.py <dir>/multi.loomora <dir>/multi-light.loomora
+<build-dir>/cli/loomora/loomora validate <dir>/multi.loomora <dir>/multi-light.loomora
+<build-dir>/core/tests/loomora_tests "SC-013: after adding one result every other entry is byte for byte the same,[dependents]"
 ```
 
-Expected: the checker and the command both report `valid`, with the counts of the manifest; the combination without result raises no issue. The Catch2 test `editor_add_result_keeps_others` adds a result, saves, and checks that every other entry has the same `sha256` as before (SC-013), and that removing a layout asks for confirmation (`LOOMORA_ERR_HAS_DEPENDENTS`) and then removes its results.
+`<dir>` is an existing directory; `loomora_refgen` writes `basic`, `empty`, `escape40`, `multi`, `multi-light` and `one` there, as `.loomora` files. The host command is `<build-dir>/cli/loomora/loomora`, and `loomora-cli` on the Windows host (`loomora.exe` is the Legacy UI there).
 
-Outcomes (the generator takes the directory as a positional argument, the files are `multi.loomora` and `multi-light.loomora`, the command is `loomora-cli` on the Windows host):
+Expected: the checker and the command both end with `OK <file>: 0 errors, 0 warnings` for `multi`; for `multi-light` they print the one warning `warn.light_project` and end with `OK <file>: 0 errors, 1 warning` (a light copy always carries it). The combination without result raises no issue. The Catch2 test `SC-013: after adding one result every other entry is byte for byte the same` adds a result, saves, and checks that every other entry has the same `sha256` as before (SC-013); the `[dependents]` tests check that removing a layout asks for confirmation (`LOOMORA_ERR_HAS_DEPENDENTS`) and then removes its results.
+
+Outcomes:
 
 - [x] `check_loomora.py` and `loomora validate` report `OK ... 0 errors, 0 warnings` for `multi`, and 0 errors with the one `warn.light_project` for `multi-light`. They do not print the manifest counts.
 - [x] The frame-and-layout combination without result raises no issue.
-- [x] Catch2 `SC-013: after adding one result every other entry is byte for byte the same` and the `[editor][dependents]` tests (layout removal asks for confirmation, then removes its results) pass.
+- [x] Catch2 `SC-013: after adding one result every other entry is byte for byte the same` and the `[dependents]` tests (layout removal asks for confirmation, then removes its results) pass (21 cases, 2,977 assertions).
 
 ## 4. Use mode never writes (User Story 2, SC-012)
 
 ```text
-python tools/check_readonly.py <dir>/multi-full.loomora
+cmake --build <build-dir> --target loomora_refgen loomora_use_demo
+python tools/check_readonly.py --build-dir <build-dir>
 ```
 
-Expected: the script marks the file read-only, records its bytes and modification time, runs `loomora_project_open_path`, reads a result's steps and a thumbnail through the `loomora_use_demo` program, and checks that the file is unchanged and that no file appeared beside it. It then replaces the file atomically with another valid one while a second process holds the old one open and checks that the reader sees only the old file.
+Expected: the script writes its own `basic` reference with `loomora_refgen` (it takes no file argument), marks the file read-only, records its bytes and modification time, runs `loomora_project_open_path`, reads a result's steps and a thumbnail through the `loomora_use_demo` program, and checks that the file is unchanged and that no file appeared beside it. It then replaces the file atomically with another valid one while a second process holds the old one open and checks that the reader sees only the old file. It prints `check_readonly: ok (...)` and exits with status 0 (1 when a check fails, 2 when a program is missing).
 
-Outcomes (the script takes `--build-dir` and writes its own `basic` reference, not a file argument):
+Outcomes:
 
-- [x] `check_readonly.py`: read-only open changes nothing (bytes, mtime, no new file); the atomic replace under a reader keeps the old and the new file apart (Windows 11 host and WSL via `verify.py quick`).
+- [x] `check_readonly.py`: read-only open changes nothing (bytes, mtime, no new file); the atomic replace under a reader keeps the old and the new file apart (Windows 11 host and WSL via `verify.py quick`; WSL run alone on 2026-11-18).
 
 ## 5. Invalid, hostile and very large files (User Story 5, SC-003, SC-005)
 
 ```text
 python tools/gen_invalid_corpus.py --out <dir>/corpus
-for f in <dir>/corpus/*.loomora; do loomora validate --quiet "$f"; done
+python tools/check_cli_validate.py --loomora <build-dir>/cli/loomora/loomora --corpus <dir>/corpus
+<build-dir>/cli/loomora/loomora validate <dir>/corpus/hostile-entry.bomb.loomora
 ```
 
-Expected: every `invalid-*` and `hostile-*` file exits with status 1 and prints the code listed in its name (`hostile-zipslip-dotdot` → `zip.bad_name`, `hostile-bomb` → `entry.bomb`, `invalid-sha256` → `entry.sha256`, and so on); every `large-*` file exits with status 0 and prints `warn.count`; a truncation of the small reference at every byte exits with status 1 or 2, never a crash.
+(`loomora-cli` on the Windows host.) The last line is one file by hand; `check_cli_validate.py` runs all of them.
 
-Outcomes (`--quiet` prints only the summary line, so the codes are checked by `tools/check_cli_validate.py`; the `large-*` files need the `--set-limit` of `corpus.json`):
+Expected: every `invalid-*` and `hostile-*` file exits with status 1 and prints an `error` line with the code that follows the prefix in its name (`hostile-zip.bad_name-dotdot` gives `zip.bad_name`, `hostile-entry.bomb` gives `entry.bomb`, `invalid-entry.sha256` gives `entry.sha256`, and so on); with `--quiet` only the summary line (`FAIL <file>: 1 error, 0 warnings`) is printed, without the code. Every `valid-*` and `warning-*` file exits with status 0 (the second kind prints its `warn.*` code). The `large-*` files exit with status 0 and print `warn.count` only with the `--set-limit` that `corpus.json` records for them (for example `--set-limit warn_nails=20` for `large-warn.count-warn_nails-20`; with the default thresholds there are 0 warnings), which `check_cli_validate.py` passes. A truncation of the small reference at every byte exits with status 1 or 2, never a crash. `check_cli_validate.py` prints one summary line (`N corpus file(s) ..., 0 failed; 35 option row(s), 0 failed`) and exits with status 0.
 
-- [x] 3,348 files (hostile 38, invalid 55, large 5, truncate 3,235, valid 9, warning 6): `check_cli_validate.py` 0 failed, 35 option rows 0 failed; every `invalid-*` and `hostile-*` file exits 1 with its code, every `valid-*` and `warning-*` file exits 0.
+Outcomes:
+
+- [x] 3,348 files (hostile 38, invalid 55, large 5, truncate 3,235, valid 9, warning 6): `check_cli_validate.py` 0 failed, 35 option rows 0 failed; every `invalid-*` and `hostile-*` file exits 1 with its code, every `valid-*` and `warning-*` file exits 0 (re-run in WSL on 2026-11-18: 3,341 files, the truncation count differs between hosts, 0 failed).
 - [x] Every truncation of the small reference exits 1 (never a crash).
-- [ ] `large-*` files print `warn.count` with the bare command line of this step: they do so only with their `--set-limit` (default thresholds give 0 warnings).
+- [x] `large-*` files print `warn.count` with their `--set-limit` and not with the default thresholds (`check_cli_validate.py` rows; by hand, `large-warn.count-warn_nails-20` gives 0 warnings alone and `warn.count ... 30 nails in layout 1 (threshold 20)` with `--set-limit warn_nails=20`).
 
 ## 6. Light copies (User Story 7, SC-006, SC-014)
 
 ```text
-loomora_use_demo export <dir>/multi-full.loomora <dir>/one.loomora --profile light --results 3
-python tools/check_loomora.py <dir>/one.loomora
+<build-dir>/core/tests/loomora_use_demo export <dir>/multi.loomora <dir>/one-r3.loomora light 3
+<build-dir>/core/tests/loomora_use_demo export <dir>/multi.loomora <dir>/one-r4.loomora light 4
+python tools/check_loomora.py <dir>/one-r3.loomora <dir>/one-r4.loomora
+python tools/check_loomora.py --compare-mesh <dir>/multi.loomora <dir>/one-r4.loomora
 ```
 
-Expected: `one.loomora` holds result 3 and only the frame, layout, images (thumbnails only) and spools it uses; the mesh of its 3D frame has the same `sha256` as in the full file; editing it is refused with `LOOMORA_ERR_READ_ONLY_PROJECT`; it is at least 50% smaller than the full file when the images have pixels.
+The syntax is `loomora_use_demo export FILE OUT full|light [ID...]` (result identifiers, none for every result). Result 3 is on a 2D frame, result 4 on the 3D frame.
 
-Outcomes (the export syntax is `loomora_use_demo export FILE OUT full|light [ID...]`):
+Expected: `one-r3.loomora` holds result 3 and only the frame, layout, images (thumbnails only) and spools it uses; `one-r4.loomora` holds the result of the 3D frame; the mesh of that frame has the same positions, indices and normals as in the full file (`--compare-mesh` prints `same frames/3/mesh.bin (geometry identical; entry sha256 differs: full has UVs)`), but not the same entry `sha256`, because the light entry is rewritten without UVs (`contracts/project-format.md`); editing a light file is refused with `LOOMORA_ERR_READ_ONLY_PROJECT`; it is at least 50% smaller than the full file when the images have pixels.
 
-- [x] The export of result 3 holds only its frame (2), layout (3), image (1, thumbnail) and spools (1, 4); `check_loomora.py` reports 0 errors.
-- [x] Editing a light file is refused with `LOOMORA_ERR_READ_ONLY_PROJECT` (Catch2 `[export]`, 9 cases).
-- [x] At least 50% smaller when the images have pixels (Catch2: full 89,827 bytes, light 12,147, ratio 0.135).
-- [ ] The mesh of the 3D frame has the same `sha256` as in the full file: the geometry (positions, indices, normals) is identical (`--compare-mesh`), but the entry's `sha256` differs because the light entry is rewritten without UVs, as `contracts/project-format.md` says.
+Outcomes:
+
+- [x] The export of result 3 holds only its frame (2), layout (3), image (1, thumbnail) and spools (1, 4); the export of result 4 holds frame 3, layout 5, images 3 and 4, spools 5 and 6; `check_loomora.py` reports 0 errors (and the one `warn.light_project`) for both.
+- [x] Editing a light file is refused with `LOOMORA_ERR_READ_ONLY_PROJECT` (Catch2 `[export]`, 9 cases, 528 assertions).
+- [x] At least 50% smaller when the images have pixels (`multi`: 21,258 bytes full, 4,204 for result 3; Catch2: full 89,827 bytes, light 12,147, ratio 0.135).
+- [x] The mesh of the 3D frame keeps identical geometry (positions, indices, normals; `--compare-mesh`); its entry `sha256` is not the same as in the full file, by design (the full mesh has UVs, the light entry has none).
 
 ## 7. Versions and features (User Story 4, SC-007)
 
-The Catch2 test `version_skew` opens files with a newer minor (extra fields and entries: opens, unknown entries kept on rewrite), a newer major (rejected with `This file needs Loomora format version 2.0 or newer`) and an unknown required feature (rejected naming it).
+The Catch2 tests `version skew: ...` (`<build-dir>/core/tests/loomora_tests "version skew: *"`) open files with a newer minor (extra fields and entries: opens, unknown entries kept on rewrite), a newer major (rejected with `This file needs Loomora format version 2.0 or newer`) and an unknown required feature (rejected naming it).
 
 Outcomes (tests `version skew: ...`, 5 cases, 635 assertions):
 
@@ -119,7 +132,7 @@ Expected: no crash, no timeout above 5 s, no sanitizer report over at least 10 m
 Outcomes (short representative run, not the full hour):
 
 - [x] 120 s, 149,089 inputs (clang 23, ASan and UBSan, libFuzzer): exit 0, no crash, timeout, leak or sanitizer report.
-- [ ] The 10 million inputs or one hour of this step: not rerun here; `core/tests/fuzz_run_sc004.md` records 12.6 million inputs without finding.
+- [ ] The 10 million inputs or one hour of this step: not rerun here; `docs/implementation/validation/results/spec-002/fuzz_run_sc004.md` records 12.6 million inputs without finding.
 
 ## 9. Every UI (SC-010)
 
@@ -149,7 +162,7 @@ Outcomes:
 
 - [x] The six reference files are byte-identical (`check_loomora.py --compare`: `same`) between Windows 11 x64 (clang), Linux x86_64 (g++), Linux i686 and Windows 2000 i686 (MinGW).
 - [ ] Big-endian system or PowerPC emulation: not run (no qemu).
-- [ ] Evidence under `evidence/adr-0021/<platform-id>/`: not stored by this pass; `core/tests/cross_arch_results.md` holds the hash table.
+- [ ] Evidence under `evidence/adr-0021/<platform-id>/`: not stored by this pass; `docs/implementation/validation/results/spec-002/cross_arch_results.md` holds the hash table.
 
 ## What is not covered here
 
