@@ -13,6 +13,8 @@ if(LOOMORA_BUILD_TESTS)
   enable_testing()
 endif()
 
+# zlib (submodule third_party/zlib; deflate/inflate of the .loomora format), before the core that links it.
+include(cmake/loomora_zlib.cmake)
 add_subdirectory(core)
 
 # The host-msvc preset (loomora.dll for the WinUI 3 UI) turns the Legacy UI off: it is built with
@@ -36,6 +38,17 @@ endif()
 # emscripten-js.cmake.
 if(LOOMORA_TARGET_WEB)
   add_subdirectory(bridge/wasm)
+endif()
+
+# Host command `loomora validate` (spec 002, cli/loomora): only for a build that runs on the machine
+# that makes it. Not Android, Web, iOS or any cross toolchain (the Windows 2000 MinGW-w64 build, the
+# Windows Legacy cross build from WSL): the command is a host program, and the trial of those targets
+# does not need it.
+option(LOOMORA_BUILD_CLI "Build the host command loomora validate (cli/loomora)" ON)
+if(LOOMORA_BUILD_CLI AND NOT LOOMORA_TARGET_ANDROID AND NOT LOOMORA_TARGET_WEB
+   AND NOT LOOMORA_TARGET_WIN2000 AND NOT CMAKE_CROSSCOMPILING
+   AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  add_subdirectory(cli/loomora)
 endif()
 
 if(LOOMORA_BUILD_LINUX_MODERN)

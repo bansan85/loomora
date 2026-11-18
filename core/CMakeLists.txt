@@ -1,8 +1,31 @@
 set(LOOMORA_SOURCES
   src/c_api.cpp src/eol.cpp src/greet.cpp src/probe.cpp src/utf8.cpp src/version.cpp)
 
+# The .loomora file format (spec 002): every .cpp of src/format/ (any depth) and every
+# src/c_api_project*.cpp is picked up by glob, so a new file needs no edit here (CONFIGURE_DEPENDS
+# re-globs at build time). The platform files of src/format/io/ are #if-guarded: they compile to
+# nothing on the other platforms.
+file(GLOB_RECURSE LOOMORA_FORMAT_SOURCES CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/format/*.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/c_api_project*.cpp")
+list(APPEND LOOMORA_SOURCES ${LOOMORA_FORMAT_SOURCES})
+
+# Internal headers are included as "format/report.hpp", "internal/config.hpp"; RapidJSON is a
+# SYSTEM include so -pedantic-errors -Werror never applies to it; zlib is the C library
+# loomora_zlib (cmake/loomora_zlib.cmake, its own flags).
+# A parent project that is not the repository root (the Gradle build of the Android Modern UI) sets it first.
+if(NOT LOOMORA_RAPIDJSON_DIR)
+  set(LOOMORA_RAPIDJSON_DIR "${PROJECT_SOURCE_DIR}/third_party/rapidjson/include")
+endif()
+
+# Fuzz targets (core/fuzz, libFuzzer; Clang only): OFF by default.
+option(LOOMORA_BUILD_FUZZ "Build the fuzz targets of core/fuzz (Clang with libFuzzer)" OFF)
+
 add_library(loomora STATIC ${LOOMORA_SOURCES})
 target_include_directories(loomora PUBLIC include)
+target_include_directories(loomora PRIVATE src)
+target_include_directories(loomora SYSTEM PRIVATE "${LOOMORA_RAPIDJSON_DIR}")
+target_link_libraries(loomora PRIVATE loomora_zlib)
 set_target_properties(loomora PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF
                                          CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 if(NOT MSVC OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
@@ -15,6 +38,9 @@ option(LOOMORA_BUILD_SHARED "Also build the shared library loomora_shared" OFF)
 if(LOOMORA_BUILD_SHARED)
   add_library(loomora_shared SHARED ${LOOMORA_SOURCES})
   target_include_directories(loomora_shared PUBLIC include)
+  target_include_directories(loomora_shared PRIVATE src)
+  target_include_directories(loomora_shared SYSTEM PRIVATE "${LOOMORA_RAPIDJSON_DIR}")
+  target_link_libraries(loomora_shared PRIVATE loomora_zlib)
   target_compile_definitions(loomora_shared PRIVATE LOOMORA_BUILD_SHARED_LIB)
   target_compile_definitions(loomora_shared INTERFACE LOOMORA_USE_DLL)
   set_target_properties(loomora_shared PROPERTIES
@@ -44,7 +70,7 @@ if(LOOMORA_BUILD_SHARED)
   endif()
 endif()
 
-install(FILES include/loomora.h DESTINATION include)
+install(FILES include/loomora.h include/loomora_project.h DESTINATION include)
 install(TARGETS loomora ARCHIVE DESTINATION lib)
 if(LOOMORA_BUILD_SHARED)
   install(TARGETS loomora_shared ARCHIVE DESTINATION lib LIBRARY DESTINATION lib
@@ -54,3 +80,9 @@ endif()
 if(LOOMORA_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
+
+# --- fuzz targets (spec 002, T072): core/fuzz/CMakeLists.txt ---------------------------------------
+if(LOOMORA_BUILD_FUZZ)
+  add_subdirectory(fuzz)
+endif()
+# --- end of fuzz targets ----------------------------------------------------------------------------

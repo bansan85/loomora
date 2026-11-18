@@ -24,6 +24,17 @@
  * The probe record (one ASCII JSON line, loomora_probe_record) is written in <pre id="probe">
  * and to console.log, and document.title becomes LOOMORA_PROBE_DONE, or
  * "LOOMORA_PROBE_ERROR: <message>" when something failed. '+' in a value is a plus sign.
+ *
+ * Project probe modes (spec 002, contracts/ui-validate-project.md): index.html?validate_project=<name>
+ * or index.html?roundtrip_project=<name>, where <name> is a .loomora file next to the page. The page
+ * fetches it with an XMLHttpRequest (an ArrayBuffer), hands it to the backend as one buffer
+ * (loomora_project_open_memory) and writes the one result line, identical to `loomora validate
+ * --quiet` (the round trip: "roundtrip ok " + the line of the copy), in <pre id="validate-project">
+ * and to console.log. The pre has a data-status attribute with the exit status of the command line
+ * (0 valid, 1 error, 2 file unreadable or usage error) and document.title becomes
+ * LOOMORA_VALIDATE_DONE, or "LOOMORA_VALIDATE_ERROR: <message>". Two modes, or a mode next to probe=1
+ * or with no name, is a usage error: status 2 and no line. post=1 and path=js work as above (the line
+ * is sent to /validate-project, preceded by the status).
  */
 (function () {
   "use strict";
@@ -43,7 +54,16 @@
   var finished = false;       /* the backend started and the first greeting is shown */
   var failed = false;
   var lastText = null;
-  var nameEl = null, greetingEl = null, statusEl = null, probeEl = null;
+  var nameEl = null, greetingEl = null, statusEl = null, probeEl = null, projectEl = null;
+  /* project probe modes (spec 002): 0 none, 1 validate_project, 2 roundtrip_project */
+  var projectMode = 0;
+  var projectName = "";
+  var projectUsage = false;     /* a usage error: nothing is written, the status is 2 */
+  var ERR_INVALID = -3, ERR_INTERNAL = -4, ERR_IO = -10, ERR_NO_MEMORY = -16, ERR_TOO_LARGE = -22;
+  var PROFILE_FULL = 1, PROFILE_LIGHT = 2;
+  /* The timestamp of the copy: the round trip checks the structure of the copy, not a date, and the
+     page reads no clock and parses no part of the project. One fixed valid value. */
+  var COPY_MODIFIED_AT = "1970-01-01T00:00:00Z";
 
   function el(id) {
     return document.getElementById(id);
@@ -145,6 +165,108 @@
     return ptr;
   }
 
+  /* The project API (contracts/c-api-project.md) for the project probe modes: only what they need.
+     A project or a report is a pointer (a number the page never interprets); 0 means none. The
+     file lives in a buffer of the module (loomora_web_alloc, bridge/wasm/module.cpp) until the
+     project is closed. An out-pointer is a 4-byte little-endian slot on the module's stack. */
+  function bindProject(M) {
+    var num = "number";
+
+    function slots(n) {
+      var p = M.stackAlloc(n), heap = M.HEAPU8, i;
+      for (i = 0; i < n; i++) {
+        heap[p + i] = 0;
+      }
+      return p;
+    }
+
+    function u32(p) {
+      var h = M.HEAPU8;
+      return (h[p] | (h[p + 1] << 8) | (h[p + 2] << 16) | (h[p + 3] << 24)) >>> 0;
+    }
+
+    return {
+      /* Copies `bytes` (a Uint8Array) into a new buffer of the module; 0 when memory is short. */
+      alloc: function (bytes) {
+        var ptr = M.ccall("loomora_web_alloc", num, [num], [bytes.length]);
+        if (ptr !== 0) {
+          M.HEAPU8.set(bytes, ptr);
+        }
+        return ptr;
+      },
+
+      release: function (ptr) {
+        if (ptr !== 0) {
+          M.ccall("loomora_web_free", null, [num], [ptr]);
+        }
+      },
+
+      /* loomora_project_open_memory: { rc, project, report }. */
+      open: function (ptr, len) {
+        var sp = M.stackSave(), s, rc;
+        try {
+          s = slots(8);
+          rc = M.ccall("loomora_project_open_memory", num, [num, num, num, num, num, num],
+                       [ptr, len, 0, 0, s, s + 4]);
+          return { rc: rc, project: u32(s), report: u32(s + 4) };
+        } finally {
+          M.stackRestore(sp);
+        }
+      },
+
+      /* loomora_validate_memory: { rc, report }. */
+      validate: function (ptr, len) {
+        var sp = M.stackSave(), s, rc;
+        try {
+          s = slots(4);
+          rc = M.ccall("loomora_validate_memory", num, [num, num, num, num, num], [ptr, len, 0, 0, s]);
+          return { rc: rc, report: u32(s) };
+        } finally {
+          M.stackRestore(sp);
+        }
+      },
+
+      isLight: function (project) {
+        return M.ccall("loomora_project_is_light", num, [num], [project]);
+      },
+
+      /* loomora_project_export_stream of every result, into a buffer of the module (module.cpp):
+         { rc, data, size }; the buffer is released with release(). */
+      exportCopy: function (project, profile, stamp) {
+        var sp = M.stackSave(), s, rc;
+        try {
+          s = slots(8);
+          rc = M.ccall("loomora_web_export", num, [num, num, num, num, num],
+                       [project, profile, cString(M, stamp), s, s + 4]);
+          return { rc: rc, data: u32(s), size: u32(s + 4) };
+        } finally {
+          M.stackRestore(sp);
+        }
+      },
+
+      /* The counts are int64: a BigInt in the WebAssembly build, a number in the JavaScript one. */
+      reportCount: function (report) {
+        return report === 0 ? 0 : Number(M.ccall("loomora_report_count", num, [num], [report]));
+      },
+
+      reportErrorCount: function (report) {
+        return report === 0 ? 0 : Number(M.ccall("loomora_report_error_count", num, [num], [report]));
+      },
+
+      reportFree: function (report) {
+        if (report !== 0) {
+          M.ccall("loomora_report_free", null, [num], [report]);
+        }
+      },
+
+      close: function (project) {
+        if (project !== 0) {
+          M.ccall("loomora_project_close", null, [num], [project]);
+        }
+      }
+    };
+  }
+
   function bindCore(M, path) {
     var num = "number";
     var greetFn, isEolFn, probeFn, wide, abi;
@@ -189,6 +311,8 @@
       eolWarning: function () {
         return M.UTF8ToString(M.ccall("loomora_eol_warning", num, [], []));
       },
+
+      project: bindProject(M),
 
       /* rssKb < 0: not measured. Returns the JSON line, or "" if the backend refuses. */
       probe: function (platformId, coreKind, input, shown, displayed, displayMs, rssKb, eolShown, stamp) {
@@ -348,6 +472,136 @@
     postToServer("/probe", line);
   }
 
+  /* ---- project probe modes (spec 002, contracts/ui-validate-project.md) ------------------ */
+
+  /* A failure that leaves nothing to read (I/O, memory, bad argument): status 2, as the command. */
+  function unreadable(rc) {
+    return rc === ERR_IO || rc === ERR_NO_MEMORY || rc === ERR_INVALID || rc === ERR_INTERNAL ||
+           rc === ERR_TOO_LARGE;
+  }
+
+  function plural(n, noun) {
+    return n + " " + noun + (n === 1 ? "" : "s");
+  }
+
+  /* The summary line of `loomora validate --quiet` for a file: "OK name: 0 errors, 0 warnings",
+     "FAIL name: N errors, M warnings" or "FAIL name: error code" (the failure left no error in the
+     report). Returns { line, status } with status 0, 1 or 2 as the command's exit status. The counts
+     come from the report (pointer 0: none). */
+  function summaryLine(P, name, rc, report) {
+    var total = P.reportCount(report), errors = P.reportErrorCount(report), warnings = total - errors;
+    var codeOnly = rc !== 0 && errors <= 0, status;
+    if (rc !== 0 && unreadable(rc)) {
+      status = 2;
+    } else if (rc !== 0 || errors > 0) {
+      status = 1;
+    } else {
+      status = 0;
+    }
+    return {
+      line: (status === 0 ? "OK " : "FAIL ") + name + ": " +
+            (codeOnly ? "error " + rc : plural(errors, "error") + ", " + plural(warnings, "warning")),
+      status: status
+    };
+  }
+
+  /* The round trip of an open project: a copy of every result in memory, validated again. */
+  function roundTrip(P, name, project) {
+    var copy = P.exportCopy(project, P.isLight(project) === 1 ? PROFILE_LIGHT : PROFILE_FULL,
+                            COPY_MODIFIED_AT);
+    var validated, summary, ok;
+    if (copy.rc !== 0) {
+      return { line: "roundtrip FAIL export error " + copy.rc, status: 1 };
+    }
+    validated = P.validate(copy.data, copy.size);
+    summary = summaryLine(P, name, validated.rc, validated.report);
+    P.reportFree(validated.report);
+    P.release(copy.data);
+    ok = summary.status === 0;
+    return { line: (ok ? "roundtrip ok " : "roundtrip FAIL ") + summary.line, status: ok ? 0 : 1 };
+  }
+
+  /* The line of the mode for the file `bytes` (an ArrayBuffer; null when the page could not read it).
+     The whole file is handed to the backend as one buffer (loomora_project_open_memory). */
+  function projectResult(P, mode, name, bytes) {
+    var ptr, opened, summary, result;
+    if (bytes === null) {
+      return { line: "FAIL " + name + ": error " + ERR_IO, status: 2 };
+    }
+    ptr = P.alloc(new Uint8Array(bytes));
+    if (ptr === 0) {
+      return { line: "FAIL " + name + ": error " + ERR_NO_MEMORY, status: 2 };
+    }
+    opened = P.open(ptr, bytes.byteLength);
+    summary = summaryLine(P, name, opened.rc, opened.report);
+    P.reportFree(opened.report);
+    if (opened.rc !== 0 || mode === 1) {
+      result = summary;
+    } else {
+      result = roundTrip(P, name, opened.project);
+    }
+    P.close(opened.project);
+    P.release(ptr);   /* the buffer stays valid until the project is closed */
+    return result;
+  }
+
+  /* Writes the line (when there is one) in <pre id="validate-project"> and to console.log, puts the
+     status in its data-status attribute, and sets document.title to LOOMORA_VALIDATE_DONE. */
+  function writeProject(line, status) {
+    if (line !== "") {
+      setText(projectEl, line);
+      projectEl.style.display = "block";
+      if (typeof console !== "undefined" && console.log) {
+        console.log(line);
+      }
+    }
+    projectEl.setAttribute("data-status", String(status));
+    document.title = "LOOMORA_VALIDATE_DONE";
+    postToServer("/validate-project", status + " " + line);
+  }
+
+  /* GET of a file next to the page, as an ArrayBuffer; onDone(null) when it cannot be read. The
+     name is percent-encoded as one path segment, so that it cannot leave the page's directory. */
+  function fetchBundled(name, onDone) {
+    var xhr, done = false;
+    function finish(bytes) {
+      if (!done) {
+        done = true;
+        onDone(bytes);
+      }
+    }
+    try {
+      xhr = new XMLHttpRequest();
+      xhr.open("GET", encodeURIComponent(name), true);
+      xhr.responseType = "arraybuffer";
+      xhr.onreadystatechange = function () {
+        if (xhr.readyState === 4) {
+          /* status 0 with a response: a file read from file:// */
+          finish((xhr.status === 200 || xhr.status === 0) && xhr.response ? xhr.response : null);
+        }
+      };
+      xhr.send(null);
+    } catch (e) {
+      finish(null);
+    }
+  }
+
+  function runProjectMode() {
+    if (projectUsage) {
+      writeProject("", 2);
+      return;
+    }
+    fetchBundled(projectName, function (bytes) {
+      var result;
+      try {
+        result = projectResult(core.project, projectMode, projectName, bytes);
+        writeProject(result.line, result.status);
+      } catch (e) {
+        fail(e);
+      }
+    });
+  }
+
   /* ---- errors ------------------------------------------------------------------------ */
 
   function fail(error) {
@@ -356,6 +610,13 @@
       return;
     }
     failed = true;
+    if (projectMode !== 0 || projectUsage) {
+      document.title = "LOOMORA_VALIDATE_ERROR: " + message;
+      if (projectEl) {
+        projectEl.setAttribute("data-status", "2");
+      }
+      postToServer("/validate-project-error", "LOOMORA_VALIDATE_ERROR: " + message);
+    }
     if (probeMode) {
       document.title = "LOOMORA_PROBE_ERROR: " + message;
       postToServer("/probe-error", "LOOMORA_PROBE_ERROR: " + message);
@@ -408,19 +669,43 @@
     if (probeMode) {
       writeProbe(eol === 1);
     }
+    if (projectMode !== 0 || projectUsage) {
+      runProjectMode();
+    }
     finished = true;
   }
 
   function main() {
-    var src, input;
+    var src, input, validateName, roundtripName;
     nameEl = el("name");
     greetingEl = el("greeting");
     statusEl = el("status");
     probeEl = el("probe");
+    projectEl = el("validate-project");
     try {
       /* decided before the parsing, so that a malformed URL is still reported as a probe error */
       probeMode = /[?&]probe([=&]|$)/.test(window.location.search || "");
+      /* A project mode (?validate_project=<name> or ?roundtrip_project=<name>, a file bundled with
+         the page) is exclusive with the probe and with the other project mode: two of them, or a
+         missing name, is a usage error, status 2, and nothing is written. */
+      projectUsage = /[?&](validate_project|roundtrip_project)([=&]|$)/.test(window.location.search || "");
       params = parseQuery(window.location.search || "");
+      if (projectUsage) {
+        validateName = param("validate_project");
+        roundtripName = param("roundtrip_project");
+        if (probeMode || (validateName !== null && roundtripName !== null)) {
+          /* usage error */
+        } else if (validateName !== null && validateName !== "") {
+          projectMode = 1;
+          projectName = validateName;
+          projectUsage = false;
+        } else if (roundtripName !== null && roundtripName !== "") {
+          projectMode = 2;
+          projectName = roundtripName;
+          projectUsage = false;
+        }
+        probeMode = false;      /* the probe record is not written next to a project mode */
+      }
       if (probeMode) {
         input = param("input");
         if (input !== null) {

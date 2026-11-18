@@ -1,5 +1,6 @@
 // Probe mode of the iOS Modern UI (ui-contract.md): launch arguments -probe and
-// -probe_input <utf8>. The probe line is built by the backend (loomora_probe_record); this file
+// -probe_input <utf8>, and the project modes -validate_project <path> and -roundtrip_project <path>
+// (Native.projectProbe, see Probe.projectOptions). The probe line is built by the backend (loomora_probe_record); this file
 // only measures, converts and writes it, through NSLog. The app exits 2 seconds after the first
 // display.
 import Foundation
@@ -26,6 +27,34 @@ enum Probe {
         }
         return UserDefaults.standard.string(forKey: "probe_input")
     }()
+
+    // The project mode given as launch argument and its path. The argument list is read directly
+    // (as for -probe_input). badUsage: both project modes, a project mode with -probe, or a project
+    // mode without its path: the app then exits with status 2 and writes nothing.
+    static let projectOptions: (mode: ProjectProbeMode?, path: String?, badUsage: Bool) = {
+        let arguments = ProcessInfo.processInfo.arguments
+        let validate = arguments.firstIndex(of: "-validate_project")
+        let roundtrip = arguments.firstIndex(of: "-roundtrip_project")
+        if validate == nil && roundtrip == nil {
+            return (nil, nil, false)
+        }
+        let mode: ProjectProbeMode = validate != nil ? .validate : .roundtrip
+        let index = validate ?? roundtrip!
+        let path: String? = index + 1 < arguments.count ? arguments[index + 1] : nil
+        let bad = (validate != nil && roundtrip != nil) || enabled || path == nil
+        return (mode, path, bad)
+    }()
+
+    // Project probe mode: the line of `loomora validate --quiet` goes to NSLog; returns the exit status.
+    static func runProject(_ mode: ProjectProbeMode, path: String) -> Int32 {
+        if Native.abiVersion() != Native.expectedAbiVersion {
+            NSLog("loomora: ABI version mismatch between the interface and the engine")
+            return 1
+        }
+        let result = Native.projectProbe(mode: mode, path: path)
+        NSLog("%@", result.line)
+        return result.status
+    }
 
     // The launch is the creation of the process, so the delay includes the start of the runtime and
     // not only the time spent in this code.

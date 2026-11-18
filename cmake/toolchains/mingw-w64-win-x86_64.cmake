@@ -46,3 +46,7 @@ set(CMAKE_SHARED_LINKER_FLAGS_INIT "-static-libgcc -static-libstdc++")
 
 # Build-time programs (Python for the test vectors) are the host ones.
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+
+# The shim of ui/legacy/windows-win32/getthreadid_shim.cpp (the condition variable functions that
+# libgcc's gthr-win32-cond.o imports, Vista and later) is linked into the executables of this floor.
+set(LOOMORA_TARGET_WINXP64 ON)

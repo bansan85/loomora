@@ -13,7 +13,7 @@
 # "loomora"; the executable file is still loomora.exe (OUTPUT_NAME).
 
 set(LOOMORA_WIN32_SOURCES main.cpp sysinfo.cpp sysinfo.h dynfeatures.cpp dynfeatures.h dynload.h
-    probe.cpp probe.h resource.h)
+    probe.cpp probe.h project_probe.cpp project_probe.hpp resource.h)
 if(MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
   set(LOOMORA_WIN32_MSVC_ABI ON)
 else()
@@ -43,8 +43,10 @@ endif()
 # libgcc's gthr-win32.o, pulled in by the exception machinery of libstdc++, would import
 # KERNEL32!GetThreadId (Vista and later). The shim satisfies that reference inside the
 # executable; see getthreadid_shim.cpp and docs/implementation/adr/0002. The 64-bit floor (XP x64) has
-# GetThreadId and every other target has it, so those builds are left as they are.
-if(LOOMORA_TARGET_WIN2000)
+# GetThreadId and every other target has it, so on those builds the shim only holds the condition
+# variable functions (Vista and later, also missing on XP x64) that libgcc's gthr-win32-cond.o imports
+# (LOOMORA_TARGET_WINXP64, mingw-w64-win-x86_64.cmake; Windows 2000 build: both parts).
+if(LOOMORA_TARGET_WIN2000 OR LOOMORA_TARGET_WINXP64)
   list(APPEND LOOMORA_WIN32_SOURCES getthreadid_shim.cpp)
 endif()
 
@@ -52,6 +54,11 @@ add_executable(loomora_win32 WIN32 ${LOOMORA_WIN32_SOURCES})
 set_target_properties(loomora_win32 PROPERTIES
   OUTPUT_NAME loomora CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_definitions(loomora_win32 PRIVATE UNICODE _UNICODE)
+# The round trip mode (--roundtrip-project) calls loomora_project_export_stream: it is compiled when
+# the backend has it (core/src/c_api_project_export.cpp), so that this UI builds before and after.
+if(EXISTS "${PROJECT_SOURCE_DIR}/core/src/c_api_project_export.cpp")
+  target_compile_definitions(loomora_win32 PRIVATE LOOMORA_HAVE_PROJECT_EXPORT)
+endif()
 target_link_libraries(loomora_win32 PRIVATE loomora user32 gdi32)
 if(LOOMORA_WIN32_MSVC_ABI)
   # loomora.manifest already has the trustInfo (asInvoker). Without this the linker adds its own

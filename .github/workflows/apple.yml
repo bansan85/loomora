@@ -31,8 +31,9 @@
 #
 # Every job prints the runner image, macOS, Xcode (all those installed), clang, Swift, SDK and simulator
 # runtime versions first (tools/ci/apple-setup.sh; toolchain.txt in the logs artifact), which the procedures
-# macos.md and ios.md need. The build does not need the docs repository: no submodule is fetched, so
-# tools/build.py prints a warning and writes no deliverable record, as in windows.yml.
+# macos.md and ios.md need. The build does not need the docs repository: it is not fetched, so
+# tools/build.py prints a warning and writes no deliverable record, as in windows.yml. Only the zlib
+# and RapidJSON submodules are fetched, by their own step, because the backend links and includes them.
 #
 # The jobs ARE part of the `gate`: each one is a claim of T126, a failure is a real failure. Only the INFO
 # steps and the diagnostics never fail a job.
@@ -113,6 +114,10 @@ jobs:
         with:
           submodules: false
           persist-credentials: false
+      # The backend links zlib and includes RapidJSON (the .loomora format, ADR 0018): both are git
+      # submodules, fetched alone (shallow), without the docs repository.
+      - name: Fetch the zlib and RapidJSON submodules
+        run: git submodule update --init --depth 1 third_party/zlib third_party/rapidjson
       - name: "INFO toolchain versions and Python environment"
         run: bash tools/ci/apple-setup.sh "$RUNNER_TEMP/apple-logs"
       - name: "BUILD Modern macOS (tools/build.py macos modern)"
@@ -174,6 +179,10 @@ jobs:
         with:
           submodules: false
           persist-credentials: false
+      # The backend links zlib and includes RapidJSON (the .loomora format, ADR 0018): both are git
+      # submodules, fetched alone (shallow), without the docs repository.
+      - name: Fetch the zlib and RapidJSON submodules
+        run: git submodule update --init --depth 1 third_party/zlib third_party/rapidjson
       - name: "INFO toolchain versions and Python environment"
         run: bash tools/ci/apple-setup.sh "$RUNNER_TEMP/apple-logs"
       - name: "BUILD Modern iOS for the simulator (tools/build.py ios modern --ios-sdk iphonesimulator)"
@@ -237,6 +246,10 @@ jobs:
         with:
           submodules: false
           persist-credentials: false
+      # The backend links zlib and includes RapidJSON (the .loomora format, ADR 0018): both are git
+      # submodules, fetched alone (shallow), without the docs repository.
+      - name: Fetch the zlib and RapidJSON submodules
+        run: git submodule update --init --depth 1 third_party/zlib third_party/rapidjson
       - name: "INFO toolchain versions and Python environment"
         run: bash tools/ci/apple-setup.sh "$RUNNER_TEMP/apple-logs"
       - name: "BUILD Modern iOS for devices, deployment target 15.0 (tools/build.py ios modern --ios-sdk iphoneos)"
@@ -281,6 +294,10 @@ jobs:
         with:
           submodules: false
           persist-credentials: false
+      # The backend links zlib and includes RapidJSON (the .loomora format, ADR 0018): both are git
+      # submodules, fetched alone (shallow), without the docs repository.
+      - name: Fetch the zlib and RapidJSON submodules
+        run: git submodule update --init --depth 1 third_party/zlib third_party/rapidjson
       - name: "INFO toolchain versions and Python environment"
         run: bash tools/ci/apple-setup.sh "$RUNNER_TEMP/apple-logs"
       - name: "BUILD Legacy macOS, x86_64, -mmacosx-version-min=10.6 (tools/build.py macos legacy)"
@@ -336,6 +353,10 @@ jobs:
         with:
           submodules: false
           persist-credentials: false
+      # The backend links zlib and includes RapidJSON (the .loomora format, ADR 0018): both are git
+      # submodules, fetched alone (shallow), without the docs repository.
+      - name: Fetch the zlib and RapidJSON submodules
+        run: git submodule update --init --depth 1 third_party/zlib third_party/rapidjson
       - name: "INFO toolchain versions and Python environment"
         run: bash tools/ci/apple-setup.sh "$RUNNER_TEMP/apple-logs"
       - name: "BUILD Legacy iOS, device SDK (tools/build.py ios legacy --ios-sdk iphoneos)"

@@ -1,5 +1,6 @@
 // Probe mode of the iOS Legacy UI (ui-contract.md): launch arguments -probe and
-// -probe_input <utf8>. The probe line is built by the backend (loomora_probe_record); this class
+// -probe_input <utf8>, and the project modes -validate_project <path> and -roundtrip_project <path>
+// (+runProject). The probe line is built by the backend (loomora_probe_record); this class
 // only measures, converts and writes it, through NSLog. The app exits 2 seconds after the first
 // display. Manual retain/release (no ARC), iOS 5 APIs only.
 #import <Foundation/Foundation.h>
@@ -8,7 +9,29 @@
 // backend).
 extern const NSUInteger kLoomoraMaxInputScalars;
 
+// Project probe modes (specs/002-loomora-file-format/contracts/ui-validate-project.md).
+enum {
+    kProjectModeNone = 0,
+    kProjectModeValidate = 1,  // -validate_project <path>
+    kProjectModeRoundtrip = 2  // -roundtrip_project <path>
+};
+
 @interface Probe : NSObject
+
+// The project mode given as launch argument (kProjectModeNone when there is none) and its path.
++ (int)projectMode;
++ (NSString *)projectPath;
+
+// YES when the launch arguments combine the modes (-probe and a project mode, or both project
+// modes) or give a project mode without its path: the app then exits with status 2, writing nothing.
++ (BOOL)badProjectUsage;
+
+// Project probe mode: opens the file with the backend, validates it (and, for the round trip,
+// exports a copy into memory and validates it) and writes the one result line with NSLog: the line
+// of `loomora validate --quiet`, built from the counts of the backend's report. No application
+// logic. Returns the exit status: 0 valid (warnings allowed), 1 an error or a failed round trip, 2
+// the file cannot be read at all.
++ (int)runProject;
 
 // Records the start of the launch (the creation of the process when sysctl can tell).
 + (void)start;

@@ -16,7 +16,10 @@ struct Options {
     bool enabled;       // --probe was given
     bool hasInput;      // --probe-input was given
     std::wstring input; // its value (UTF-16, as the command line carries it)
-    bool badUsage;      // malformed options: missing value, input without --probe, invalid text
+    bool badUsage;      // malformed options: missing value, input without --probe, invalid text,
+                        // or several of --probe, --validate-project and --roundtrip-project
+    int projectMode;    // 0, or the project_probe::Mode of --validate-project / --roundtrip-project
+    std::wstring projectPath; // the path given to that option (UTF-16, as the command line carries it)
 };
 
 // Identifier of the timer that ends probe mode (WM_TIMER wParam).
@@ -47,6 +50,13 @@ void Emit(const std::string &input, const std::string &message, bool eolWarningS
 
 // 0, or 1 if the probe line could not be built or written.
 int ExitStatus();
+
+// Project mode (contracts/ui-validate-project.md): runs --validate-project or --roundtrip-project
+// (options.projectMode != 0) with the backend, writes the one result line to
+// loomora-validate-project.txt next to the executable (UTF-8, one line ending in LF) and to OutputDebugString, and
+// returns the exit status of the program: 0 valid, 1 error (or a line that could not be written),
+// 2 the file cannot be read. No window is created.
+int RunProject(const Options &options);
 
 } // namespace probe
 

@@ -1,5 +1,6 @@
-// Probe mode (ui-contract.md): --probe, --probe-input <utf8>. This file only reads the command
-// line, measures (launch to first display, resident size) and reads the system; the JSON line
+// Probe mode (ui-contract.md): --probe, --probe-input <utf8>, and the project modes
+// --validate-project <path> and --roundtrip-project <path> (Native.projectProbe). This file only
+// reads the command line, measures (launch to first display, resident size) and reads the system; the JSON line
 // itself comes from loomora_probe_record() through Native.probeRecord.
 import AppKit
 import Foundation
@@ -7,6 +8,8 @@ import Foundation
 struct ProbeOptions {
     var enabled = false
     var input: String?
+    var projectMode: ProjectProbeMode?
+    var projectPath: String?
     var badUsage = false
 
     // Reads the raw argv: CommandLine.arguments silently repairs invalid UTF-8, the raw bytes
@@ -15,10 +18,20 @@ struct ProbeOptions {
         var options = ProbeOptions()
         let argc = Int(CommandLine.argc)
         var index = 1
+        var projectOptions = 0 // --validate-project and --roundtrip-project given, with their repeats
         while index < argc {
             let argument = rawArgument(index)
             if argument == "--probe" {
                 options.enabled = true
+            } else if argument == "--validate-project" || argument == "--roundtrip-project" {
+                projectOptions += 1
+                options.projectMode = argument == "--validate-project" ? .validate : .roundtrip
+                index += 1
+                if index < argc, let value = rawArgument(index) {
+                    options.projectPath = value
+                } else {
+                    options.badUsage = true
+                }
             } else if argument == "--probe-input" {
                 index += 1
                 if index < argc, let value = rawArgument(index) {
@@ -31,6 +44,10 @@ struct ProbeOptions {
         }
         // The input override is only meaningful in probe mode.
         if options.input != nil && !options.enabled {
+            options.badUsage = true
+        }
+        // The three modes exclude each other.
+        if projectOptions > 1 || (projectOptions == 1 && (options.enabled || options.input != nil)) {
             options.badUsage = true
         }
         return options
@@ -72,6 +89,13 @@ enum Probe {
         DispatchQueue.main.asyncAfter(deadline: .now() + exitDelaySeconds) {
             Probe.finish(state)
         }
+    }
+
+    // Project probe mode: the line of `loomora validate --quiet` goes to stdout; returns the exit status.
+    static func runProject(_ mode: ProjectProbeMode, path: String) -> Int32 {
+        let result = Native.projectProbe(mode: mode, path: path)
+        FileHandle.standardOutput.write(Data((result.line + "\n").utf8))
+        return result.status
     }
 
     static func writeError(_ message: String) {

@@ -104,7 +104,164 @@ static uint32_t ElapsedMs(void) {
     return ms > 0 ? (uint32_t)ms : 0;
 }
 
+#pragma mark Project probe modes
+
+// The timestamp of the copy: the round trip checks the structure of the copy, not a date, and the UI
+// reads no clock and parses no part of the project (FR-027). One fixed valid value.
+static const char kCopyModifiedAt[] = "1970-01-01T00:00:00Z";
+
+// A failure that leaves nothing to read (I/O, memory, bad argument): exit status 2, as the command.
+static BOOL ProjectUnreadable(int32_t rc) {
+    return rc == LOOMORA_ERR_IO || rc == LOOMORA_ERR_NO_MEMORY || rc == LOOMORA_ERR_INVALID ||
+           rc == LOOMORA_ERR_INTERNAL || rc == LOOMORA_ERR_TOO_LARGE_FOR_PLATFORM;
+}
+
+static NSString *ProjectPlural(long long n, const char *noun) {
+    return [NSString stringWithFormat:@"%lld %s%s", n, noun, n == 1 ? "" : "s"];
+}
+
+// The summary line of `loomora validate --quiet` for a file: "OK <file>: 0 errors, 0 warnings",
+// "FAIL <file>: N errors, M warnings" or "FAIL <file>: error <code>" (the failure left no error in
+// the report). *status is 0, 1 or 2 as the command's exit status. The counts come from the report.
+static NSString *ProjectSummaryLine(const char *name, int32_t rc, const loomora_report *report,
+                                    int *status) {
+    long long total = report != NULL ? (long long)loomora_report_count(report) : 0;
+    long long errors = report != NULL ? (long long)loomora_report_error_count(report) : 0;
+    long long warnings = total - errors;
+    BOOL codeOnly = rc != 0 && errors <= 0;
+    NSString *detail;
+    if (rc != 0 && ProjectUnreadable(rc))
+        *status = 2;
+    else if (rc != 0 || errors > 0)
+        *status = 1;
+    else
+        *status = 0;
+    if (codeOnly)
+        detail = [NSString stringWithFormat:@"error %d", (int)rc];
+    else
+        detail = [NSString stringWithFormat:@"%@, %@", ProjectPlural(errors, "error"),
+                                            ProjectPlural(warnings, "warning")];
+    return [NSString stringWithFormat:@"%s %s: %@", *status == 0 ? "OK" : "FAIL", name, detail];
+}
+
+// The sink of the export: appends each chunk to the memory buffer (`user` is an NSMutableData).
+static int32_t ProjectAppendChunk(void *user, const uint8_t *data, size_t length) {
+    [(NSMutableData *)user appendBytes:data length:length];
+    return 0;
+}
+
+// Round trip of an open project: a full copy of every result into memory, validated again. Returns
+// the line to print and sets *status.
+static NSString *ProjectRoundTrip(const char *path, const loomora_project *project, int *status) {
+    NSMutableData *copy = [NSMutableData data];
+    loomora_report *exportReport = NULL;
+    loomora_report *copyReport = NULL;
+    int32_t profile =
+        loomora_project_is_light(project) == 1 ? LOOMORA_PROFILE_LIGHT : LOOMORA_PROFILE_FULL;
+    int32_t rc = loomora_project_export_stream(project, profile, NULL, 0, kCopyModifiedAt, 0,
+                                               ProjectAppendChunk, (void *)copy, &exportReport);
+    int32_t validated;
+    NSString *summary;
+    NSString *line;
+    if (exportReport != NULL)
+        loomora_report_free(exportReport);
+    if (rc != 0) {
+        *status = 1;
+        return [NSString stringWithFormat:@"roundtrip FAIL export error %d", (int)rc];
+    }
+    validated = loomora_validate_memory([copy length] > 0 ? (const uint8_t *)[copy bytes] : NULL,
+                                        [copy length], NULL, NULL, &copyReport);
+    summary = ProjectSummaryLine(path, validated, copyReport, status);
+    if (copyReport != NULL)
+        loomora_report_free(copyReport);
+    line = [NSString stringWithFormat:@"%s %@", *status == 0 ? "roundtrip ok" : "roundtrip FAIL",
+                                      summary];
+    if (*status != 0)
+        *status = 1;
+    return line;
+}
+
 @implementation Probe
+
+// The launch arguments of the project modes: the mode name and its value, or NSNotFound.
+static NSUInteger ProjectArgumentIndex(NSArray *arguments, int *mode, int *count) {
+    NSUInteger validate = [arguments indexOfObject:@"-validate_project"];
+    NSUInteger roundtrip = [arguments indexOfObject:@"-roundtrip_project"];
+    *count = (validate != NSNotFound ? 1 : 0) + (roundtrip != NSNotFound ? 1 : 0);
+    if (validate != NSNotFound) {
+        *mode = kProjectModeValidate;
+        return validate;
+    }
+    if (roundtrip != NSNotFound) {
+        *mode = kProjectModeRoundtrip;
+        return roundtrip;
+    }
+    *mode = kProjectModeNone;
+    return NSNotFound;
+}
+
++ (int)projectMode {
+    int mode;
+    int count;
+    ProjectArgumentIndex([[NSProcessInfo processInfo] arguments], &mode, &count);
+    return mode;
+}
+
++ (NSString *)projectPath {
+    NSArray *arguments = [[NSProcessInfo processInfo] arguments];
+    int mode;
+    int count;
+    NSUInteger index = ProjectArgumentIndex(arguments, &mode, &count);
+    if (index == NSNotFound || index + 1 >= [arguments count]) {
+        return nil;
+    }
+    return [arguments objectAtIndex:index + 1];
+}
+
++ (BOOL)badProjectUsage {
+    int mode;
+    int count;
+    NSString *path;
+    ProjectArgumentIndex([[NSProcessInfo processInfo] arguments], &mode, &count);
+    if (count == 0) {
+        return NO;
+    }
+    path = [self projectPath];
+    return count > 1 || [self enabled] || path == nil || [path UTF8String] == NULL;
+}
+
++ (int)runProject {
+    const char *path = [[self projectPath] UTF8String];
+    int mode = [self projectMode];
+    int status = 0;
+    NSString *line;
+    loomora_project *project = NULL;
+    loomora_report *report = NULL;
+    int32_t rc;
+    NSString *summary;
+    if (path == NULL || mode == kProjectModeNone) {
+        return 2;
+    }
+    if (loomora_abi_version() != (uint32_t)LOOMORA_ABI_VERSION) {
+        NSLog(@"loomora: ABI version mismatch between the interface and the engine");
+        return 1;
+    }
+    rc = loomora_project_open_path(path, NULL, NULL, &project, &report);
+    summary = ProjectSummaryLine(path, rc, report, &status);
+    if (report != NULL) {
+        loomora_report_free(report);
+    }
+    if (rc != 0 || mode == kProjectModeValidate) {
+        line = summary;
+    } else {
+        line = ProjectRoundTrip(path, project, &status);
+    }
+    if (project != NULL) {
+        loomora_project_close(project);
+    }
+    NSLog(@"%@", line);
+    return status;
+}
 
 + (void)start {
     NSDate *date = ProcessStartDate();

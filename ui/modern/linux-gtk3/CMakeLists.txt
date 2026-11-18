@@ -45,13 +45,18 @@ endif()
 message(STATUS "Linux Modern UI: gtkmm ${GTKMM_VERSION} (GTK ${LOOMORA_GTK_API}), C++${LOOMORA_GTK_UI_STANDARD}")
 
 add_executable(loomora_gtk3 main.cpp main_window.cpp main_window.hpp probe.cpp probe.hpp
-               gtk_compat.hpp)
+               project_probe.cpp project_probe.hpp gtk_compat.hpp)
 set_target_properties(loomora_gtk3 PROPERTIES
   OUTPUT_NAME loomora-gtk3
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
   CXX_STANDARD ${LOOMORA_GTK_UI_STANDARD} CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_link_libraries(loomora_gtk3 PRIVATE loomora PkgConfig::GTKMM)
 target_compile_options(loomora_gtk3 PRIVATE -Wall -Wextra)
+# The round trip mode (--roundtrip-project) calls loomora_project_export_stream: it is compiled when
+# the backend has it (core/src/c_api_project_export.cpp), so that this UI builds before and after.
+if(EXISTS "${PROJECT_SOURCE_DIR}/core/src/c_api_project_export.cpp")
+  target_compile_definitions(loomora_gtk3 PRIVATE LOOMORA_HAVE_PROJECT_EXPORT)
+endif()
 
 if(LOOMORA_GTK_API STREQUAL "3")
   target_compile_definitions(loomora_gtk3 PRIVATE GDK_VERSION_MIN_REQUIRED=GDK_VERSION_3_10)

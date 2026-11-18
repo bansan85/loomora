@@ -94,4 +94,7 @@ LOOMORA_API size_t loomora_probe_record(const char *platform_id, int32_t ui_vari
 }
 #endif
 
+/* The .loomora project format API (spec 002). LOOMORA_ABI_VERSION above is unchanged. */
+#include "loomora_project.h"
+
 #endif

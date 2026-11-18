@@ -113,6 +113,10 @@ jobs:
         with:
           submodules: false
           persist-credentials: false
+      # The backend links zlib and includes RapidJSON (the .loomora format, ADR 0018): both are git
+      # submodules, fetched alone (shallow), without the docs repository.
+      - name: Fetch the zlib and RapidJSON submodules
+        run: git submodule update --init --depth 1 third_party/zlib third_party/rapidjson
       - name: Install the JDK (Temurin 25)
         uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
@@ -184,6 +188,10 @@ jobs:
         with:
           submodules: false
           persist-credentials: false
+      # The backend links zlib and includes RapidJSON (the .loomora format, ADR 0018): both are git
+      # submodules, fetched alone (shallow), without the docs repository.
+      - name: Fetch the zlib and RapidJSON submodules
+        run: git submodule update --init --depth 1 third_party/zlib third_party/rapidjson
       - name: Install the JDK (Temurin 25)
         uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:

@@ -8,6 +8,11 @@
 // written as UTF-8) is converted to U+FFFD. No exception crosses the JNI boundary: every
 // function catches everything and returns a null / error value.
 //
+// The project functions (contracts/c-api-project.md) are only the ones the probe modes of spec 002
+// (contracts/ui-validate-project.md) need: open, validate, export to a byte array, read of an item
+// and of an entry as byte arrays, report counts and the closing calls. A handle (project, report)
+// travels as a jlong that the Java side never interprets.
+//
 // C++11, built into libloomora_jni.so together with the static backend (no other dependency
 // than the C and C++ runtime linked statically, liblog is not used).
 #include <jni.h>
@@ -119,6 +124,55 @@ jstring FromUtf8(JNIEnv *env, const char *bytes, std::size_t n) {
     return env->NewString(chars.empty() ? NULL : &chars[0], static_cast<jsize>(chars.size()));
 }
 
+// A project or report handle as a jlong and back.
+template <class T> jlong ToHandle(T *pointer) {
+    return static_cast<jlong>(reinterpret_cast<std::intptr_t>(pointer));
+}
+
+template <class T> T *FromHandle(jlong handle) {
+    return reinterpret_cast<T *>(static_cast<std::intptr_t>(handle));
+}
+
+// A Java byte[] holding `n` bytes; null when it cannot be made (too long for an array, no memory).
+jbyteArray ToByteArray(JNIEnv *env, const std::uint8_t *data, std::size_t n) {
+    if (n > static_cast<std::size_t>(0x7FFFFFFF))
+        return NULL;
+    jbyteArray array = env->NewByteArray(static_cast<jsize>(n));
+    if (array == NULL)
+        return NULL;
+    if (n > 0)
+        env->SetByteArrayRegion(array, 0, static_cast<jsize>(n),
+                                reinterpret_cast<const jbyte *>(data));
+    return array;
+}
+
+// { code, project handle, report handle } as a long[3]; null when it cannot be made.
+jlongArray ToTriple(JNIEnv *env, jlong code, jlong project, jlong report) {
+    jlongArray array = env->NewLongArray(3);
+    if (array == NULL)
+        return NULL;
+    const jlong values[3] = {code, project, report};
+    env->SetLongArrayRegion(array, 0, 3, values);
+    return array;
+}
+
+// The sink of loomora_project_export_stream: appends each chunk to a growing memory buffer.
+struct Sink {
+    std::vector<std::uint8_t> bytes;
+    bool failed;
+};
+
+std::int32_t AppendChunk(void *user, const std::uint8_t *data, std::size_t length) {
+    Sink *sink = static_cast<Sink *>(user);
+    try {
+        sink->bytes.insert(sink->bytes.end(), data, data + length);
+    } catch (...) {
+        sink->failed = true;
+        return 1; // stops the export
+    }
+    return 0;
+}
+
 } // namespace
 
 extern "C" {
@@ -184,6 +238,171 @@ JNIEXPORT jstring JNICALL Java_fr_bansan_loomora_probe_Native_probeRecord(
         if (written != needed)
             return NULL;
         return FromUtf8(env, reinterpret_cast<const char *>(&buf[0]), written);
+    } catch (...) {
+        return NULL;
+    }
+}
+
+// ---- project reader and export (spec 002) ----
+
+// Opens a project file (loomora_project_open_path): { code, project handle, report handle }. The
+// project handle is 0 on failure, the report handle is 0 when there is no report. Null only when the
+// path is null or the glue itself failed.
+JNIEXPORT jlongArray JNICALL Java_fr_bansan_loomora_probe_Native_projectOpen(JNIEnv *env, jclass,
+                                                                            jstring path) {
+    std::string utf8;
+    if (!ToUtf8(env, path, utf8))
+        return NULL;
+    loomora_project *project = NULL;
+    loomora_report *report = NULL;
+    try {
+        const std::int32_t rc = loomora_project_open_path(utf8.c_str(), NULL, NULL, &project, &report);
+        jlongArray result = ToTriple(env, rc, ToHandle(project), ToHandle(report));
+        if (result == NULL) {
+            if (project != NULL)
+                loomora_project_close(project);
+            if (report != NULL)
+                loomora_report_free(report);
+        }
+        return result;
+    } catch (...) {
+        return NULL;
+    }
+}
+
+// Validates a project held in a byte array (loomora_validate_memory): { code, 0, report handle }.
+// Null when the glue failed.
+JNIEXPORT jlongArray JNICALL Java_fr_bansan_loomora_probe_Native_validateMemory(JNIEnv *env, jclass,
+                                                                               jbyteArray data) {
+    if (data == NULL)
+        return NULL;
+    const jsize n = env->GetArrayLength(data);
+    jbyte *bytes = env->GetByteArrayElements(data, NULL);
+    if (bytes == NULL)
+        return NULL;
+    loomora_report *report = NULL;
+    std::int32_t rc = 0;
+    try {
+        rc = loomora_validate_memory(reinterpret_cast<const std::uint8_t *>(bytes),
+                                     static_cast<std::size_t>(n), NULL, NULL, &report);
+    } catch (...) {
+        env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
+        return NULL;
+    }
+    env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
+    jlongArray result = ToTriple(env, rc, 0, ToHandle(report));
+    if (result == NULL && report != NULL)
+        loomora_report_free(report);
+    return result;
+}
+
+JNIEXPORT jlong JNICALL Java_fr_bansan_loomora_probe_Native_reportCount(JNIEnv *, jclass,
+                                                                       jlong report) {
+    return report == 0 ? 0
+                       : static_cast<jlong>(loomora_report_count(FromHandle<loomora_report>(report)));
+}
+
+JNIEXPORT jlong JNICALL Java_fr_bansan_loomora_probe_Native_reportErrorCount(JNIEnv *, jclass,
+                                                                            jlong report) {
+    return report == 0
+               ? 0
+               : static_cast<jlong>(loomora_report_error_count(FromHandle<loomora_report>(report)));
+}
+
+JNIEXPORT void JNICALL Java_fr_bansan_loomora_probe_Native_reportFree(JNIEnv *, jclass, jlong report) {
+    if (report != 0)
+        loomora_report_free(FromHandle<loomora_report>(report));
+}
+
+JNIEXPORT void JNICALL Java_fr_bansan_loomora_probe_Native_projectClose(JNIEnv *, jclass,
+                                                                       jlong project) {
+    if (project != 0)
+        loomora_project_close(FromHandle<loomora_project>(project));
+}
+
+// 1 for a light project, 0 for a full one (loomora_project_is_light).
+JNIEXPORT jint JNICALL Java_fr_bansan_loomora_probe_Native_projectIsLight(JNIEnv *, jclass,
+                                                                         jlong project) {
+    return project == 0
+               ? 0
+               : static_cast<jint>(loomora_project_is_light(FromHandle<loomora_project>(project)));
+}
+
+// A copy of every result written into memory (loomora_project_export_stream, no result subset,
+// options 0): the archive, or null with rc[0] set to the error code (0 on success). `profile` is
+// LOOMORA_PROFILE_FULL or LOOMORA_PROFILE_LIGHT, `modifiedAt` the caller's time (ISO 8601 UTC).
+JNIEXPORT jbyteArray JNICALL Java_fr_bansan_loomora_probe_Native_projectExport(
+    JNIEnv *env, jclass, jlong project, jint profile, jstring modifiedAt, jintArray rc) {
+    std::string stamp;
+    jint code = LOOMORA_ERR_INVALID;
+    jbyteArray result = NULL;
+    if (project != 0 && ToUtf8(env, modifiedAt, stamp)) {
+        Sink sink;
+        sink.failed = false;
+        loomora_report *report = NULL;
+        try {
+            code = loomora_project_export_stream(FromHandle<loomora_project>(project), profile, NULL,
+                                                 0, stamp.c_str(), 0, AppendChunk, &sink, &report);
+            if (report != NULL)
+                loomora_report_free(report);
+            if (code == 0 && sink.failed)
+                code = LOOMORA_ERR_NO_MEMORY;
+            if (code == 0) {
+                result = ToByteArray(env, sink.bytes.empty() ? NULL : &sink.bytes[0],
+                                     sink.bytes.size());
+                if (result == NULL)
+                    code = LOOMORA_ERR_NO_MEMORY;
+            }
+        } catch (...) {
+            code = LOOMORA_ERR_NO_MEMORY;
+            result = NULL;
+        }
+    }
+    if (rc != NULL && env->GetArrayLength(rc) > 0)
+        env->SetIntArrayRegion(rc, 0, 1, &code);
+    return result;
+}
+
+// The JSON of one item (kind: LOOMORA_KIND_*), or null (unknown item, no memory).
+JNIEXPORT jbyteArray JNICALL Java_fr_bansan_loomora_probe_Native_projectItemJson(
+    JNIEnv *env, jclass, jlong project, jint kind, jint id) {
+    if (project == 0)
+        return NULL;
+    const loomora_project *p = FromHandle<loomora_project>(project);
+    try {
+        const std::int64_t need =
+            loomora_project_item_json(p, kind, static_cast<std::uint32_t>(id), NULL, 0);
+        if (need < 0)
+            return NULL;
+        std::vector<std::uint8_t> buf(static_cast<std::size_t>(need) + 1);
+        const std::int64_t got = loomora_project_item_json(p, kind, static_cast<std::uint32_t>(id),
+                                                           &buf[0], static_cast<std::size_t>(need));
+        if (got != need)
+            return NULL;
+        return ToByteArray(env, &buf[0], static_cast<std::size_t>(need));
+    } catch (...) {
+        return NULL;
+    }
+}
+
+// The whole content of an entry (for example "manifest.json"), or null (unknown entry, no memory,
+// an entry too long for a byte array).
+JNIEXPORT jbyteArray JNICALL Java_fr_bansan_loomora_probe_Native_projectReadEntry(
+    JNIEnv *env, jclass, jlong project, jstring entry) {
+    std::string name;
+    if (project == 0 || !ToUtf8(env, entry, name))
+        return NULL;
+    const loomora_project *p = FromHandle<loomora_project>(project);
+    try {
+        const std::int64_t size = loomora_project_entry_size(p, name.c_str());
+        if (size < 0 || size > 0x7FFFFFFF)
+            return NULL;
+        std::vector<std::uint8_t> buf(static_cast<std::size_t>(size) + 1);
+        const std::int64_t got =
+            loomora_project_read_entry(p, name.c_str(), 0, &buf[0], static_cast<std::size_t>(size));
+        if (got != size)
+            return NULL;
+        return ToByteArray(env, &buf[0], static_cast<std::size_t>(size));
     } catch (...) {
         return NULL;
     }

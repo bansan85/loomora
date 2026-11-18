@@ -20,6 +20,15 @@
 
 namespace {
 
+#ifdef _WIN64
+// 64-bit (XP x64 floor): GetThreadId exists there, only the condition variables below are shimmed, and
+// the names of the import entries are not decorated.
+#define LOOMORA_IMP(name, bytes) "__imp_" name
+#else
+#define LOOMORA_IMP(name, bytes) "__imp__" name "@" #bytes
+#endif
+
+#ifndef _WIN64
 typedef DWORD(WINAPI *GetThreadIdFn)(HANDLE);
 typedef LONG(NTAPI *QueryThreadFn)(HANDLE, ULONG, PVOID, ULONG, PULONG);
 
@@ -33,6 +42,7 @@ struct ThreadBasicInformation {
     LONG priority;
     LONG basePriority;
 };
+#endif // !_WIN64
 
 // FARPROC cannot be cast straight to another function type without a warning
 // (-Wcast-function-type); going through void * is accepted by GCC in C++11.
@@ -45,6 +55,7 @@ void *Lookup(const char *module, const char *name) {
 
 } // namespace
 
+#ifndef _WIN64
 // Global symbol "_GetThreadId@4": what libkernel32.a would define (the stdcall name of the real
 // function). The C++ name is different so that it cannot clash with a declaration in <windows.h>.
 extern "C" DWORD WINAPI loomoraThreadId(HANDLE thread) __asm__("_GetThreadId@4");
@@ -71,4 +82,68 @@ extern "C" DWORD WINAPI loomoraThreadId(HANDLE thread) {
 extern "C" {
 extern GetThreadIdFn const loomoraImpGetThreadId __asm__("__imp__GetThreadId@4");
 GetThreadIdFn const loomoraImpGetThreadId = &loomoraThreadId;
+}
+#endif // !_WIN64
+
+// ---- condition variables (Windows Vista and later) -------------------------------------------------
+//
+// GCC 13's libstdc++.a(guard.o) (the guard of a function-local static, __cxa_guard_acquire) needs
+// __gthr_win32_cond_*, so the linker takes libgcc.a(gthr-win32-cond.o), which imports
+// KERNEL32!InitializeConditionVariable, SleepConditionVariableCS, WakeConditionVariable and
+// WakeAllConditionVariable: none of them exists before Windows Vista (found by T059, spec 002, once
+// tools/check_imports.py read the import table of the objdump of binutils 2.39 and later). They are
+// only called when two threads meet on the guard of the same static, which a single-threaded program
+// never does. The same technique as above: define the import-address-table entries inside the
+// executable. Each function calls the real one when kernel32 has it (Vista and later); otherwise a
+// condition variable that is waited on from a loop (as guard.o does) is served by releasing the
+// critical section, sleeping 1 ms and taking it again, a spurious wake-up that callers must accept,
+// and the wake-up functions do nothing. Only used by the i686 build (Windows 2000 floor).
+
+namespace {
+
+typedef VOID(WINAPI *CondInitFn)(PVOID);
+typedef BOOL(WINAPI *CondSleepFn)(PVOID, LPCRITICAL_SECTION, DWORD);
+typedef VOID(WINAPI *CondWakeFn)(PVOID);
+
+} // namespace
+
+extern "C" VOID WINAPI loomoraCondInit(PVOID cv) {
+    void *const native = Lookup("kernel32.dll", "InitializeConditionVariable");
+    if (native != NULL)
+        reinterpret_cast<CondInitFn>(native)(cv);
+    else
+        *static_cast<PVOID *>(cv) = NULL; // CONDITION_VARIABLE_INIT: one zeroed pointer
+}
+
+extern "C" BOOL WINAPI loomoraCondSleep(PVOID cv, LPCRITICAL_SECTION section, DWORD milliseconds) {
+    void *const native = Lookup("kernel32.dll", "SleepConditionVariableCS");
+    if (native != NULL)
+        return reinterpret_cast<CondSleepFn>(native)(cv, section, milliseconds);
+    LeaveCriticalSection(section);
+    Sleep(1);
+    EnterCriticalSection(section);
+    return TRUE;
+}
+
+extern "C" VOID WINAPI loomoraCondWake(PVOID cv) {
+    void *const native = Lookup("kernel32.dll", "WakeConditionVariable");
+    if (native != NULL)
+        reinterpret_cast<CondWakeFn>(native)(cv);
+}
+
+extern "C" VOID WINAPI loomoraCondWakeAll(PVOID cv) {
+    void *const native = Lookup("kernel32.dll", "WakeAllConditionVariable");
+    if (native != NULL)
+        reinterpret_cast<CondWakeFn>(native)(cv);
+}
+
+extern "C" {
+extern CondInitFn const loomoraImpCondInit __asm__(LOOMORA_IMP("InitializeConditionVariable", 4));
+CondInitFn const loomoraImpCondInit = &loomoraCondInit;
+extern CondSleepFn const loomoraImpCondSleep __asm__(LOOMORA_IMP("SleepConditionVariableCS", 12));
+CondSleepFn const loomoraImpCondSleep = &loomoraCondSleep;
+extern CondWakeFn const loomoraImpCondWake __asm__(LOOMORA_IMP("WakeConditionVariable", 4));
+CondWakeFn const loomoraImpCondWake = &loomoraCondWake;
+extern CondWakeFn const loomoraImpCondWakeAll __asm__(LOOMORA_IMP("WakeAllConditionVariable", 4));
+CondWakeFn const loomoraImpCondWakeAll = &loomoraCondWakeAll;
 }

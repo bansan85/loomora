@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -57,7 +58,9 @@ class MainActivity : ComponentActivity() {
         launchMs = SystemClock.elapsedRealtime()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        probe = Probe.enabled(intent)
+        // A project mode (spec 002) is exclusive with the probe: with both, nothing is written.
+        val projectMode = ProjectProbe.mode(intent)
+        probe = Probe.enabled(intent) && projectMode == ProjectProbe.Mode.NONE
 
         val ready = Native.loaded && Native.abiVersion() == EXPECTED_ABI
         val problem: String? = when {
@@ -92,6 +95,30 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (probe) handler.postDelayed(emitAndFinish, GIVE_UP_MS)
+        if (projectMode != ProjectProbe.Mode.NONE) runProjectMode(projectMode)
+    }
+
+    /**
+     * Project probe mode (intent extra validate_project or roundtrip_project): the work is done by
+     * ProjectProbe on a worker thread, which logs the one line (tag LOOMORA_VALIDATE); the activity
+     * then finishes by itself. A usage error (two modes, or a mode next to "probe") logs nothing.
+     */
+    private fun runProjectMode(mode: ProjectProbe.Mode) {
+        val path = ProjectProbe.path(intent, mode)
+        Thread {
+            try {
+                if (mode != ProjectProbe.Mode.BAD_USAGE && path != null) {
+                    if (Native.loaded) {
+                        ProjectProbe.runAndLog(mode, path)
+                    } else {
+                        Log.e(ProjectProbe.TAG + "_ERROR", "the backend could not be loaded: ${Native.loadError}")
+                    }
+                }
+            } catch (t: Throwable) {
+                Log.e(ProjectProbe.TAG + "_ERROR", "project mode failed: $t")
+            }
+            handler.post { finish() }
+        }.start()
     }
 
     private fun onFirstDraw() {

@@ -85,7 +85,7 @@ WEB_PATHS = ("wasm", "js")
 SPIKE_STATUSES = ("open", "confirmed", "refuted")
 # S4 (manylinux2010 build, glibc 2.12) was removed on 2026-11-14: Linux binaries are built on the
 # machine that runs them (docs/implementation/adr/0007).
-SPIKE_IDS = tuple("S%d" % i for i in range(1, 12) if i != 4)
+SPIKE_IDS = tuple("S%d" % i for i in range(1, 12) if i != 4) + ("S-F1", "S-F2", "S-F3")  # S-F*: spec 002 (file format)
 HYPOTHESIS_IDS = tuple("V%d" % i for i in range(1, 21))
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")  # same pattern as probe-result.schema.json
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -331,12 +331,17 @@ CODE_SWITCH_RES = (
 # marker, an export macro, an include guard: no old and no new system path is chosen by them).
 NOT_A_FALLBACK = OrderedDict([
     ("LOOMORA_ANDROID_NDK", "the directory of the NDK, a path"),
+    ("LOOMORA_ANDROID_PIE", "toolchain parameter: the test programs for Android 5.0 and later are linked as PIE (the system refuses another kind); the libraries and the APK are not affected"),
+    ("LOOMORA_RAPIDJSON_DIR", "the directory of the RapidJSON submodule, a path (a parent project that is not the repository root sets it)"),
+    ("LOOMORA_ZLIB_DIR", "the directory of the zlib submodule, a path (a parent project that is not the repository root sets it)"),
     ("LOOMORA_EMSCRIPTEN_ROOT", "the directory of Emscripten, a path"),
     ("LOOMORA_BUILD_TESTS", "build option: which targets exist"),
     ("LOOMORA_BUILD_CATCH2_TESTS", "build option: which targets exist"),
     ("LOOMORA_BUILD_LINUX_MODERN", "build option: which targets exist"),
     ("LOOMORA_BUILD_WIN32_LEGACY", "build option: which targets exist"),
     ("LOOMORA_BUILD_SHARED", "build option: static library only or shared library too"),
+    ("LOOMORA_BUILD_FUZZ", "build option: whether the fuzz targets of core/fuzz exist"),
+    ("LOOMORA_BUILD_CLI", "build option: whether the host command loomora validate (cli/loomora) exists"),
     ("LOOMORA_BUILD_SHARED_LIB", "export macro of the shared library"),
     ("LOOMORA_USE_DLL", "import macro of the Windows DLL"),
     ("LOOMORA_TARGET_ANDROID", "toolchain marker: adds the Android UI target"),
@@ -348,6 +353,8 @@ NOT_A_FALLBACK = OrderedDict([
     ("LOOMORA_XFT_FOUND", "result of the Xft link test; its outcome is the fallback "
                           "xlib-core-font-glyphs (LOOMORA_XLIB_HAVE_XFT)"),
     ("LOOMORA_XLIB_REQUIRED", "build option: a missing X11 is an error instead of a skipped target"),
+    ("LOOMORA_HAVE_PROJECT_EXPORT", "build switch of the UI round-trip probe: compiled when the backend has "
+                                    "the export (core/src/c_api_project_export.cpp); no platform takes another path"),
 ])
 
 

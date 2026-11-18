@@ -10,8 +10,16 @@ functions of `core/include/loomora.h` are exported by name and the pages call th
 | `runtime-methods.txt` | the runtime helpers a page may use, a JSON array, `-sEXPORTED_RUNTIME_METHODS=@...` |
 | `exports-selftest.txt` | `_main`, for `loomora_selftest` (the test run under node by `ctest`) |
 
-`_malloc` and `_free` are not exported: a page never needs the heap allocator, it uses the stack
-of the module (`stackSave` / `stackAlloc` / `stackRestore`) for every buffer it passes.
+`_malloc` and `_free` are not exported: a page uses the stack of the module (`stackSave` /
+`stackAlloc` / `stackRestore`) for every small buffer it passes. The one exception is a whole
+`.loomora` file (the project probe modes of spec 002, `loomora_project_open_memory`, which does not
+copy the buffer): `module.cpp` holds three helpers for it, `loomora_web_alloc(n)` and
+`loomora_web_free(p)` (a buffer of the module that the page fills with the file, released after
+`loomora_project_close`) and `loomora_web_export(project, profile, modified_at, &data, &size)`
+(`loomora_project_export_stream` into a memory buffer, since a page cannot give the C API a callback
+in both builds). The project functions of `loomora_project.h` are exported by name as the others;
+those that return an `int64_t` (`loomora_report_count`, ...) give a `BigInt` in the WebAssembly build,
+and out-pointers (`loomora_project **`, `size_t *`) are 4-byte slots on the module's stack.
 
 ## Loading
 

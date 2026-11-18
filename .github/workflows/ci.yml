@@ -98,9 +98,14 @@ jobs:
           echo "code=$code" >> "$GITHUB_OUTPUT"
           echo "variants=$variants" >> "$GITHUB_OUTPUT"
 
-  # `python3 tools/verify.py quick` on each Linux image: backend build, ctest (selftest and Catch2),
-  # the 15 reference vectors through the Xlib and gtkmm UIs on a private Xvfb display, check_std,
-  # check_ui_logic, validate_records, and the self-tests of diff_verdicts and run_vectors.
+  # `python3 tools/verify.py quick` on each Linux image: backend build, ctest (selftest, Catch2 and
+  # the .loomora format tests: loomora_format_selftest, `[validator]` rows), format-files
+  # (loomora_refgen references through tools/check_loomora.py), readonly (tools/check_readonly.py),
+  # cli validate (tools/check_cli_validate.py on `loomora validate`), the 15 reference vectors
+  # through the Xlib and gtkmm UIs on a private Xvfb display, ui project (the project modes of the
+  # UIs), corpus+validator (tools/gen_invalid_corpus.py, then the validator rows), check_std,
+  # check_ui_logic, validate_records, and the self-tests of diff_verdicts and run_vectors. So the
+  # checks of T099 (ADR 0018, FR-030) are all there except the fuzz smoke run: that is the `fuzz` job.
   linux:
     name: linux (${{ matrix.os }})
     needs: changes
@@ -119,8 +124,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # `recursive` fetches third_party/catch2 (ctest runs the Catch2 tests only when it is
-          # there) and docs/implementation (../loomora-docs, resolved by git against the URL of
-          # this repository, so it is the sibling repository on GitHub).
+          # there), third_party/zlib and third_party/rapidjson (the backend does not configure
+          # without them) and docs/implementation (../loomora-docs, resolved by git against the URL
+          # of this repository, so it is the sibling repository on GitHub).
           submodules: recursive
           persist-credentials: false
       - name: Install the build packages
@@ -131,6 +137,8 @@ jobs:
       - name: Check the submodules are there
         run: |
           test -f third_party/catch2/single_include/catch2/catch.hpp
+          test -f third_party/zlib/zlib.h
+          test -f third_party/rapidjson/include/rapidjson/document.h
           test -d docs/implementation/validation
       - name: Verify (quick)
         run: |
@@ -210,11 +218,80 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  # Fuzz smoke run of the .loomora reader (spec 002, T072/T099): about five minutes in all, on one
+  # image. The backend is rebuilt with Clang, AddressSanitizer and UndefinedBehaviorSanitizer
+  # (LOOMORA_BUILD_FUZZ=ON, core/fuzz/CMakeLists.txt) and fed mutations of the seed corpus of
+  # tools/gen_invalid_corpus.py. loomora_fuzz_loop (mutation loop, no libFuzzer needed) runs 4
+  # minutes; loomora_fuzz_project (libFuzzer) runs 60 seconds when the compiler has libFuzzer. The
+  # first crash, sanitizer report or input slower than 5 seconds fails the job and its input is
+  # uploaded; the loop is deterministic for its --seed (printed), so a failure is replayed with
+  # `loomora_fuzz_loop --replay FILE`. A longer run is a local one.
+  fuzz:
+    name: fuzz smoke run
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CC: clang-18
+      CXX: clang++-18
+    steps:
+      - name: Check out (no submodule)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+          persist-credentials: false
+      # The backend needs zlib and RapidJSON; Catch2 and the docs repository are not used here.
+      - name: Fetch the zlib and RapidJSON submodules
+        run: git submodule update --init --depth 1 third_party/zlib third_party/rapidjson
+      - name: Install Clang, its sanitizer and libFuzzer runtime, CMake and Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build python3 clang-18 libclang-rt-18-dev
+          clang++-18 --version
+          echo "FUZZ_BUILD=$RUNNER_TEMP/loomora-fuzz-build" >> "$GITHUB_ENV"
+      - name: Build the fuzz targets and write the seeds
+        run: |
+          cmake -S . -B "$FUZZ_BUILD" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo             -DLOOMORA_BUILD_FUZZ=ON -DLOOMORA_BUILD_TESTS=OFF -DLOOMORA_BUILD_CLI=OFF 2>&1 | tee "$RUNNER_TEMP/fuzz-configure.log"
+          targets="loomora_fuzz_loop loomora_fuzz_seeds"
+          # loomora_fuzz_project exists only when the compiler has libFuzzer.
+          if ninja -C "$FUZZ_BUILD" -t targets all | grep -q '^loomora_fuzz_project:'; then
+            targets="$targets loomora_fuzz_project"
+          fi
+          echo "targets: $targets"
+          cmake --build "$FUZZ_BUILD" --target $targets
+          test -d "$FUZZ_BUILD/core/fuzz-seeds"
+          echo "seed files: $(find "$FUZZ_BUILD/core/fuzz-seeds" -type f | wc -l)"
+      - name: Mutation loop (4 minutes)
+        run: |
+          mkdir -p "$RUNNER_TEMP/fuzz-crashes"
+          echo "seed $GITHUB_RUN_NUMBER"
+          "$FUZZ_BUILD/core/fuzz/loomora_fuzz_loop" --seconds 240 --seed "$GITHUB_RUN_NUMBER"             --out "$RUNNER_TEMP/fuzz-crashes" "$FUZZ_BUILD/core/fuzz-seeds" 2>&1 | tee "$RUNNER_TEMP/fuzz-loop.log"
+      - name: libFuzzer (60 seconds, when built)
+        run: |
+          exe="$FUZZ_BUILD/core/fuzz/loomora_fuzz_project"
+          if [ ! -x "$exe" ]; then
+            echo "::notice::the compiler has no libFuzzer, loomora_fuzz_project was not run (the loop above ran)"
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP/fuzz-corpus" "$RUNNER_TEMP/fuzz-crashes"
+          "$exe" -timeout=5 -max_total_time=60 -artifact_prefix="$RUNNER_TEMP/fuzz-crashes/"             "$RUNNER_TEMP/fuzz-corpus" "$FUZZ_BUILD/core/fuzz-seeds" 2>&1 | tee "$RUNNER_TEMP/fuzz-libfuzzer.log"
+      - name: Upload the logs and the crashing inputs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-logs
+          path: |
+            ${{ runner.temp }}/fuzz-crashes
+            ${{ runner.temp }}/fuzz-*.log
+          if-no-files-found: warn
+          retention-days: 14
+
   # The single check to require in the branch protection rule: it passes when every job that had to
   # run passed (a skipped job is fine, a failed or cancelled one is not).
   gate:
     name: gate
-    needs: [changes, linux, docs, variants]
+    needs: [changes, linux, docs, variants, fuzz]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

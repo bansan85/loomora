@@ -5,6 +5,8 @@ Usage:
   python tools/run_vectors.py <platform-id> <variant> [--vectors FILE] [--jobs N] [--timeout S]
                               [--evidence-dir DIR] [--wsl-distro NAME] [--arch x64|x86]
                               [--exe PATH] [--ui-abi ABI] [--udid UDID] [--dry-run]
+  python tools/run_vectors.py <platform-id> <variant> --cli PATH [--exe PATH] [--timeout S]
+                              [--validate-project FILE ...] [--roundtrip-project FILE ...]
 
   platform-id  for example linux-ubuntu-24.04-x86_64, windows-11-x64 or windows-2000-x86 (the id
                the UI itself puts in its probe line)
@@ -46,6 +48,22 @@ Which vectors are "valid", and what a UI is expected to show for them (decision,
     be 999 units long when the 1,000th unit would split a surrogate pair). No current vector
     mixes the two cases (the vectors longer than 1,000 characters are all BMP): the rule is
     there for future vectors.
+
+Project modes (spec 002, contracts/ui-validate-project.md, T088): with --validate-project FILE and/or
+--roundtrip-project FILE (each may be repeated) the vectors are not run. For every FILE the built UI is
+started in that mode, by the same launcher as the probe mode (Linux in WSL, Windows legacy from a scratch
+copy), and its line is compared with the summary line of `loomora validate --quiet FILE` of the host
+command given by --cli (or $LOOMORA_CLI: loomora-cli.exe on Windows, loomora elsewhere), byte for byte,
+and its exit status with the command's: valid reference files (line `OK <file>: 0 errors, 0 warnings`,
+status 0), invalid files (`FAIL ...`, status 1) and a missing path (`FAIL <file>: error -10`, status 2).
+For --roundtrip-project the line of a valid file is `roundtrip ok ` followed by the command's line (the
+copy has the counts of the original); for a file the UI cannot open it is the command's line alone.
+The file is given to the UI and to the command by its NAME only, with the directory of the file as the
+working directory, so that "the file name as given" is the same text on every side (WSL, a scratch
+directory). Three usage rows are run once per mode as well: two project modes together, a mode with
+--probe, and a mode without its path must give status 2 and no line. A UI that was built without the
+export of the backend answers the round trip with status 2 and no line: that is a failure here.
+Exit status as for the vectors: 0 all passed, 1 a mismatch or a launch problem, 2 a usage error.
 
 Platform launchers (registry LAUNCHERS, keyed by family and variant; select_launcher picks the
 VirtualBox launcher for the guest platforms of VBOX_PLATFORMS). Implemented: linux modern, linux
@@ -276,6 +294,12 @@ class Launcher(object):
         """Launch the UI in probe mode with `text` (str) as input override; return RunResult."""
         raise NotImplementedError
 
+    def run_project(self, ui_args, cwd, timeout):
+        """Launch the UI with `ui_args` (a list of str: a project mode and its path, see PROJECT_MODES)
+        in the directory `cwd`; return RunResult whose stdout is the line the UI printed (the Windows
+        GUI executable: the content of its file)."""
+        return RunResult(None, "", "", 0.0, "this launcher has no project modes")
+
     def probe_platform_id(self, platform_id):
         """The platform_id the UI's probe line must carry when it is run for `platform_id`
         (the id of the platform record). Only a launcher whose UI can run as another ABI than the
@@ -341,6 +365,43 @@ def inner_run(hex_text, timeout):
     return 0
 
 
+def run_project_ui(args, cwd, timeout):
+    """Start the Linux UI with `args` (a list of bytes: the project mode and its path) in the directory
+    `cwd`; return a reply dict as run_ui does."""
+    exe = local_executable()
+    if exe is None:
+        return {"error": "executable not found: build it with 'python tools/build.py linux %s'"
+                         % LINUX_UI["variant"]}
+    start = time.time()
+    try:
+        res = subprocess.run([str(exe)] + list(args), cwd=cwd, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, timeout=timeout)
+        out = {"returncode": res.returncode,
+               "stdout": res.stdout.decode("utf-8", "replace"),
+               "stderr": res.stderr.decode("utf-8", "replace")}
+    except subprocess.TimeoutExpired:
+        out = {"error": "timeout after %s s (a project mode ends by itself)" % timeout}
+    except OSError as e:
+        out = {"error": "cannot start %s: %s" % (exe, e)}
+    out["elapsed"] = time.time() - start
+    return out
+
+
+def inner_project(spec, cwd, timeout):
+    """Linux side of the project modes through WSL or Docker: `spec` is the arguments of the UI, each as
+    hex digits and joined by commas; print one JSON line."""
+    args = [bytes.fromhex(part) for part in spec.split(",")]
+    print(json.dumps(run_project_ui(args, cwd, timeout)))
+    return 0
+
+
+def wsl_path(path):
+    """The path a WSL distribution sees for a Windows path (C:\\t\\x -> /mnt/c/t/x); others unchanged."""
+    text = str(path).replace("\\", "/")
+    m = re.match(r"^([A-Za-z]):/(.*)$", text)
+    return "/mnt/%s/%s" % (m.group(1).lower(), m.group(2)) if m else text
+
+
 class LinuxModernLauncher(Launcher):
     """Runs the Linux UI of LINUX_UI["variant"]: the GTK one (modern) or the Xlib one (legacy, see
     LinuxLegacyLauncher). The text is passed to the UI process exactly as on the Windows side."""
@@ -394,6 +455,30 @@ class LinuxModernLauncher(Launcher):
             reply = json.loads(lines[-1])
         else:
             reply = run_ui(text.encode("utf-8"), timeout)
+        if "error" in reply:
+            return RunResult(None, "", "", time.time() - start, reply["error"])
+        return RunResult(reply["returncode"], reply["stdout"], reply["stderr"], time.time() - start)
+
+    def run_project(self, ui_args, cwd, timeout):
+        start = time.time()
+        spec = ",".join(a.encode("utf-8").hex() for a in ui_args)
+        if self.on_windows:
+            cmd = self._wsl_script("--inner-project", spec, "--inner-cwd", wsl_path(cwd),
+                                   "--timeout", str(timeout))
+            try:
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     timeout=timeout + 40)
+            except subprocess.TimeoutExpired:
+                return RunResult(None, "", "", time.time() - start, "WSL call timed out")
+            lines = [l for l in res.stdout.decode("utf-8", "replace").splitlines()
+                     if l.startswith("{")]
+            if res.returncode != 0 or not lines:
+                return RunResult(None, "", res.stderr.decode("utf-8", "replace"),
+                                 time.time() - start,
+                                 "WSL helper failed (status %d)" % res.returncode)
+            reply = json.loads(lines[-1])
+        else:
+            reply = run_project_ui([a.encode("utf-8") for a in ui_args], str(cwd), timeout)
         if "error" in reply:
             return RunResult(None, "", "", time.time() - start, reply["error"])
         return RunResult(reply["returncode"], reply["stdout"], reply["stderr"], time.time() - start)
@@ -486,6 +571,29 @@ class LinuxDockerLauncher(LinuxModernLauncher):
             return RunResult(None, "", "", time.time() - start, reply["error"])
         return RunResult(reply["returncode"], reply["stdout"], reply["stderr"], time.time() - start)
 
+    def run_project(self, ui_args, cwd, timeout):
+        start = time.time()
+        try:
+            inside = "/src/" + Path(cwd).resolve().relative_to(common.ROOT.resolve()).as_posix()
+        except ValueError:
+            return RunResult(None, "", "", 0.0, "the container sees the worktree only (%s): put "
+                             "the file under it" % common.ROOT)
+        spec = ",".join(a.encode("utf-8").hex() for a in ui_args)
+        cmd = self._inner("--inner-project", spec, "--inner-cwd", inside, "--timeout", str(timeout))
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 timeout=timeout + 40)
+        except subprocess.TimeoutExpired:
+            return RunResult(None, "", "", time.time() - start, "docker exec timed out")
+        lines = [l for l in res.stdout.decode("utf-8", "replace").splitlines() if l.startswith("{")]
+        if res.returncode != 0 or not lines:
+            return RunResult(None, "", res.stderr.decode("utf-8", "replace"), time.time() - start,
+                             "docker exec failed (status %d)" % res.returncode)
+        reply = json.loads(lines[-1])
+        if "error" in reply:
+            return RunResult(None, "", "", time.time() - start, reply["error"])
+        return RunResult(reply["returncode"], reply["stdout"], reply["stderr"], time.time() - start)
+
     def close(self):
         if self.container:
             subprocess.run(["docker", "rm", "-f", self.container], stdout=subprocess.PIPE,
@@ -494,6 +602,7 @@ class LinuxDockerLauncher(LinuxModernLauncher):
 
 
 WINDOWS_PROBE_FILE = "loomora-probe.json"
+WINDOWS_PROJECT_FILE = "loomora-validate-project.txt"  # the project line of the GUI executable
 
 
 def windows_executable(arch):
@@ -556,6 +665,33 @@ class WindowsLegacyLauncher(Launcher):
                     line = f.read().decode("utf-8", "replace")
             except OSError:
                 line = ""  # check_run reports the missing line next to the exit status
+            return RunResult(res.returncode, line, res.stderr.decode("utf-8", "replace"),
+                             time.time() - start)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def run_project(self, ui_args, cwd, timeout):
+        """The copy of the executable is in a scratch directory (it writes loomora-validate-project.txt
+        next to itself, and that is the stdout of this run), the process runs in `cwd`."""
+        start = time.time()
+        scratch = tempfile.mkdtemp(prefix="loomora-run-")
+        try:
+            exe = os.path.join(scratch, "loomora.exe")
+            shutil.copyfile(str(self.exe), exe)
+            try:
+                res = subprocess.run([exe] + list(ui_args), cwd=str(cwd), stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                return RunResult(None, "", "", time.time() - start,
+                                 "timeout after %s s (a project mode ends by itself)" % timeout)
+            except OSError as e:
+                return RunResult(None, "", "", time.time() - start,
+                                 "cannot start %s: %s" % (self.exe, e))
+            try:
+                with open(os.path.join(scratch, WINDOWS_PROJECT_FILE), "rb") as f:
+                    line = f.read().decode("utf-8", "replace")
+            except OSError:
+                line = ""  # no line: check_project_run compares that with what is expected
             return RunResult(res.returncode, line, res.stderr.decode("utf-8", "replace"),
                              time.time() - start)
         finally:
@@ -1009,6 +1145,25 @@ ANDROID_ACTIVITY = ANDROID_PACKAGE + "/.MainActivity"
 ANDROID_TAG = "LOOMORA_PROBE"
 ANDROID_INPUT_FILE = "/data/local/tmp/loomora-probe-input.txt"
 ANDROID_MAX_EXTRA_BYTES = 1500  # longest text given as the plain probe_input extra
+ANDROID_PROJECT_TAG = "LOOMORA_VALIDATE"  # logcat tag of the project modes (spec 002, T091)
+ANDROID_PROJECT_DIR = "/data/local/tmp"  # where the launcher pushes the .loomora file the app reads
+ANDROID_PROJECT_EXTRAS = {"--validate-project": "validate_project", "--roundtrip-project": "roundtrip_project"}
+# LOOMORA_ERR_* of a failure that leaves no report to read: the command line exits with status 2 for them
+ANDROID_UNREADABLE_CODES = (-3, -4, -10, -16, -22)
+
+
+def android_project_status(line):
+    """The exit status the command line gives for the line a project mode logged (an Android activity has
+    no exit status): 0 for `OK ...` and `roundtrip ok ...`, 2 for `FAIL name: error <code>` with a code
+    that leaves nothing to read, 1 for any other `FAIL ...`; None when the line is neither."""
+    if line.startswith("OK ") or line.startswith("roundtrip ok "):
+        return 0
+    m = re.search(r"^(?:roundtrip )?FAIL .*: error (-?[0-9]+)$", line)
+    if m and int(m.group(1)) in ANDROID_UNREADABLE_CODES:
+        return 2
+    if line.startswith("FAIL ") or line.startswith("roundtrip FAIL "):
+        return 1
+    return None
 
 
 def adb_executable(args):
@@ -1210,6 +1365,88 @@ class AndroidLegacyLauncher(Launcher):
             time.sleep(0.5)
         return RunResult(status, line + "\n", stderr, time.time() - start)
 
+    def _project_log(self, tag, level):
+        """The lines logged to `tag` (at `level` or above) since the last `logcat -c`."""
+        out = self._adb("logcat", "-d", "-v", "raw", "-s", "%s:%s" % (tag, level), timeout=30)[1]
+        return [l for l in (e.strip("\r") for e in out.split("\n")) if l and not l.startswith("-----")]
+
+    def run_project(self, ui_args, cwd, timeout):
+        """A project mode (spec 002, T088, T091) on the device: the file is pushed to /data/local/tmp, the
+        activity is started with the intent extra `validate_project` or `roundtrip_project` (the path on
+        the device) and the line is read from logcat (tag LOOMORA_VALIDATE). `ui_args` is the command-line
+        form of the other launchers (--validate-project NAME, --roundtrip-project NAME, --probe); a mode
+        without a path becomes a boolean extra, which the UI refuses. The UI prints the path it was given,
+        so the device directory is removed from the line before the comparison with the command (which
+        prints the name it was given). An activity has no exit status: the status is read from the line
+        (android_project_status); a usage error logs nothing and gives the status 2."""
+        start = time.time()
+        names = [a for a in ui_args if not a.startswith("--")]
+        device_path = None
+        if names:
+            device_path = "%s/%s" % (ANDROID_PROJECT_DIR, names[0])
+            self._adb("shell", "rm -f " + device_path)  # a missing file stays missing on the device too
+            if (Path(cwd) / names[0]).is_file():
+                self._adb("push", str(Path(cwd) / names[0]), device_path)
+                self._adb("shell", "chmod 644 " + device_path)
+        extras = []
+        i = 0
+        while i < len(ui_args):
+            arg = ui_args[i]
+            has_path = i + 1 < len(ui_args) and not ui_args[i + 1].startswith("--")
+            if arg in ANDROID_PROJECT_EXTRAS:
+                key = ANDROID_PROJECT_EXTRAS[arg]
+                extras.append("--es %s %s" % (key, device_path) if has_path else "--ez %s true" % key)
+                i += 2 if has_path else 1
+            elif arg == "--probe":
+                extras.append("--ez probe true")
+                i += 1
+            else:
+                return RunResult(None, "", "", 0.0, "unknown argument %r for an Android project mode" % arg)
+        expect_line = len(extras) == 1 and extras[0].startswith("--es ")
+        self._adb("shell", "am force-stop " + self.package)
+        self._adb("logcat", "-c")
+        # no -W: a project mode finishes its activity at once and `am start -W` then waits for ever
+        cmd = "am start -n %s/%s %s" % (self.package, self.activity, " ".join(extras))
+        code, out, err = self._adb("shell", cmd, timeout=60)
+        if code != 0 or "Error" in out:
+            return RunResult(None, "", err, time.time() - start,
+                             "am start failed: %s %s" % (out.strip()[:300], err.strip()[:300]))
+        while expect_line and time.time() - start < timeout and not self._project_log(ANDROID_PROJECT_TAG, "I"):
+            time.sleep(0.5)
+        # the UI finishes by itself, after a usage error as well: wait until it has been resumed (at most 5 s;
+        # it may be gone already) and is no longer resumed
+        seen = False
+        appear_by = time.time() + 5
+        deadline = time.time() + 11
+        still_resumed = False
+        while True:
+            top = self._adb("shell", "dumpsys activity activities")[1]
+            resumed = [l for l in top.splitlines() if "esumed" in l and self.package in l]
+            seen = seen or bool(resumed)
+            if not resumed and (seen or expect_line or time.time() > appear_by):
+                break
+            if time.time() > deadline:
+                still_resumed = True
+                break
+            time.sleep(0.5)
+        time.sleep(0.5)
+        lines = self._project_log(ANDROID_PROJECT_TAG, "I")
+        line = "\n".join(lines)
+        if device_path:
+            line = line.replace(device_path, names[0])
+        crashed = "FATAL EXCEPTION" in self._adb("logcat", "-d", "-s", "AndroidRuntime:E")[1]
+        errors = "; ".join(self._project_log(ANDROID_PROJECT_TAG + "_ERROR", "E"))
+        if crashed or errors or still_resumed:
+            stderr = "FATAL EXCEPTION in logcat" if crashed else (errors or "the activity is still resumed 6 s "
+                                                                  "after the project line")
+            return RunResult(1, line + "\n" if line else "", stderr, time.time() - start)
+        if not line:
+            if expect_line:
+                return RunResult(None, "", "", time.time() - start, "no project line in logcat after %s s" % timeout)
+            return RunResult(2, "", "", time.time() - start)
+        status = android_project_status(line)
+        return RunResult(status if status is not None else 1, line + "\n", "", time.time() - start)
+
 
 class AndroidModernLauncher(AndroidLegacyLauncher):
     """The Android Modern UI (Kotlin and Jetpack Compose, applicationId fr.bansan.loomora.probe.modern,
@@ -1289,6 +1526,47 @@ class WebNodeLauncher(Launcher):
         return RunResult(res.returncode, res.stdout.decode("utf-8", "replace"),
                          res.stderr.decode("utf-8", "replace"), time.time() - start)
 
+    def run_project(self, ui_args, cwd, timeout):
+        """A project mode (T093): the options of the other UIs become the query of the page
+        (`--validate-project F` is `?validate_project=F`, `--probe` is `probe`, a mode without its path is
+        the name alone), the file is read from `cwd` by the page's XMLHttpRequest / fetch. The harness
+        prints the line of <pre id="validate-project"> then `data-status: N` and exits with N: the
+        stdout of this run is the line only, the status is N."""
+        start = time.time()
+        modes = {"--validate-project": "validate_project", "--roundtrip-project": "roundtrip_project"}
+        parts, i = [], 0
+        while i < len(ui_args):
+            arg = ui_args[i]
+            if arg in modes:
+                if i + 1 < len(ui_args) and not ui_args[i + 1].startswith("--"):
+                    parts.append("%s=%s" % (modes[arg], urllib.parse.quote(ui_args[i + 1], safe="")))
+                    i += 1
+                else:
+                    parts.append(modes[arg])
+            elif arg == "--probe":
+                parts.append("probe")
+            else:
+                return RunResult(None, "", "", 0.0, "unknown option for the Web page: %s" % arg)
+            i += 1
+        cmd = self.command() + ["--files", str(cwd), "--timeout", str(timeout)]
+        try:
+            res = subprocess.run(cmd, input=("?" + "&".join(parts)).encode("ascii"),
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout + 10)
+        except subprocess.TimeoutExpired:
+            return RunResult(None, "", "", time.time() - start, "timeout after %s s" % timeout)
+        except OSError as e:
+            return RunResult(None, "", "", time.time() - start, "cannot start node: %s" % e)
+        out = res.stdout.decode("utf-8", "replace").replace("\r\n", "\n")
+        status, lines = res.returncode, []
+        for line in out.splitlines():
+            if line.startswith("data-status: "):
+                if line[13:].isdigit():
+                    status = int(line[13:])
+            elif not line.startswith("title: "):
+                lines.append(line)
+        return RunResult(status, "".join(l + "\n" for l in lines), res.stderr.decode("utf-8", "replace"),
+                         time.time() - start)
+
 
 # ---- Web legacy page in Firefox 10 in a VirtualBox guest (T093, spike S5) -------------------------
 
@@ -1342,6 +1620,7 @@ class WebProbeServer(object):
     def __init__(self, dist_dir, port=0, host="0.0.0.0"):
         import http.server
         self.dist = Path(dist_dir)
+        self.files_dir = None    # folder of the bundled .loomora of a project probe mode (Chrome), or None
         self.requests = []       # (utc time text, client, method, path, status, bytes, user agent)
         self.posts = {}
         self.events = {}
@@ -1385,6 +1664,11 @@ class WebProbeServer(object):
                     name = "/index.html"
                 target = owner.dist / name.lstrip("/")
                 if "/" in name.lstrip("/") or not target.is_file():
+                    # a file bundled with the page for a project probe mode (files_dir, set by the launcher)
+                    target = (owner.files_dir / urllib.parse.unquote(name.lstrip("/"))
+                              if owner.files_dir is not None and "/" not in urllib.parse.unquote(name.lstrip("/"))
+                              else owner.dist / "?")
+                if not target.is_file():
                     self._send(404, b"not found")
                     return
                 self._send(200, target.read_bytes(), WEB_CONTENT_TYPES.get(target.suffix, "application/octet-stream"))
@@ -1706,6 +1990,18 @@ def chrome_version(exe):
     return None
 
 
+def parse_dumped_project(dom):
+    """(title, line, data-status) of a DOM dumped by `chrome --dump-dom` after a project probe mode: the
+    text and the data-status attribute of <pre id="validate-project"> (None when it is absent)."""
+    import html
+    title = re.search(r"<title>(.*?)</title>", dom, re.S)
+    pre = re.search(r'<pre\b([^>]*\bid="validate-project"[^>]*)>(.*?)</pre>', dom, re.S)
+    status = re.search(r'\bdata-status="(\d+)"', pre.group(1)) if pre else None
+    return (html.unescape(title.group(1)) if title else None,
+            html.unescape(pre.group(2)) if pre else None,
+            int(status.group(1)) if status else None)
+
+
 def parse_dumped_dom(dom):
     """(title, probe text) of a DOM dumped by `chrome --dump-dom` (the probe text is None when
     <pre id="probe"> is absent): what the Modern page shows at the end of a probe run."""
@@ -1799,6 +2095,45 @@ class WebChromeHostLauncher(Launcher):
 
     def extra_evidence(self):
         return {"server-requests.txt": self.server.log_text()}
+
+    def run_project(self, ui_args, cwd, timeout):
+        """A project mode (T093) in Chrome: the same query as WebNodeLauncher.run_project, the bundled
+        file served from `cwd` (WebProbeServer.files_dir) next to the page; the line and the status are
+        read from <pre id="validate-project" data-status> of the dumped DOM."""
+        start = time.time()
+        self.run_number += 1
+        modes = {"--validate-project": "validate_project", "--roundtrip-project": "roundtrip_project"}
+        parts, i = [], 0
+        while i < len(ui_args):
+            if ui_args[i] in modes:
+                if i + 1 < len(ui_args) and not ui_args[i + 1].startswith("--"):
+                    parts.append("%s=%s" % (modes[ui_args[i]], urllib.parse.quote(ui_args[i + 1], safe="")))
+                    i += 1
+                else:
+                    parts.append(modes[ui_args[i]])
+            elif ui_args[i] == "--probe":
+                parts.append("probe")
+            else:
+                return RunResult(None, "", "", 0.0, "unknown option for the Web page: %s" % ui_args[i])
+            i += 1
+        profile = os.path.join(self.profiles, "run%d" % self.run_number)
+        self.server.files_dir = Path(cwd)
+        url = "http://%s:%d/index.html?%s" % (WEB_LOOPBACK, self.server.port, "&".join(parts))
+        cmd = [self.exe] + list(WEB_CHROME_FLAGS) + ["--dump-dom", "--virtual-time-budget=%d" % WEB_CHROME_VIRTUAL_MS,
+                                                     "--user-data-dir=" + profile, url]
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self.kill(self.chrome_pids(profile))
+            return RunResult(None, "", "", time.time() - start, "timeout after %s s (chrome.exe terminated)" % timeout)
+        except OSError as e:
+            return RunResult(None, "", "", time.time() - start, "cannot start chrome.exe: %s" % e)
+        title, line, status = parse_dumped_project(res.stdout.decode("utf-8", "replace"))
+        self.kill(self.chrome_pids(profile))
+        if title != "LOOMORA_VALIDATE_DONE" or status is None:
+            return RunResult(None, "", "", time.time() - start,
+                             "title %r, data-status %r (the page did not finish the project mode)" % (title, status))
+        return RunResult(status, (line.strip() + "\n") if line and line.strip() else "", "", time.time() - start)
 
     def run(self, text, timeout):
         start = time.time()
@@ -2064,6 +2399,111 @@ def check_run(vector, result, platform_id, variant):
     return problems, line
 
 
+# ---- project modes (T088) -------------------------------------------------------------------------------
+
+PROJECT_MODES = {"validate": "--validate-project", "roundtrip": "--roundtrip-project"}
+# Rows that must give status 2 and no line: [(label, arguments given to the UI; {f} is the file name)]
+PROJECT_USAGE_ROWS = (
+    ("both project modes", ["--validate-project", "{f}", "--roundtrip-project", "{f}"]),
+    ("a project mode and --probe", ["--validate-project", "{f}", "--probe"]),
+    ("a project mode without its path", ["--roundtrip-project"]),
+)
+
+
+def split_project_path(path):
+    """(directory, name) of a file given on the command line: the UI and the command both get the name
+    only, from that directory."""
+    full = os.path.abspath(path)
+    return os.path.dirname(full), os.path.basename(full)
+
+
+def run_cli_validate(cli, name, cwd, timeout):
+    """`loomora validate --quiet name` in `cwd`: (status, stdout without the end of line, stderr)."""
+    res = subprocess.run([str(cli), "validate", "--quiet", name], cwd=str(cwd), stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, timeout=timeout)
+    out = res.stdout.decode("utf-8", "replace").replace("\r\n", "\n")
+    return res.returncode, out.rstrip("\n"), res.stderr.decode("utf-8", "replace").strip()
+
+
+def project_expected(mode, cli_line, cli_status):
+    """The line a UI must print in `mode` ("validate" or "roundtrip") for a file for which the command
+    printed `cli_line` with `cli_status`: the same line; the round trip of a valid file adds
+    "roundtrip ok " (a lossless copy has the counts of the original)."""
+    if mode == "roundtrip" and cli_status == 0:
+        return "roundtrip ok " + cli_line
+    return cli_line
+
+
+def check_project_run(mode, result, cli_line, cli_status):
+    """The problems of one launch of a UI in a project mode, compared with the command; [] when none."""
+    if result.error:
+        return ["launch: " + result.error]
+    problems = []
+    if result.returncode != cli_status:
+        problems.append("exit status %s, the command gives %s, stderr: %s"
+                        % (result.returncode, cli_status, result.stderr.strip()[:300]))
+    want = project_expected(mode, cli_line, cli_status)
+    if result.stdout != want + "\n":
+        problems.append("line %r, expected %r (one line, UTF-8, ending with LF only)"
+                        % (_clip(result.stdout, 200), _clip(want + "\n", 200)))
+    return problems
+
+
+def check_usage_run(result):
+    """A usage error: status 2 and nothing written."""
+    if result.error:
+        return ["launch: " + result.error]
+    problems = []
+    if result.returncode != 2:
+        problems.append("exit status %s, expected 2" % result.returncode)
+    if result.stdout:
+        problems.append("it wrote %r, expected nothing" % _clip(result.stdout, 200))
+    return problems
+
+
+def run_project_modes(args, launcher, files, say):
+    """Run the UI in the project modes on `files` [(mode, path)] and compare with the command. Returns
+    (run, failed)."""
+    cli = args.cli or os.environ.get("LOOMORA_CLI")
+    if not cli or not os.path.isfile(cli):
+        raise RuntimeError("the host command `loomora validate` is needed to compare with: give --cli "
+                           "PATH (loomora-cli.exe on Windows, loomora elsewhere) or set $LOOMORA_CLI")
+    jobs = []  # (label, mode or None, ui_args, cwd, cli_line, cli_status)
+    for mode, path in files:
+        cwd, name = split_project_path(path)
+        status, line, err = run_cli_validate(cli, name, cwd, args.timeout)
+        if status not in (0, 1, 2) or not line:
+            raise RuntimeError("the command failed on %s (status %s): %s" % (path, status, err))
+        jobs.append(("%s %s" % (mode, name), mode, [PROJECT_MODES[mode], name], cwd, line, status))
+    cwd, name = split_project_path(files[0][1])
+    for label, template in PROJECT_USAGE_ROWS:
+        ui_args = [a.replace("{f}", name) for a in template]
+        jobs.append(("usage: " + label, None, ui_args, cwd, None, 2))
+
+    def one(job):
+        label, mode, ui_args, cwd, line, status = job
+        result = launcher.run_project(ui_args, cwd, args.timeout)
+        problems = check_usage_run(result) if mode is None else check_project_run(mode, result, line, status)
+        return job, result, problems
+
+    workers = max(1, args.jobs)
+    if launcher.max_jobs:
+        workers = min(workers, launcher.max_jobs)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        outcomes = list(pool.map(one, jobs))
+    failed = 0
+    for (label, mode, ui_args, cwd, line, status), result, problems in outcomes:
+        if problems:
+            failed += 1
+            say("FAIL %s  %.1fs" % (label, result.elapsed))
+            for p in problems:
+                say("       " + p)
+        else:
+            say("ok   %s  status %s  %.1fs%s" % (label, status, result.elapsed,
+                                                 ("  " + result.stdout.strip()) if mode else ""))
+    return len(outcomes), failed
+
+
 def _partial_output(exc):
     """The start of the output a timed-out process wrote before it was killed (diagnostic only)."""
     parts = []
@@ -2195,6 +2635,55 @@ def self_test():
     expect("iOS simulator launcher", select_launcher("ios", "modern", "ios-26.5-arm64-simulator"),
            IOSSimulatorLauncher)
     expect("no iOS legacy launcher (never run)", select_launcher("ios", "legacy", "ios-12.0-arm64"), None)
+    # project modes: paths, the expected line, the comparison with the command
+    expect("wsl_path of a Windows path", wsl_path("C:\\t\\loomora-fmt-ui\\x y"), "/mnt/c/t/loomora-fmt-ui/x y")
+    expect("wsl_path leaves a Linux path alone", wsl_path("/home/a/b"), "/home/a/b")
+    ok_line = "OK valid-basic.loomora: 0 errors, 0 warnings"
+    bad_line = "FAIL invalid-x.loomora: 2 errors, 1 warning"
+    expect("validate mode expects the command's line", project_expected("validate", ok_line, 0), ok_line)
+    expect("round trip of a valid file expects roundtrip ok + the line",
+           project_expected("roundtrip", ok_line, 0), "roundtrip ok " + ok_line)
+    expect("round trip of an invalid file expects the line alone",
+           project_expected("roundtrip", bad_line, 1), bad_line)
+    expect("round trip of an unreadable file expects the line alone",
+           project_expected("roundtrip", "FAIL m.loomora: error -10", 2), "FAIL m.loomora: error -10")
+    good = RunResult(0, ok_line + "\n", "", 0.0)
+    expect("a matching line and status pass", check_project_run("validate", good, ok_line, 0), [])
+    expect("a matching round trip passes",
+           check_project_run("roundtrip", RunResult(0, "roundtrip ok " + ok_line + "\n", "", 0.0), ok_line, 0), [])
+    expect("a different count is a problem",
+           len(check_project_run("validate", RunResult(0, "OK valid-basic.loomora: 0 errors, 1 warning\n", "", 0.0),
+                                 ok_line, 0)), 1)
+    expect("a different status is a problem",
+           len(check_project_run("validate", RunResult(1, ok_line + "\n", "", 0.0), ok_line, 0)), 1)
+    expect("a CRLF is a problem (LF only)",
+           len(check_project_run("validate", RunResult(0, ok_line + "\r\n", "", 0.0), ok_line, 0)), 1)
+    expect("no line is a problem",
+           len(check_project_run("validate", RunResult(0, "", "", 0.0), ok_line, 0)), 1)
+    expect("a round trip that lacks its prefix is a problem",
+           len(check_project_run("roundtrip", good, ok_line, 0)), 1)
+    expect("a failed launch is one problem",
+           check_project_run("validate", RunResult(None, "", "", 0.0, "boom"), ok_line, 0), ["launch: boom"])
+    expect("a usage error with no line passes", check_usage_run(RunResult(2, "", "usage", 0.0)), [])
+    expect("a usage row that writes a line is a problem",
+           len(check_usage_run(RunResult(2, ok_line + "\n", "", 0.0))), 1)
+    expect("a usage row with status 0 is a problem", len(check_usage_run(RunResult(0, "", "", 0.0))), 1)
+    expect("the usage rows are three", len(PROJECT_USAGE_ROWS), 3)
+    expect("the name and the directory of a file are split",
+           (os.path.basename(split_project_path(os.path.join("a", "b", "c d.loomora"))[1]),
+            os.path.basename(split_project_path(os.path.join("a", "b", "c d.loomora"))[0])),
+           ("c d.loomora", "b"))
+    # the exit status the Android launcher reads from the line (an activity has no exit status)
+    expect("an Android OK line is status 0", android_project_status("OK a.loomora: 0 errors, 1 warning"), 0)
+    expect("an Android round trip line is status 0",
+           android_project_status("roundtrip ok OK a.loomora: 0 errors, 0 warnings"), 0)
+    expect("an Android FAIL line with counts is status 1",
+           android_project_status("FAIL a.loomora: 1 error, 0 warnings"), 1)
+    expect("an Android FAIL line with an I/O error code is status 2",
+           android_project_status("FAIL a.loomora: error -10"), 2)
+    expect("an Android FAIL line with another error code is status 1",
+           android_project_status("FAIL a.loomora: error -7"), 1)
+    expect("an Android line that is not a project line has no status", android_project_status("hello"), None)
     print("self-test %s" % ("FAILED" if failures else "passed"))
     return 1 if failures else 0
 
@@ -2205,6 +2694,44 @@ def open_good_line():
 
 
 # ---- main --------------------------------------------------------------------------------------
+
+def main_project(args, launcher_cls, files):
+    """--validate-project / --roundtrip-project: the project modes of the UI against `loomora validate`."""
+    log = []
+
+    def say(text=""):
+        print(text)
+        log.append(text)
+
+    say("run_vectors %s %s: %d project run(s) (+ %d usage rows)"
+        % (args.platform_id, args.variant, len(files), len(PROJECT_USAGE_ROWS)))
+    if launcher_cls is None:
+        print("run_vectors: launcher not implemented yet for %s-%s" % (family_of(args.platform_id), args.variant),
+              file=sys.stderr)
+        return 1
+    launcher = None
+    try:
+        launcher = launcher_cls(args)
+        say("launcher: " + launcher.prepare())
+        started = time.time()
+        total, failed = run_project_modes(args, launcher, files, say)
+    except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+        print("run_vectors: %s" % e, file=sys.stderr)
+        return 1
+    finally:
+        if launcher is not None:
+            launcher.close()
+    say("summary: %d project run(s), %d passed, %d failed; %.1f s"
+        % (total, total - failed, failed, time.time() - started))
+    say("result: %s" % ("PASSED" if failed == 0 else "FAILED"))
+    if args.evidence_dir:
+        out = Path(args.evidence_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        with open(str(out / ("run-vectors-%s-%s-project-log.txt" % (args.platform_id, args.variant))), "w",
+                  encoding="utf-8", newline="\n") as f:
+            f.write("".join(l + "\n" for l in log))
+    return 0 if failed == 0 else 1
+
 
 def main(argv=None):
     common.setup_utf8_output()
@@ -2246,6 +2773,15 @@ def main(argv=None):
     ap.add_argument("--inner-variant", choices=("legacy", "modern"), help=argparse.SUPPRESS)
     ap.add_argument("--inner-run", help=argparse.SUPPRESS)    # Linux side, see the docstring
     ap.add_argument("--inner-where", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--validate-project", action="append", default=[], metavar="FILE",
+                    help="project mode: run the UI with --validate-project on FILE and compare its line "
+                    "with `loomora validate --quiet` (may be repeated; needs --cli)")
+    ap.add_argument("--roundtrip-project", action="append", default=[], metavar="FILE",
+                    help="project mode: run the UI with --roundtrip-project on FILE (may be repeated)")
+    ap.add_argument("--cli", help="the host command `loomora validate` the project modes compare with "
+                    "(default $LOOMORA_CLI)")
+    ap.add_argument("--inner-project", help=argparse.SUPPRESS)  # Linux side of the project modes
+    ap.add_argument("--inner-cwd", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
     if args.self_test:
@@ -2261,6 +2797,8 @@ def main(argv=None):
         return 0
     if args.inner_run is not None:
         return inner_run(args.inner_run, args.timeout)
+    if args.inner_project is not None:
+        return inner_project(args.inner_project, args.inner_cwd or ".", args.timeout)
     if not args.platform_id or not args.variant:
         ap.error("platform-id and variant are required")
 
@@ -2278,6 +2816,10 @@ def main(argv=None):
     launcher_cls = select_launcher(family, args.variant, args.platform_id)
     if args.docker:
         launcher_cls = LinuxDockerLauncher
+    project_files = ([("validate", f) for f in args.validate_project]
+                     + [("roundtrip", f) for f in args.roundtrip_project])
+    if project_files:
+        return main_project(args, launcher_cls, project_files)
     unit = launcher_cls.length_unit if launcher_cls else Launcher.length_unit
     runs, skipped = plan_vectors(data, unit)
     log = []

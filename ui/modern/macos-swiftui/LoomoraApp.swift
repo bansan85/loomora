@@ -77,12 +77,17 @@ struct LoomoraApp: App {
         Probe.start()
         let options = Probe.options
         if options.badUsage {
-            Probe.writeError("usage: Loomora [--probe [--probe-input <utf8>]]")
+            Probe.writeError("usage: Loomora [--probe [--probe-input <utf8>] | --validate-project <path> | "
+                             + "--roundtrip-project <path>]")
             exit(2)
         }
-        if options.enabled, let message = AppState.abiMismatchMessage() {
+        if options.enabled || options.projectMode != nil, let message = AppState.abiMismatchMessage() {
             Probe.writeError("loomora: " + message)
             exit(1)
+        }
+        if let mode = options.projectMode, let path = options.projectPath {
+            // --validate-project / --roundtrip-project: no window, the line goes to stdout.
+            exit(Probe.runProject(mode, path: path))
         }
         _state = StateObject(wrappedValue: AppState(initialInput: options.input ?? "Coucou"))
     }
