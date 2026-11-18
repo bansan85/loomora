@@ -109,7 +109,16 @@ bool find_zip64(const unsigned char *extra, std::size_t len, Zip64Extra *out) {
     return p == len;
 }
 
+const std::size_t kMaxInflateChunk = 1u << 30; // zlib lengths are 32-bit: stay far below 4 GiB
+
 } // namespace
+
+std::size_t inflate_chunk_len(std::uint64_t remaining) {
+    std::size_t max = hooks().inflate_chunk_max;
+    if (max == 0 || max > kMaxInflateChunk)
+        max = kMaxInflateChunk;
+    return static_cast<std::size_t>(std::min<std::uint64_t>(remaining, max));
+}
 
 bool is_valid_entry_name(const std::string &name, std::string *why) {
     const char *reason = nullptr;
@@ -352,6 +361,10 @@ void ZipReader::read_central_directory(std::uint64_t cd_offset, std::uint64_t cd
         if (e.local_offset > cd_offset || cd_offset - e.local_offset < kLocalHeaderSize)
             corrupt("zip.bounds", name, "the local header lies outside the entries area");
         check_alloc(sizeof(ZipEntry) + name.size());
+        if (!is_dir) {
+            check_alloc(sizeof(std::pair<const std::string, std::size_t>) + 4 * sizeof(void *) + name.size());
+            index_.insert(std::make_pair(name, entries_.size()));
+        }
         (is_dir ? dirs_ : entries_).push_back(e);
         pos += record;
     }
@@ -466,6 +479,7 @@ void ZipReader::check_mimetype() {
 void ZipReader::open(Progress *progress) {
     entries_.clear();
     dirs_.clear();
+    index_.clear();
     opened_ = false;
     first_is_file_ = false;
     first_extra_len_ = 0;
@@ -479,10 +493,8 @@ void ZipReader::open(Progress *progress) {
 }
 
 const ZipEntry *ZipReader::find(const std::string &name) const {
-    for (std::size_t i = 0; i < entries_.size(); ++i)
-        if (entries_[i].name == name)
-            return &entries_[i];
-    return nullptr;
+    const std::map<std::string, std::size_t>::const_iterator it = index_.find(name);
+    return it == index_.end() ? nullptr : &entries_[it->second];
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -550,7 +562,12 @@ struct ZipEntryStream::Impl {
     }
 
     void update_crc(const unsigned char *p, std::size_t n) {
-        crc = static_cast<std::uint32_t>(::crc32(crc, p, static_cast<uInt>(n)));
+        while (n != 0) {
+            const std::size_t chunk = inflate_chunk_len(n);
+            crc = static_cast<std::uint32_t>(::crc32(crc, p, static_cast<uInt>(chunk)));
+            p += chunk;
+            n -= chunk;
+        }
     }
 
     [[noreturn]] void size_error(const char *what) { corrupt("entry.size", entry.name, what); }
@@ -562,23 +579,36 @@ struct ZipEntryStream::Impl {
     }
 
     // Inflates into [out, out + len) until it is full or the stream ends; returns the bytes made.
+    // zlib counts in 32 bits (a length of 4 GiB would become 0), so each call to inflate gets at
+    // most inflate_chunk_len() bytes and the loop goes on until `len` bytes exist.
     std::size_t inflate_some(unsigned char *out, std::size_t len) {
-        zs.next_out = out;
-        zs.avail_out = static_cast<uInt>(len);
-        while (zs.avail_out != 0 && !zend) {
-            if (zs.avail_in == 0) {
-                if (!refill())
+        std::size_t made = 0;
+        while (made < len && !zend) {
+            const std::size_t chunk = inflate_chunk_len(len - made);
+            zs.next_out = out + made;
+            zs.avail_out = static_cast<uInt>(chunk);
+            while (zs.avail_out != 0 && !zend) {
+                if (zs.avail_in == 0 && refill()) {
+                    zs.next_in = &in[0];
+                    zs.avail_in = static_cast<uInt>(in_len);
+                }
+                // With no input left zlib can still progress on the bits it already holds (when a
+                // call stopped because its output was full), so it is called anyway: only a call
+                // that makes no progress (Z_BUF_ERROR) means that the compressed data is cut.
+                const int ret = inflate(&zs, Z_NO_FLUSH);
+                if (ret == Z_STREAM_END)
+                    zend = true;
+                else if (ret == Z_BUF_ERROR && zs.avail_in == 0)
                     size_error("the compressed data ends before the end of the deflate stream");
-                zs.next_in = &in[0];
-                zs.avail_in = static_cast<uInt>(in_len);
+                else if (ret != Z_OK && ret != Z_BUF_ERROR)
+                    inflate_error(ret);
             }
-            const int ret = inflate(&zs, Z_NO_FLUSH);
-            if (ret == Z_STREAM_END)
-                zend = true;
-            else if (ret != Z_OK && ret != Z_BUF_ERROR)
-                inflate_error(ret);
+            const std::size_t got = chunk - zs.avail_out;
+            made += got;
+            if (hooks().inflated_bytes != nullptr)
+                *hooks().inflated_bytes += got;
         }
-        return len - zs.avail_out;
+        return made;
     }
 
     void finish() {

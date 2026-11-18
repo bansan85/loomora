@@ -292,15 +292,11 @@ int64_t loomora_layout_nail_label(const loomora_project *p, uint32_t layout, uin
     try {
         if (p->reader->layout(layout) == nullptr)
             return LOOMORA_ERR_NOT_FOUND;
-        loomora::format::model::NailTable t;
-        p->reader->load_nails(layout, t);
-        for (std::size_t i = 0; i < t.id.size(); ++i) {
-            if (t.id[i] != nail_id)
-                continue;
-            const std::string *label = t.label_at(i);
-            return label == nullptr ? 0 : copy_out(label->data(), label->size(), buf, cap);
-        }
-        return LOOMORA_ERR_NOT_FOUND;
+        std::string label;
+        bool has_label = false;
+        if (!p->reader->read_nail_label(layout, nail_id, label, has_label))
+            return LOOMORA_ERR_NOT_FOUND;
+        return has_label ? copy_out(label.data(), label.size(), buf, cap) : 0;
     } catch (...) {
         return fail_code();
     }

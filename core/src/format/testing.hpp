@@ -28,9 +28,16 @@ struct Hooks {
     bool (*fail_rename)(void *user);
     // Before an allocation of `bytes` made by the format code worth injecting (buffer growth).
     bool (*fail_alloc)(void *user, std::size_t bytes);
+    // The most bytes given to one call of zlib inflate (or crc32) by the ZIP reader; 0 keeps the
+    // default (1 GiB). A test lowers it to a few bytes to exercise the chunking that a 4 GiB read
+    // needs, without a 4 GiB buffer.
+    std::size_t inflate_chunk_max;
+    // When not null, the ZIP reader adds to it the number of bytes it inflates. Never set in
+    // production, so the reader never writes to it there (read calls may run in parallel).
+    std::uint64_t *inflated_bytes;
 
     Hooks() : user(nullptr), fail_write(nullptr), fail_flush(nullptr), fail_rename(nullptr),
-              fail_alloc(nullptr) {}
+              fail_alloc(nullptr), inflate_chunk_max(0), inflated_bytes(nullptr) {}
 };
 
 // The one table. Null hooks in production.

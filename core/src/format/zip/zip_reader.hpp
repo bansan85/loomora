@@ -35,6 +35,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -59,6 +60,11 @@ bool is_valid_entry_name(const std::string &name, std::string *why = nullptr);
 
 // The ASCII case folding used to detect duplicate names.
 std::string fold_entry_name(const std::string &name);
+
+// The number of bytes to give to one call of zlib (whose lengths are 32-bit) when `remaining`
+// bytes are still to be produced: `remaining` capped at 1 GiB (or at hooks().inflate_chunk_max
+// when a test lowers it). Always at least 1 for a non-zero `remaining`, never above 2^30.
+std::size_t inflate_chunk_len(std::uint64_t remaining);
 
 struct ZipEntry {
     std::string name;
@@ -145,6 +151,7 @@ class ZipReader {
     const Source &source_;
     std::vector<ZipEntry> entries_;      // files only
     std::vector<ZipEntry> dirs_;         // the directory entries, for the layout check only
+    std::map<std::string, std::size_t> index_; // name -> position in entries_, built by open()
     std::uint64_t cd_offset_;
     std::size_t first_extra_len_ = 0; // extra field length of the local header of entries_[0]
     bool first_is_file_ = false;      // the first central record is a file, not a directory
