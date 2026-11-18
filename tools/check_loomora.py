@@ -44,11 +44,12 @@ import zlib
 
 try:
     import common
-    SCHEMA_DIR = str(common.ROOT / "specs" / "002-loomora-file-format" / "contracts" / "schemas")
+    SCHEMA_DIR = str(common.ROOT / "docs" / "implementation" / "specs" / "002-loomora-file-format" / "contracts"
+                     / "schemas")
 except ImportError:  # pragma: no cover - used outside the repository
     common = None
-    SCHEMA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "specs",
-                              "002-loomora-file-format", "contracts", "schemas")
+    SCHEMA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "implementation",
+                              "specs", "002-loomora-file-format", "contracts", "schemas")
 
 MIMETYPE = b"application/vnd.loomora+zip"
 MAX_MAJOR = 1                      # the format version this checker reads (1.0)
@@ -1748,6 +1749,12 @@ def main(argv=None):
         limits = parse_limits(args.set_limit)
     except ValueError as e:
         print("error: %s" % e, file=sys.stderr)
+        return 2
+    if (args.selftest or args.files) and not (args.compare or args.compare_mesh) \
+            and not os.path.isdir(args.schemas):
+        print("error: the JSON schemas are in the docs submodule, which is not checked out (%s); run "
+              "git -c protocol.file.allow=always submodule update --init docs/implementation, or give "
+              "--schemas DIR" % args.schemas, file=sys.stderr)
         return 2
     if args.selftest:
         return selftest()

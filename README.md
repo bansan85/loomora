@@ -45,7 +45,7 @@ Floors validated so far, under the PoC rule (the Legacy UI is run on the lowest 
 | `cmake/` | toolchain files: MinGW-w64, Linux i686, Android NDK r15c, Emscripten |
 | `tools/` | Python host tools: `verify.py`, `build.py`, `run_vectors.py`, `check_std.py`, `measure_sharing.py`, `prefix_check.py`, `report.py`, `validate_records.py`, and `trials/` (the drivers that produced the evidence) |
 | `specs/001-loomora-cross-platform/` | specification, plan, research, tasks, [quickstart](specs/001-loomora-cross-platform/quickstart.md), contracts |
-| `specs/002-loomora-file-format/` | the `.loomora` project file format: specification, plan, research, data model, tasks, [quickstart](specs/002-loomora-file-format/quickstart.md), [contracts](specs/002-loomora-file-format/contracts/) |
+| `docs/implementation/specs/002-loomora-file-format/` | the `.loomora` project file format: specification, plan, research, data model, tasks, [quickstart](docs/implementation/specs/002-loomora-file-format/quickstart.md), [contracts](docs/implementation/specs/002-loomora-file-format/contracts/) |
 | `docs/` | [requirements](docs/requirements-specification.md) and the [build guide](docs/building/README.md) |
 | `docs/implementation/` | git submodule (`loomora-docs`): the architecture decision records and `validation/` (platforms, verdicts, procedures, evidence, report) |
 | `third_party/catch2/` | git submodule: Catch2, used by the tests only |
@@ -94,7 +94,7 @@ Check a project file with the host command (it opens the file read-only, never c
 loomora validate [--json] [--quiet] <file> [<file> ...]
 ```
 
-It prints one line per issue and one summary line per file; the exit status is 0 when every file is valid (warnings allowed), 1 when a file has an error, 2 for a usage error or an unreadable file. See [contracts/cli-validate.md](specs/002-loomora-file-format/contracts/cli-validate.md); the format itself is specified in [contracts/project-format.md](specs/002-loomora-file-format/contracts/project-format.md).
+It prints one line per issue and one summary line per file; the exit status is 0 when every file is valid (warnings allowed), 1 when a file has an error, 2 for a usage error or an unreadable file. See [contracts/cli-validate.md](docs/implementation/specs/002-loomora-file-format/contracts/cli-validate.md); the format itself is specified in [contracts/project-format.md](docs/implementation/specs/002-loomora-file-format/contracts/project-format.md).
 
 Where each one runs: Windows Legacy cross-built in WSL with MinGW-w64; Windows Modern (WinUI 3), Android and the Chrome run on the Windows host; Linux and Web in WSL or on Linux (Linux binaries are always built on the machine that runs them). macOS and iOS: not available, needs Apple hardware (pending). The Windows 2000 and Firefox 10 runs need an already running virtual machine; see "Local runs (not CI)" in the build guide. Full details: [quickstart.md](specs/001-loomora-cross-platform/quickstart.md) and [docs/building/README.md](docs/building/README.md).
 
@@ -118,6 +118,6 @@ No license has been chosen yet (license and business model are still open in sec
 | to understand the engine, the code layout and the technical decisions | [docs/implementation/adr/README.md](docs/implementation/adr/README.md) (git submodule, see above to fetch it) |
 | the requirements | [docs/requirements-specification.md](docs/requirements-specification.md) |
 | the plan and the task list of the validation phase | [specs/001-loomora-cross-platform/](specs/001-loomora-cross-platform/) |
-| the `.loomora` project file format | [specs/002-loomora-file-format/](specs/002-loomora-file-format/) |
+| the `.loomora` project file format | [docs/implementation/specs/002-loomora-file-format/](docs/implementation/specs/002-loomora-file-format/) |
 | the results of the validation | [docs/implementation/validation/report.md](docs/implementation/validation/report.md) |
 | the rules to follow when contributing | [CLAUDE.md](CLAUDE.md) |

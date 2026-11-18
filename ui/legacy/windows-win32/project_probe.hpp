@@ -1,4 +1,4 @@
-// Project probe modes of the UI (specs/002-loomora-file-format/contracts/ui-validate-project.md):
+// Project probe modes of the UI (docs/implementation/specs/002-loomora-file-format/contracts/ui-validate-project.md):
 // --validate-project <path> and --roundtrip-project <path>. No application logic: the file is
 // opened, validated and (round trip) exported and validated again by the backend through the C API
 // (loomora.h); this file only builds the one result line from the counts the report gives. The line

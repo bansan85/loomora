@@ -1,4 +1,4 @@
-// Project probe modes of the Windows Modern UI (specs/002-loomora-file-format/contracts/
+// Project probe modes of the Windows Modern UI (docs/implementation/specs/002-loomora-file-format/contracts/
 // ui-validate-project.md): --validate-project <path> and --roundtrip-project <path>. No application
 // logic: the file is opened, validated and (round trip) exported and validated again by the backend
 // through the C API (Native.cs); this file only builds the one result line from the counts the
