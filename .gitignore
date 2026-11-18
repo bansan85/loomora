@@ -15,3 +15,5 @@ __pycache__/
 *.pyc
 core/tests/vectors.inc
 .claude/skills/speckit-*
+obj/
+bin/

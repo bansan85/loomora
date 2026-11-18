@@ -2236,7 +2236,7 @@ class MacOSModernLauncher(Launcher):
 
 class MacOSLegacyLauncher(MacOSModernLauncher):
     """The macOS Legacy UI: the same protocol, out/macos-legacy/Loomora.app. Run on macOS 26 under
-    Rosetta 2 it proves nothing about macOS 10.6 (that stays `not_tested`)."""
+    Rosetta 2 it proves nothing about macOS 10.7 (that stays `not_tested`)."""
 
     variant = "legacy"
     build_command = "python tools/build.py macos legacy"

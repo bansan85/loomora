@@ -22,12 +22,12 @@
 #                        from the console, then from `log show`), RUN the vectors the same way;
 #   ios-modern-device    BUILD `ios modern --ios-sdk iphoneos`: the compile check of the floor iOS 15
 #                        (arm64, unsigned: it cannot be installed on a device, never run);
-#   macos-legacy         BUILD `macos legacy` (x86_64, -mmacosx-version-min=10.6): "compiled, NOT RUN on
-#                        10.6" (`not_tested`); an INFO step starts it under Rosetta 2 on macOS 26, which
-#                        proves nothing about 10.6;
+#   macos-legacy         BUILD `macos legacy` (x86_64, -mmacosx-version-min=10.7): "compiled, NOT RUN on
+#                        10.7" (`not_tested`); an INFO step starts it under Rosetta 2 on macOS 26, which
+#                        proves nothing about 10.7;
 #   ios-legacy           BUILD `ios legacy` for arm64 at iOS 12 (iphoneos, then iphonesimulator): "compiled
 #                        for arm64 at iOS 12, iOS 5 `not_tested`", never run.
-# macOS 10.6 and iOS 5 need a real old Mac (T067, ADR 0019) and are not CI.
+# macOS 10.7 and iOS 5 need a real old Mac (T067, ADR 0019) and are not CI.
 #
 # Every job prints the runner image, macOS, Xcode (all those installed), clang, Swift, SDK and simulator
 # runtime versions first (tools/ci/apple-setup.sh; toolchain.txt in the logs artifact), which the procedures
@@ -280,10 +280,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # Legacy macOS: compiled with -mmacosx-version-min=10.6 for x86_64, NOT run on 10.6 (S11, T077). The
+  # Legacy macOS: compiled with -mmacosx-version-min=10.7 for x86_64, NOT run on 10.7 (S11, T077). The
   # build is the claim; the run on macOS 26 is information only.
   macos-legacy:
-    name: Legacy macOS, compiled for 10.6, not run on 10.6 (macos-26)
+    name: Legacy macOS, compiled for 10.7, not run on 10.7 (macos-26)
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: macos-26
@@ -300,7 +300,7 @@ jobs:
         run: git submodule update --init --depth 1 third_party/zlib third_party/rapidjson
       - name: "INFO toolchain versions and Python environment"
         run: bash tools/ci/apple-setup.sh "$RUNNER_TEMP/apple-logs"
-      - name: "BUILD Legacy macOS, x86_64, -mmacosx-version-min=10.6 (tools/build.py macos legacy)"
+      - name: "BUILD Legacy macOS, x86_64, -mmacosx-version-min=10.7 (tools/build.py macos legacy)"
         run: python tools/build.py macos legacy 2>&1 | tee "$RUNNER_TEMP/apple-logs/build-macos-legacy.log"
       - name: "INFO what was built (slice, minimum version, libraries)"
         continue-on-error: true
@@ -311,7 +311,7 @@ jobs:
           lipo -info "$exe"
           otool -l "$exe" | grep -A5 -E 'cmd (LC_VERSION_MIN_MACOSX|LC_BUILD_VERSION)'
           otool -L "$exe"
-      - name: "INFO launch the x86_64 app under Rosetta 2 on macOS 26 (NOT a run on 10.6, proves nothing about it)"
+      - name: "INFO launch the x86_64 app under Rosetta 2 on macOS 26 (NOT a run on 10.7, proves nothing about it)"
         continue-on-error: true
         run: |
           # The runner is arm64: an x86_64 binary needs Rosetta 2.
