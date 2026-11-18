@@ -38,7 +38,7 @@ Branch `feat/fmt-quickstart` (from `feat/loomora-format`, worktree `loomora-fmt-
 
 ## Deviations and defects found
 
-No defect in the code. Differences between the quickstart text and what the tools do (the quickstart now carries the outcomes with these notes; its commands were left unchanged):
+No defect in the code. Differences between the quickstart text and what the tools do (the quickstart steps 2 to 6 were then aligned with the tools, on 2026-11-18, and re-checked in WSL: commands, expected text and outcomes now match what the tools do):
 
 1. Step 2: the self-test prints only `format selftest: ok`, not `sha256 = <hex>`, `0 differences` or `rejected N of N`.
 2. Step 3: `loomora_refgen` takes the directory as a positional argument (no `--out`), writes `multi.loomora` (not `multi-full.loomora`), and the Windows command is `loomora-cli`. `validate` prints `OK ...: 0 errors, 0 warnings`, not the word `valid` or the manifest counts.
