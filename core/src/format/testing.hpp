@@ -26,6 +26,9 @@ struct Hooks {
     bool (*fail_flush)(void *user);
     // Before the rename that replaces the target file.
     bool (*fail_rename)(void *user);
+    // Before each attempt to delete the old file renamed aside by the Windows file sink (its
+    // `<target>.old-xxxxxxxx` copy): true makes that attempt fail.
+    bool (*fail_delete_aside)(void *user);
     // Before an allocation of `bytes` made by the format code worth injecting (buffer growth).
     bool (*fail_alloc)(void *user, std::size_t bytes);
     // The most bytes given to one call of zlib inflate (or crc32) by the ZIP reader; 0 keeps the
@@ -37,7 +40,8 @@ struct Hooks {
     std::uint64_t *inflated_bytes;
 
     Hooks() : user(nullptr), fail_write(nullptr), fail_flush(nullptr), fail_rename(nullptr),
-              fail_alloc(nullptr), inflate_chunk_max(0), inflated_bytes(nullptr) {}
+              fail_delete_aside(nullptr), fail_alloc(nullptr), inflate_chunk_max(0),
+              inflated_bytes(nullptr) {}
 };
 
 // The one table. Null hooks in production.
@@ -57,6 +61,10 @@ inline bool should_fail_flush() {
 inline bool should_fail_rename() {
     const Hooks &h = hooks();
     return h.fail_rename != nullptr && h.fail_rename(h.user);
+}
+inline bool should_fail_delete_aside() {
+    const Hooks &h = hooks();
+    return h.fail_delete_aside != nullptr && h.fail_delete_aside(h.user);
 }
 inline bool should_fail_alloc(std::size_t bytes) {
     const Hooks &h = hooks();

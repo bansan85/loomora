@@ -13,6 +13,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 namespace loomora {
 namespace format {
@@ -40,6 +41,11 @@ class Sink {
 
     // Discards everything written. Idempotent, never throws.
     virtual void abort() noexcept = 0;
+
+    // After a successful commit(): a file the commit could not remove and left next to the target
+    // (the UTF-8 path), or "" when it left nothing. Only the Windows file sink can leave one (the
+    // old file renamed aside when a reader holds the target, on systems without the POSIX rename).
+    virtual std::string leftover_file() const { return std::string(); }
 };
 
 } // namespace format
