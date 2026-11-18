@@ -58,6 +58,10 @@ Rows V1–V20 of the requirements document (§15.1.4): `id`, `title`, `criterion
 
 `id` (S1–S10 of research.md, S4 removed), `question`, `status` (`open` \| `confirmed` \| `refuted`), `result`, `adr` (path of the decision it triggered, if any). A refuted spike must name the chosen fallback.
 
+## Result records (`docs/implementation/validation/results/<spec>/`)
+
+Free-form records of measurements and test runs made for one feature spec (for example `spec-002/`: cross-architecture hashes, Android and Web runs, SC-004 fuzzing, SC-005 timings, spike outputs), as Markdown or JSON. They are not verdicts and are not checked by `validate_records.py` beyond their existence; a verdict or an evidence `hashes.json` that cites one points to it by path. Review reports of the code (`validation/bug-reports/`, one Markdown file per review) are also free-form and not checked.
+
 ## Web: two paths
 
 For the `web` family, each tested browser has **one verdict per path** (`wasm`, `js`); the oldest platform of each path is recorded (FR-023). Browsers are tested per variant like other platforms.
