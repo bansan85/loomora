@@ -342,6 +342,8 @@ NOT_A_FALLBACK = OrderedDict([
     ("LOOMORA_BUILD_SHARED", "build option: static library only or shared library too"),
     ("LOOMORA_BUILD_FUZZ", "build option: whether the fuzz targets of core/fuzz exist"),
     ("LOOMORA_BUILD_CLI", "build option: whether the host command loomora validate (cli/loomora) exists"),
+    ("LOOMORA_SANITIZE", "build option: thread or address sanitizer for the tests, off by default, never used for a delivered binary"),
+    ("LOOMORA_SANITIZE_FLAGS", "internal variable of that option: the compile and link flags it selects"),
     ("LOOMORA_BUILD_SHARED_LIB", "export macro of the shared library"),
     ("LOOMORA_USE_DLL", "import macro of the Windows DLL"),
     ("LOOMORA_TARGET_ANDROID", "toolchain marker: adds the Android UI target"),
