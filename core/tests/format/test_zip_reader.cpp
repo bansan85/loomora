@@ -952,3 +952,42 @@ TEST_CASE("a corrupt CRC-32 is still caught when the CRC is computed in chunks",
     hooks().inflate_chunk_max = 3;
     CHECK_THROWS_AS(r.read_all(*r.find("d.txt"), 1000), FormatError);
 }
+
+// ---- T106: the name index of ZipReader::find ---------------------------------------------------
+
+TEST_CASE("find answers from the name index: exact names only, files only, the right entry", "[zip][index]") {
+    std::vector<Entry> v;
+    for (int i = 0; i < 300; ++i)
+        v.push_back(file("items/" + std::to_string(i) + "/item.json", "{\"i\":" + std::to_string(i) + "}", i % 2 ? 8 : 0));
+    Entry dir;
+    dir.name = "items/";
+    dir.method = 0;
+    dir.ext_attr = 0x41ED0000u;
+    v.push_back(dir);
+    const Archive a = build(with_mimetype(v));
+    MemorySource src(&a.bytes[0], a.bytes.size());
+    ZipReader r(src);
+    r.open();
+    for (int i = 0; i < 300; ++i) {
+        const ZipEntry *e = r.find("items/" + std::to_string(i) + "/item.json");
+        REQUIRE(e != nullptr);
+        CHECK(e == &r.entries()[static_cast<std::size_t>(i) + 1]);
+        const Bytes b = read_whole(r, *e);
+        CHECK(std::string(b.begin(), b.end()) == "{\"i\":" + std::to_string(i) + "}");
+    }
+    CHECK(r.find("mimetype") == &r.entries()[0]);
+    CHECK(r.find("items/") == nullptr);                  // a directory entry is not a file
+    CHECK(r.find("Items/0/item.json") == nullptr);       // exact match, no case folding
+    CHECK(r.find("items/300/item.json") == nullptr);
+    CHECK(r.find("") == nullptr);
+    // A second open() rebuilds the index.
+    r.open();
+    CHECK(r.find("items/7/item.json") == &r.entries()[8]);
+}
+
+TEST_CASE("two names equal after ASCII case folding are still rejected with the index", "[zip][index]") {
+    std::vector<Entry> v;
+    v.push_back(file("a/B.json", "{}", 0));
+    v.push_back(file("a/b.json", "{}", 0));
+    require_rejected(build(with_mimetype(v)).bytes, "zip.duplicate_name");
+}

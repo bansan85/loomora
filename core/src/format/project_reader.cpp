@@ -177,9 +177,8 @@ std::size_t EntrySource::read_at(std::uint64_t offset, void *buf, std::size_t le
 // ---- ProjectReader: accessors -----------------------------------------------------------------
 
 ProjectReader::ProjectReader(std::unique_ptr<Source> source)
-    : source_(std::move(source)), zip_(*source_), complete_(false) {}
+    : source_(std::move(source)), zip_(*source_), complete_(false), nail_cursor_(nullptr) {}
 
-ProjectReader::~ProjectReader() {}
 
 const std::vector<std::uint32_t> &ProjectReader::ids(int kind) const {
     static const std::vector<std::uint32_t> kEmpty;
@@ -273,6 +272,109 @@ void ProjectReader::load_nails(std::uint32_t layout_id, model::NailTable &out) c
     out = std::move(t);
 }
 
+// The state that successive reads of the nails of a deflated nails.json share (see project_reader.hpp):
+// the inflate stream, and the text of the block of nails read last. A block is the bytes of nails.json
+// from the offset of nail j * 1,024 to the offset of nail (j + 1) * 1,024 (or the end of the entry).
+struct NailCursor {
+    std::uint32_t layout;
+    std::unique_ptr<ZipEntryStream> stream; // deflated entries only
+    std::uint64_t stream_pos;               // uncompressed offset the stream stands at
+    bool have_block;
+    std::size_t block;
+    std::vector<char> bytes;                // the text of `block`
+    NailCursor() : layout(0), stream_pos(0), have_block(false), block(0) {}
+};
+
+ProjectReader::~ProjectReader() { delete nail_cursor_.exchange(nullptr); }
+
+namespace {
+
+// Takes the cursor out of the slot of the reader for the duration of one call, and puts it back
+// when the call succeeded (keep()); after an exception its state is not trusted and it is dropped.
+class CursorLease {
+  public:
+    explicit CursorLease(std::atomic<NailCursor *> &slot) : slot_(slot), c_(slot.exchange(nullptr)), keep_(false) {
+        if (c_ == nullptr)
+            c_ = new NailCursor();
+    }
+    ~CursorLease() {
+        if (keep_)
+            delete slot_.exchange(c_);
+        else
+            delete c_;
+    }
+    NailCursor &get() { return *c_; }
+    void keep() { keep_ = true; }
+
+  private:
+    CursorLease(const CursorLease &);
+    CursorLease &operator=(const CursorLease &);
+    std::atomic<NailCursor *> &slot_;
+    NailCursor *c_;
+    bool keep_;
+};
+
+// The text of block `j` of the nails.json of layout `layout_id`, in the cursor. A deflated entry is
+// inflated from where the stream stands when the block lies at or after it, else again from byte 0.
+const std::vector<char> &load_nail_block(const ZipReader &zip, const ZipEntry &e, const LayoutRecord &l,
+                                         std::uint32_t layout_id, std::size_t j, NailCursor &c) {
+    if (c.layout != layout_id) {
+        c.layout = layout_id;
+        c.stream.reset();
+        c.stream_pos = 0;
+        c.have_block = false;
+    }
+    if (c.have_block && c.block == j)
+        return c.bytes;
+    c.have_block = false;
+    if (j >= l.nail_offsets.size())
+        throw FormatError(LOOMORA_ERR_INTERNAL, "the nail index is shorter than the nail count");
+    const std::uint64_t start = l.nail_offsets[j];
+    const std::uint64_t end = j + 1 < l.nail_offsets.size() ? l.nail_offsets[j + 1] : e.size;
+    if (start > end || end > e.size)
+        throw FormatError(LOOMORA_ERR_INTERNAL, "the nail index is not inside the entry");
+    const std::size_t len = static_cast<std::size_t>(end - start);
+    c.bytes.resize(len);
+    if (e.method == 0) {
+        if (zip.read_range(e, start, len == 0 ? nullptr : &c.bytes[0], len) != len)
+            throw FormatError(LOOMORA_ERR_CORRUPT, "the entry ended before the end of the nails");
+    } else {
+        if (!c.stream || c.stream_pos > start) {
+            c.stream = zip.open_entry(e, nullptr);
+            c.stream_pos = 0;
+        }
+        skip_stream(*c.stream, start - c.stream_pos);
+        c.stream_pos = start;
+        std::size_t got = 0;
+        while (got < len) {
+            const std::size_t n = c.stream->read(&c.bytes[got], len - got);
+            if (n == 0)
+                throw FormatError(LOOMORA_ERR_CORRUPT, "the entry ended before the end of the nails");
+            got += n;
+            c.stream_pos += n;
+        }
+    }
+    c.block = j;
+    c.have_block = true;
+    return c.bytes;
+}
+
+// The first `count` nails of a block, parsed from its text.
+void parse_nail_block(const std::vector<char> &bytes, bool is3d, std::size_t count, model::NailTable &t,
+                      const std::string &entry) {
+    json::MemoryByteReader br(bytes.empty() ? nullptr : &bytes[0], bytes.size());
+    codec::read_nail_range(br, is3d, count, t, entry);
+}
+
+// The number of nails that block `j` holds in a layout of `total` nails.
+std::size_t nails_in_block(std::uint64_t total, std::size_t j) {
+    const std::uint64_t before = static_cast<std::uint64_t>(j) * model::kNailsPerIndexEntry;
+    return before >= total ? 0
+                           : static_cast<std::size_t>(std::min<std::uint64_t>(total - before, model::kNailsPerIndexEntry));
+}
+
+} // namespace
+
 void ProjectReader::read_nails(std::uint32_t layout_id, std::uint64_t first, std::size_t count,
                                model::NailTable &out) const {
     const LayoutRecord *l = layout(layout_id);
@@ -290,20 +392,70 @@ void ProjectReader::read_nails(std::uint32_t layout_id, std::uint64_t first, std
     if (k >= l->nail_offsets.size())
         throw FormatError(LOOMORA_ERR_INTERNAL, "the nail index is shorter than the nail count");
     const std::uint64_t head = first - k * model::kNailsPerIndexEntry;
-    const std::uint64_t at = l->nail_offsets[static_cast<std::size_t>(k)];
     model::NailTable t(is3d);
     if (e->method == 0) {
+        const std::uint64_t at = l->nail_offsets[static_cast<std::size_t>(k)];
         json::SourceByteReader br(zip_.source(), e->data_offset + at, e->size > at ? e->size - at : 0);
         codec::read_nail_range(br, is3d, static_cast<std::size_t>(head) + count, t, e->name);
-    } else {
-        std::unique_ptr<ZipEntryStream> s = zip_.open_entry(*e, nullptr);
-        skip_stream(*s, at);
-        StreamByteReader br(*s);
-        codec::read_nail_range(br, is3d, static_cast<std::size_t>(head) + count, t, e->name);
+        out.reserve(count);
+        for (std::size_t i = static_cast<std::size_t>(head); i < t.size(); ++i)
+            out.add(t.get(i));
+        return;
     }
+    // Deflated: block by block through the cursor, so that the next call continues from here.
+    CursorLease lease(nail_cursor_);
+    NailCursor &c = lease.get();
     out.reserve(count);
-    for (std::size_t i = static_cast<std::size_t>(head); i < t.size(); ++i)
-        out.add(t.get(i));
+    std::size_t need = static_cast<std::size_t>(head) + count; // nails to parse from the start of block k
+    std::size_t skip = static_cast<std::size_t>(head);
+    std::size_t j = static_cast<std::size_t>(k);
+    while (need > 0) {
+        const std::vector<char> &bytes = load_nail_block(zip_, *e, *l, layout_id, j, c);
+        const std::size_t n = std::min<std::size_t>(need, nails_in_block(total, j));
+        if (n == 0)
+            throw FormatError(LOOMORA_ERR_INTERNAL, "the nail index is shorter than the nail count");
+        parse_nail_block(bytes, is3d, n, t, e->name);
+        for (std::size_t i = skip; i < t.size(); ++i)
+            out.add(t.get(i));
+        skip = 0;
+        need -= n;
+        ++j;
+    }
+    lease.keep();
+}
+
+bool ProjectReader::read_nail_label(std::uint32_t layout_id, std::uint32_t nail_id, std::string &label,
+                                    bool &has_label) const {
+    const LayoutRecord *l = layout(layout_id);
+    const ZipEntry *e = (l == nullptr || l->nails_entry.empty()) ? nullptr : zip_.find(l->nails_entry);
+    if (e == nullptr)
+        not_found("no nails for this layout");
+    const bool is3d = layout_is_3d(*this, *l);
+    const std::uint64_t total = l->nails_parsed;
+    const std::size_t blocks = l->nail_block_min.size();
+    if (blocks != l->nail_offsets.size() || l->nail_block_max.size() != blocks)
+        throw FormatError(LOOMORA_ERR_INTERNAL, "the nail index is inconsistent");
+    CursorLease lease(nail_cursor_);
+    NailCursor &c = lease.get();
+    for (std::size_t j = 0; j < blocks; ++j) {
+        if (nail_id < l->nail_block_min[j] || nail_id > l->nail_block_max[j])
+            continue;
+        const std::vector<char> &bytes = load_nail_block(zip_, *e, *l, layout_id, j, c);
+        model::NailTable t(is3d);
+        parse_nail_block(bytes, is3d, nails_in_block(total, j), t, e->name);
+        for (std::size_t i = 0; i < t.id.size(); ++i) {
+            if (t.id[i] != nail_id)
+                continue;
+            const std::string *text = t.label_at(i);
+            has_label = text != nullptr;
+            if (text != nullptr)
+                label = *text;
+            lease.keep();
+            return true;
+        }
+    }
+    lease.keep();
+    return false;
 }
 
 std::size_t ProjectReader::read_steps(std::uint32_t result_id, std::uint64_t first, std::size_t count,
@@ -747,6 +899,17 @@ void ReaderPass::load_layouts() {
                         codec::read_nails(br, is3d, t, nails, rec.layout.nail_count);
                         rec.nail_offsets.swap(t.offsets);
                         rec.nails_parsed = t.size();
+                        for (std::size_t b = 0; b < rec.nail_offsets.size(); ++b) {
+                            const std::size_t lo = b * model::kNailsPerIndexEntry;
+                            const std::size_t hi = std::min(t.id.size(), lo + model::kNailsPerIndexEntry);
+                            std::uint32_t mn = t.id[lo], mx = t.id[lo];
+                            for (std::size_t i = lo + 1; i < hi; ++i) {
+                                mn = std::min(mn, t.id[i]);
+                                mx = std::max(mx, t.id[i]);
+                            }
+                            rec.nail_block_min.push_back(mn);
+                            rec.nail_block_max.push_back(mx);
+                        }
                         model::check_nails(t, nails, rec.layout.id, report, triangles);
                     } catch (const FormatError &ex) {
                         if (!recover(ex, "schema.nail_count", nails, kItemLayout, c.id))

@@ -35,6 +35,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -150,6 +151,7 @@ class ZipReader {
     const Source &source_;
     std::vector<ZipEntry> entries_;      // files only
     std::vector<ZipEntry> dirs_;         // the directory entries, for the layout check only
+    std::map<std::string, std::size_t> index_; // name -> position in entries_, built by open()
     std::uint64_t cd_offset_;
     std::size_t first_extra_len_ = 0; // extra field length of the local header of entries_[0]
     bool first_is_file_ = false;      // the first central record is a file, not a directory

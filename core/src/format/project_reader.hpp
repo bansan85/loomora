@@ -21,13 +21,22 @@
 //      could not be read (complete() is false) it keeps to the rules that the records read allow.
 // An error does not stop the pass when it is safe to continue; every issue goes to the Report.
 // The memory held by an open project is the manifest, the parsed small items and one index entry
-// per 1,024 nails of each layout; nails, steps and mesh data are read by range from the archive.
+// per 1,024 nails of each layout (with the smallest and the largest nail id of that block, 8 more
+// bytes); nails, steps and mesh data are read by range from the archive.
 //
 // Thread safety: every const member function may be called from several threads at once (each
-// call opens its own streams); open() itself runs once.
+// call opens its own streams); open() itself runs once. The one thing a read call leaves behind is
+// a NailCursor: the inflate stream of a deflated nails.json and the text of the last block of 1,024
+// nails read, so that the next range (or label) read continues where the previous one stopped
+// instead of inflating the entry again from byte 0 (FR-025, SC-005: reading every nail range by
+// range would otherwise cost the square of the entry size). The cursor lives in a single slot that
+// a call empties (atomic exchange) before using it and fills again when it succeeded: a call
+// never shares a cursor with another one, a concurrent call that finds the slot empty simply
+// makes its own, and the result of a read never depends on the cursor. No lock is involved.
 #ifndef LOOMORA_FORMAT_PROJECT_READER_HPP
 #define LOOMORA_FORMAT_PROJECT_READER_HPP
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -94,6 +103,9 @@ struct LayoutRecord {
     std::string nails_entry;    // nails.json, "" when the archive has none
     std::uint64_t nails_parsed; // nails actually found in nails.json (0 when it could not be read)
     std::vector<std::uint64_t> nail_offsets; // byte offset in nails.json of nail k * kNailsPerIndexEntry
+    // Smallest and largest nail id of block k (nails k * 1,024 ... k * 1,024 + 1,023), same length as
+    // nail_offsets: a label lookup reads only the blocks whose id range holds the id.
+    std::vector<std::uint32_t> nail_block_min, nail_block_max;
     LayoutRecord() : folder_frame(0), nails_parsed(0) {}
 };
 
@@ -131,6 +143,8 @@ class EntrySource : public Source {
     mutable std::unique_ptr<ZipEntryStream> stream_;
     mutable std::uint64_t pos_; // uncompressed offset of the stream
 };
+
+struct NailCursor; // see "Thread safety" above; defined in project_reader.cpp
 
 class ProjectReader {
   public:
@@ -180,8 +194,14 @@ class ProjectReader {
     // the end). Throws LOOMORA_ERR_NOT_FOUND when the entry is absent.
     std::size_t read_entry(const std::string &name, std::uint64_t offset, void *buf, std::size_t len) const;
     // The nails [first, first + count) of a layout (fewer at the end) into `out`, which is replaced.
-    // Cost: the entry is inflated up to the nearest index entry before `first`.
+    // Cost: the blocks of 1,024 nails that hold the range are read; a deflated entry continues from
+    // where the previous call stopped when the range starts at or after it, and is inflated again
+    // from byte 0 only when the range lies before it.
     void read_nails(std::uint32_t layout, std::uint64_t first, std::size_t count, model::NailTable &out) const;
+    // The label of the nail with identifier `nail_id`: false when the layout has no such nail, else
+    // true, with `has_label` telling whether the nail has a label (`label` is then set). Only the
+    // blocks of 1,024 nails whose id range holds `nail_id` are read.
+    bool read_nail_label(std::uint32_t layout, std::uint32_t nail_id, std::string &label, bool &has_label) const;
     // Every nail of a layout (for the validator: memory proportional to the nail count).
     void load_nails(std::uint32_t layout, model::NailTable &out) const;
     // Steps [first, first + count) of a result's sequence, in file order, without verifying the
@@ -204,6 +224,7 @@ class ProjectReader {
     std::map<std::uint32_t, SpoolRecord> spools_;
     std::map<std::uint32_t, ResultRecord> results_;
     bool complete_;
+    mutable std::atomic<NailCursor *> nail_cursor_; // the one-slot cache described above
     friend struct ReaderPass;
 };
 

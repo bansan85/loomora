@@ -361,6 +361,10 @@ void ZipReader::read_central_directory(std::uint64_t cd_offset, std::uint64_t cd
         if (e.local_offset > cd_offset || cd_offset - e.local_offset < kLocalHeaderSize)
             corrupt("zip.bounds", name, "the local header lies outside the entries area");
         check_alloc(sizeof(ZipEntry) + name.size());
+        if (!is_dir) {
+            check_alloc(sizeof(std::pair<const std::string, std::size_t>) + 4 * sizeof(void *) + name.size());
+            index_.insert(std::make_pair(name, entries_.size()));
+        }
         (is_dir ? dirs_ : entries_).push_back(e);
         pos += record;
     }
@@ -475,6 +479,7 @@ void ZipReader::check_mimetype() {
 void ZipReader::open(Progress *progress) {
     entries_.clear();
     dirs_.clear();
+    index_.clear();
     opened_ = false;
     first_is_file_ = false;
     first_extra_len_ = 0;
@@ -488,10 +493,8 @@ void ZipReader::open(Progress *progress) {
 }
 
 const ZipEntry *ZipReader::find(const std::string &name) const {
-    for (std::size_t i = 0; i < entries_.size(); ++i)
-        if (entries_[i].name == name)
-            return &entries_[i];
-    return nullptr;
+    const std::map<std::string, std::size_t>::const_iterator it = index_.find(name);
+    return it == index_.end() ? nullptr : &entries_[it->second];
 }
 
 // ---------------------------------------------------------------------------------------------
