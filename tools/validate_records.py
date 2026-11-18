@@ -752,7 +752,7 @@ def check_verdicts(directory, root, platforms, deliverables, source_ids, report)
 # ---- whole tree ------------------------------------------------------------------------------
 
 KNOWN_TOP = ("sources.json", "fallbacks.json", "spikes.json", "hypotheses.json")
-KNOWN_DIRS = ("platforms", "verdicts", "deliverables", "evidence", "procedures")
+KNOWN_DIRS = ("platforms", "verdicts", "deliverables", "evidence", "procedures", "results", "bug-reports")
 
 
 def validate(validation_dir, root, require_complete=False, code_root=None):
