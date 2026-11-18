@@ -62,6 +62,7 @@ DEFAULT_LIMITS = {                 # data-model.md "Constants"
 NAIL_TOL = 0.01                    # nail inside frame
 OVERLAP_TOL = 1e-6                 # nail distance
 ORIGIN_TOL = 0.01                  # frame origin (warning)
+_TIME_RE = re.compile(r"^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(\.[0-9]+)?Z$")
 THUMB_SIDE, THUMB_BYTES = 256, 64 * 1024
 JSON_DEPTH = 64
 MAX_NAME = 512
@@ -867,6 +868,20 @@ def _finite(*vals):
     return all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in vals)
 
 
+def unreal_time(v):
+    """True when `v` has the shape the C++ reader accepts (month 01-12, day 01-31, hour 00-23, minute 00-59,
+    second 00-60) but is not a real date and time (day beyond the month, second 60): warn.timestamp."""
+    m = _TIME_RE.match(v) if isinstance(v, str) else None
+    if m is None:
+        return False
+    year, month, day, hour, minute, second = (int(g) for g in m.groups()[:6])
+    if not (1 <= month <= 12 and 1 <= day <= 31 and hour <= 23 and minute <= 59 and second <= 60):
+        return False
+    leap = (year % 4 == 0 and year % 100 != 0) or year % 400 == 0
+    last = (31, 29 if leap else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)[month - 1]
+    return day > last or second > 59
+
+
 class Checker(object):
     def __init__(self, data, name, limits, canonical, schema_dir, engine):
         self.data, self.name, self.limits, self.canonical = data, name, limits, canonical
@@ -932,6 +947,10 @@ class Checker(object):
             self.err(schema_code(kw), "manifest.json", "%s: %s" % (".".join(str(p) for p in path) or "<root>", msg))
         self.man = man
         self.man_ok = not merrs
+        if not merrs:
+            for field in ("created_at", "modified_at"):
+                if unreal_time(man.get(field)):
+                    self.warn("warn.timestamp", "manifest.json", "%s %s is not a real date and time" % (field, man[field]))
         self.cross_check_entries(man)
         self.items()
         if self.man_ok:
@@ -1049,6 +1068,8 @@ class Checker(object):
                     self.bad_ids["result"].add(ids[0])
                     continue
                 self._register("result", self.results, idcount, d, z, ids[0])
+                if unreal_time(d.get("created_at")):
+                    self.warn("warn.timestamp", z.name, "created_at %s is not a real date and time" % d["created_at"], "result", ids[0])
             elif kind == "settings":
                 self.load(z.name, None, "result", ids[0])
         self.idcount = idcount

@@ -64,6 +64,17 @@ bool is_iso8601_utc(const std::string &s) {
     return month >= 1 && month <= 12 && day >= 1 && day <= 31 && hour <= 23 && minute <= 59 && second <= 60;
 }
 
+bool is_calendar_time(const std::string &s) {
+    if (!is_iso8601_utc(s))
+        return false;
+    const int year = number_at(s, 0, 4), month = number_at(s, 5, 2), day = number_at(s, 8, 2);
+    const int hour = number_at(s, 11, 2), minute = number_at(s, 14, 2), second = number_at(s, 17, 2);
+    static const int days[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    const bool leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    const int in_month = (month == 2 && leap) ? 29 : days[month - 1];
+    return day <= in_month && hour <= 23 && minute <= 59 && second <= 59;
+}
+
 bool is_uuid4(const std::string &s) {
     if (s.size() != 36)
         return false;

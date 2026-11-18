@@ -48,7 +48,7 @@ CONTRACT_CODES = set("""zip.bad_name entry.size entry.sha256 entry.crc entry.mis
 version.major feature.unsupported id.duplicate ref.missing ref.layout_of_other_frame ref.spool_not_selected
 num.not_finite nail.outside_frame nail.duplicate_id seq.header seq.crc seq.count mesh.crc mesh.index_range
 spool.length_over_available warn.count warn.nail_distance warn.origin_offset warn.thumbnail_size
-warn.light_project warn.unknown_entry""".split())
+warn.light_project warn.unknown_entry warn.timestamp""".split())
 
 CASES = []
 
@@ -125,6 +125,14 @@ def build_info(p, zkw=None, **kw):
 @case("valid", variant="basic", severity=None, note="the basic 2D reference (full profile)")
 def _():
     return pf.basic_project().build()
+
+
+@case("valid", variant="leap-day", severity=None, note="29 February of a leap year, fraction and last second of the day: no warning")
+def _():
+    def fn(m):
+        m["created_at"] = "2024-02-29T23:59:59.999Z"
+        m["modified_at"] = "2000-02-29T00:00:00Z"
+    return pf.basic_project().build(edit_manifest=fn)
 
 
 @case("valid", variant="mesh3d", severity=None, note="a 3D frame with a tetrahedron mesh, normals, one view")
@@ -207,6 +215,26 @@ def _():
     def fn(d):
         d["nails"][7]["x"], d["nails"][7]["y"] = -250, -249
     edit(p, "frames/1/layouts/1/nails.json", fn)
+    return p.build()
+
+
+@case("warning", "warn.timestamp", severity="warning", entry="manifest.json",
+      note="manifest created_at is 2026-02-31T00:00:00Z: the right shape, not a real date (still opens)")
+def _():
+    return pf.basic_project().build(edit_manifest=lambda m: m.update(created_at="2026-02-31T00:00:00Z"))
+
+
+@case("warning", "warn.timestamp", "leap-second", severity="warning", entry="manifest.json",
+      note="manifest modified_at has second 60 (2026-06-30T23:59:60Z): a warning too")
+def _():
+    return pf.basic_project().build(edit_manifest=lambda m: m.update(modified_at="2026-06-30T23:59:60Z"))
+
+
+@case("warning", "warn.timestamp", "result", severity="warning", entry="results/1/result.json",
+      note="result created_at is 2025-02-29T09:30:00Z (2025 is not a leap year)")
+def _():
+    p = pf.basic_project()
+    edit(p, "results/1/result.json", lambda d: d.update(created_at="2025-02-29T09:30:00Z"))
     return p.build()
 
 
@@ -979,7 +1007,7 @@ manifest.next_id manifest.order manifest.entries version.major feature.unsupport
 schema.duplicate_key schema.depth schema.number id.duplicate ref.missing ref.layout_of_other_frame
 ref.spool_not_selected num.not_finite nail.outside_frame nail.duplicate_id seq.header seq.crc seq.count mesh.crc
 mesh.index_range spool.length_over_available warn.count warn.nail_distance warn.origin_offset
-warn.thumbnail_size warn.light_project warn.unknown_entry""".split()
+warn.thumbnail_size warn.light_project warn.unknown_entry warn.timestamp""".split()
     have = set(c.code for c in CASES if c.code)
     for w in wanted:
         if w not in have:
