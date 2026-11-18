@@ -122,6 +122,16 @@ elseif(EXISTS "${LOOMORA_CATCH2_DIR}/catch2/catch.hpp")
   set_target_properties(loomora_tests PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED ON
                                                  CXX_EXTENSIONS OFF)
   loomora_test_fp(loomora_tests)
+  # format/test_threads.cpp starts std::thread (the pthread library on a libc that needs it).
+  find_package(Threads)
+  if(Threads_FOUND)
+    target_link_libraries(loomora_tests PRIVATE Threads::Threads)
+  endif()
+  # LOOMORA_SANITIZE (core/CMakeLists.txt): the test program is compiled and linked with it too.
+  if(LOOMORA_SANITIZE_FLAGS)
+    target_compile_options(loomora_tests PRIVATE ${LOOMORA_SANITIZE_FLAGS})
+    target_link_options(loomora_tests PRIVATE ${LOOMORA_SANITIZE_FLAGS})
+  endif()
   add_test(NAME loomora_tests COMMAND loomora_tests)
 else()
   message(STATUS "Catch2 submodule not checked out (git submodule update --init): "

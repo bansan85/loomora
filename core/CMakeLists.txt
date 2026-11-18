@@ -21,7 +21,27 @@ endif()
 # Fuzz targets (core/fuzz, libFuzzer; Clang only): OFF by default.
 option(LOOMORA_BUILD_FUZZ "Build the fuzz targets of core/fuzz (Clang with libFuzzer)" OFF)
 
+# Sanitizer build of the backend and of its Catch2 tests, for a check by hand (never part of
+# tools/verify.py): -DLOOMORA_SANITIZE=thread (ThreadSanitizer, the test of the threads) or address
+# (AddressSanitizer + UndefinedBehaviorSanitizer). The flags go to the loomora and loomora_tests
+# targets only: build that one target (`cmake --build <dir> --target loomora_tests`), the other
+# programs of the tree are not linked with the sanitizer runtime. GCC or Clang on Linux.
+set(LOOMORA_SANITIZE "" CACHE STRING "Sanitizer for loomora and loomora_tests: thread, address or empty")
+set_property(CACHE LOOMORA_SANITIZE PROPERTY STRINGS "" thread address)
+set(LOOMORA_SANITIZE_FLAGS "")
+if(LOOMORA_SANITIZE STREQUAL "thread")
+  set(LOOMORA_SANITIZE_FLAGS -fsanitize=thread -fno-omit-frame-pointer)
+elseif(LOOMORA_SANITIZE STREQUAL "address")
+  set(LOOMORA_SANITIZE_FLAGS -fsanitize=address,undefined -fno-sanitize-recover=undefined
+                             -fno-omit-frame-pointer)
+elseif(NOT LOOMORA_SANITIZE STREQUAL "")
+  message(FATAL_ERROR "LOOMORA_SANITIZE must be empty, thread or address (got '${LOOMORA_SANITIZE}')")
+endif()
+
 add_library(loomora STATIC ${LOOMORA_SOURCES})
+if(LOOMORA_SANITIZE_FLAGS)
+  target_compile_options(loomora PRIVATE ${LOOMORA_SANITIZE_FLAGS})
+endif()
 target_include_directories(loomora PUBLIC include)
 target_include_directories(loomora PRIVATE src)
 target_include_directories(loomora SYSTEM PRIVATE "${LOOMORA_RAPIDJSON_DIR}")
