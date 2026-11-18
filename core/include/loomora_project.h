@@ -1,7 +1,7 @@
 /* Loomora backend: public C API of the .loomora project format (valid as C89 and C++98).
    Included at the end of loomora.h; do not include it first. LOOMORA_ABI_VERSION stays 1: the
    functions below are additive, and a caller that needs them checks loomora_format_version.
-   Contract: specs/002-loomora-file-format/contracts/c-api-project.md.
+   Contract: docs/implementation/specs/002-loomora-file-format/contracts/c-api-project.md.
 
    Conventions (as the rest of the C API): UTF-8 strings, caller-supplied buffers, negative
    LOOMORA_ERR_* codes, no C++ type and no exception across the boundary. Handles are opaque and

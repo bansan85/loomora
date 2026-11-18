@@ -6,7 +6,7 @@
 // Validates .loomora files with the full validation of the backend and prints one line per issue and
 // one summary line per file. It has no logic of its own (FR-030): it calls loomora_validate_path and
 // reads the report through loomora_report_*, nothing else of the library. The library opens the files
-// read-only. Contract: specs/002-loomora-file-format/contracts/cli-validate.md.
+// read-only. Contract: docs/implementation/specs/002-loomora-file-format/contracts/cli-validate.md.
 //
 // Exit status: 0 every file valid (warnings allowed), 1 at least one file has an error, 2 usage
 // error or a file that could not be read at all; with several files, the highest.

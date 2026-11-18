@@ -70,7 +70,7 @@ enum Native {
     }
 }
 
-// ---- Project probe modes (specs/002-loomora-file-format/contracts/ui-validate-project.md) ----
+// ---- Project probe modes (docs/implementation/specs/002-loomora-file-format/contracts/ui-validate-project.md) ----
 // --validate-project / --roundtrip-project (macOS) and -validate_project / -roundtrip_project (iOS).
 // No application logic: the file is opened, validated and (round trip) exported and validated again
 // by the backend through the C API; this only builds the one result line from the counts the report

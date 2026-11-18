@@ -11,7 +11,7 @@
 
 #include <stdint.h>
 
-// Project probe modes (specs/002-loomora-file-format/contracts/ui-validate-project.md).
+// Project probe modes (docs/implementation/specs/002-loomora-file-format/contracts/ui-validate-project.md).
 enum {
     LMProjectModeNone = 0,
     LMProjectModeValidate = 1,  // --validate-project <path>

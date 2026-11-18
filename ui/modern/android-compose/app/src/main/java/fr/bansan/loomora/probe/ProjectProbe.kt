@@ -4,7 +4,7 @@ import android.content.Intent
 import android.util.Log
 
 /**
- * Project probe modes of the Android UI (specs/002-loomora-file-format/contracts/ui-validate-project.md):
+ * Project probe modes of the Android UI (docs/implementation/specs/002-loomora-file-format/contracts/ui-validate-project.md):
  * the intent extras "validate_project" and "roundtrip_project", each a path readable by the app (the
  * launcher pushes the file first). No application logic: the file is opened, validated and (round
  * trip) exported and validated again by the backend through Native; this object only builds the one
