@@ -352,6 +352,17 @@ void write_project(const ProjectEditor &editor, const std::string &modified_at, 
     collect_warnings(editor, total, report);
 }
 
+void report_leftover(const Sink &sink, Report *report) {
+    if (report == nullptr)
+        return;
+    const std::string left = sink.leftover_file();
+    if (left.empty())
+        return;
+    report->add(kWarning, "warn.leftover_file", "",
+                "The previous copy of the project could not be deleted and stays next to it as '" + left +
+                    "'; it can be deleted by hand.");
+}
+
 void save_project_to_path(const ProjectEditor &editor, const std::string &utf8_path, const std::string &modified_at,
                           std::uint32_t options, loomora_progress_fn progress, void *progress_user, Report *report) {
     std::unique_ptr<Sink> sink = create_file_sink(utf8_path);
@@ -362,6 +373,7 @@ void save_project_to_path(const ProjectEditor &editor, const std::string &utf8_p
         sink->abort();
         throw;
     }
+    report_leftover(*sink, report);
 }
 
 void save_project_to_callback(const ProjectEditor &editor, const std::string &modified_at, std::uint32_t options,

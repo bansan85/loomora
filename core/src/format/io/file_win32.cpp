@@ -263,6 +263,8 @@ class WinSink : public Sink {
 
     std::uint64_t position() const override { return pos_; }
 
+    std::string leftover_file() const override { return leftover_; }
+
     void patch_at(std::uint64_t offset, const void *data, std::size_t len) override {
         require_open();
         if (offset > pos_ || len > pos_ - offset)
@@ -399,8 +401,16 @@ class WinSink : public Sink {
             return false;
         }
         // The reader that holds the old file open (FILE_SHARE_DELETE) keeps reading it; the name
-        // disappears now or when the last handle closes.
-        DeleteFileW(aside.c_str());
+        // disappears now or when the last handle closes. A delete that keeps failing (an antivirus
+        // scanning the file, a reader that did not share delete) must not stay unnoticed: the file
+        // is named by leftover_file() and the save reports it (FR-028). The save itself succeeded.
+        for (int attempt = 0; attempt < 6; ++attempt) {
+            if (!should_fail_delete_aside() &&
+                (DeleteFileW(aside.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND))
+                return true;
+            Sleep(20);
+        }
+        leftover_ = target_ + ".old-" + suffix_;
         return true;
     }
 
@@ -429,6 +439,7 @@ class WinSink : public Sink {
     std::wstring wtarget_;
     std::wstring wtemp_;
     std::string suffix_ = random_suffix(); // names the aside file of rename_aside()
+    std::string leftover_; // the aside file that rename_aside() could not delete ("" when none)
     HANDLE h_;
     std::uint64_t pos_;
     std::uint64_t file_pos_; // where the file pointer of h_ is

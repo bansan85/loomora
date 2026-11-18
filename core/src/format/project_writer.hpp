@@ -41,6 +41,11 @@ const std::uint32_t kSaveKnownOptions = 1;     // the bits this version knows
 void write_project(const ProjectEditor &editor, const std::string &modified_at, std::uint32_t options,
                    Sink &sink, loomora_progress_fn progress, void *progress_user, Report *report);
 
+// After a commit: when `sink` left a file next to the target that it could not remove (Windows
+// file sink, FR-028), adds the warning `warn.leftover_file` naming it to `report` (may be null).
+// The save itself succeeded.
+void report_leftover(const Sink &sink, Report *report);
+
 // Writes to a file with an atomic replace (create_file_sink): the target is created or replaced only
 // when everything succeeded.
 void save_project_to_path(const ProjectEditor &editor, const std::string &utf8_path,
