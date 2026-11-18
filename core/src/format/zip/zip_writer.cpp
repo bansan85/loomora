@@ -8,6 +8,7 @@
 
 #include "format/endian.hpp"
 #include "format/limits.hpp"
+#include "format/report.hpp"
 #include "format/testing.hpp"
 #include "loomora.h"
 
@@ -414,6 +415,107 @@ void ZipWriter::add_deflate(const std::string &name, const Source &source) {
     end_entry();
 }
 
+// The copy-through trusts nothing it did not just read (FR-023): another process may have rewritten
+// the old file in place after it was opened and its SHA-256 checked, and the new manifest would then
+// carry the old sum for different bytes. The CRC-32 recorded for the entry is of the uncompressed
+// data, so a stored entry is checked on the bytes being copied (one CRC-32 pass, no extra read), and
+// a deflated one is inflated into a scratch buffer while its compressed bytes go to the sink. That
+// costs one inflate of each kept JSON entry (small: bulk data is stored), and no hash: CRC-32 over
+// the same pass catches an accidental or ordinary rewrite, which is what FR-023 asks for, at a
+// fraction of the cost of a SHA-256 over every kept byte. A mismatch is LOOMORA_ERR_CORRUPT naming
+// the entry; the caller aborts the sink, so the previous file stays and no temporary file is left.
+namespace {
+class RawVerifier {
+  public:
+    RawVerifier(const std::string &name, std::uint16_t method, std::uint32_t crc, std::uint64_t size)
+        : name_(name), method_(method), want_crc_(crc), size_(size), crc_(0), out_(0), ended_(false),
+          zinit_(false) {
+        std::memset(&zs_, 0, sizeof zs_);
+        if (method_ == 8) {
+            check_alloc(kCopyBuffer);
+            scratch_.resize(kCopyBuffer);
+            if (inflateInit2(&zs_, -15) != Z_OK)
+                throw FormatError(LOOMORA_ERR_NO_MEMORY, "memory allocation failed");
+            zinit_ = true;
+        }
+    }
+    ~RawVerifier() {
+        if (zinit_)
+            inflateEnd(&zs_);
+    }
+
+    void feed(const unsigned char *data, std::size_t len) {
+        if (method_ == 0) {
+            add(data, len);
+            return;
+        }
+        zs_.next_in = const_cast<unsigned char *>(data);
+        zs_.avail_in = static_cast<uInt>(len);
+        for (;;) {
+            if (ended_) {
+                if (zs_.avail_in != 0)
+                    bad("the compressed data is longer than its deflate stream");
+                return;
+            }
+            zs_.next_out = &scratch_[0];
+            zs_.avail_out = static_cast<uInt>(scratch_.size());
+            const int ret = inflate(&zs_, Z_NO_FLUSH);
+            if (ret == Z_MEM_ERROR)
+                throw FormatError(LOOMORA_ERR_NO_MEMORY, "memory allocation failed");
+            if (ret != Z_OK && ret != Z_STREAM_END && ret != Z_BUF_ERROR)
+                bad("the compressed data is not a valid deflate stream");
+            add(&scratch_[0], scratch_.size() - zs_.avail_out);
+            if (ret == Z_STREAM_END) {
+                ended_ = true;
+                continue;
+            }
+            if (zs_.avail_out == 0)
+                continue; // the scratch buffer is full: output may still be pending
+            if (zs_.avail_in != 0)
+                bad("the compressed data is not a valid deflate stream"); // stuck: no progress
+            return;
+        }
+    }
+
+    void finish() {
+        if (method_ == 8 && !ended_)
+            bad("the compressed data ends before its deflate stream");
+        if (out_ != size_)
+            bad("the size of the entry changed since the archive was opened");
+        if (crc_ != want_crc_)
+            bad("the CRC-32 of the entry changed since the archive was opened");
+    }
+
+  private:
+    void add(const unsigned char *p, std::size_t n) {
+        if (n == 0)
+            return;
+        crc_ = static_cast<std::uint32_t>(::crc32(crc_, p, static_cast<uInt>(n)));
+        out_ += n;
+    }
+    [[noreturn]] void bad(const char *what) {
+        Issue issue;
+        issue.severity = kError;
+        issue.code = "entry.crc";
+        issue.entry = name_;
+        issue.message = "'" + name_ + "' cannot be copied into the new file: " + what +
+                        " (was the file modified by another program?)";
+        throw FormatError(LOOMORA_ERR_CORRUPT, issue);
+    }
+
+    std::string name_;
+    std::uint16_t method_;
+    std::uint32_t want_crc_;
+    std::uint64_t size_;
+    std::uint32_t crc_;
+    std::uint64_t out_;
+    bool ended_;
+    bool zinit_;
+    z_stream zs_;
+    std::vector<unsigned char> scratch_;
+};
+} // namespace
+
 void ZipWriter::add_raw(const std::string &name, std::uint16_t method, std::uint32_t crc32,
                         std::uint64_t compressed_size, std::uint64_t size, const Source &source,
                         std::uint64_t offset) {
@@ -425,16 +527,19 @@ void ZipWriter::add_raw(const std::string &name, std::uint16_t method, std::uint
     s.begin(name, method, size, true, compressed_size, crc32);
     check_alloc(kCopyBuffer);
     std::vector<unsigned char> buf(kCopyBuffer);
+    RawVerifier verify(name, method, crc32, size);
     std::uint64_t done = 0;
     while (done < compressed_size) {
         const std::size_t want = static_cast<std::size_t>(std::min<std::uint64_t>(compressed_size - done, buf.size()));
         if (!read_exact(source, offset + done, &buf[0], want))
             throw FormatError(LOOMORA_ERR_IO, "the source ended before the raw entry");
+        verify.feed(&buf[0], want);
         s.write_sink(&buf[0], want);
         if (s.progress != nullptr)
             s.progress->advance(want);
         done += want;
     }
+    verify.finish();
     // Everything is known: no patch, the header already holds the final values.
     s.records.push_back(s.cur);
     s.in_entry = false;
