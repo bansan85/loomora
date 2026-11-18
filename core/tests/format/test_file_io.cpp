@@ -684,6 +684,12 @@ TEST_CASE("file sink through a symbolic link replaces the target and keeps the l
 }
 
 TEST_CASE("file sink through a link to a missing file creates that file", "[format][io][file][symlink]") {
+#ifdef _WIN32
+    // Windows follows a link only through GetFinalPathNameByHandleW, which needs the target to exist:
+    // a link to a missing file is replaced by the new file, as before (c-api-project.md).
+    WARN("a link to a missing file is not followed on Windows: skipped");
+    return;
+#else
     ScratchDir link_dir("links");
     ScratchDir real_dir("real");
     const std::string link = link_dir.file("p.loomora");
@@ -700,6 +706,7 @@ TEST_CASE("file sink through a link to a missing file creates that file", "[form
     REQUIRE(got == saved_bytes(22));
     REQUIRE(only_entry_is(link_dir, "p.loomora"));
     REQUIRE(only_entry_is(real_dir, "new.loomora"));
+#endif
 }
 
 TEST_CASE("file sink follows a chain of links to the last file", "[format][io][file][symlink]") {
