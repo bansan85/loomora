@@ -855,8 +855,8 @@ def _good_tree():
         OrderedDict([("id", "fb-a"), ("description", "d"), ("macro", "LOOMORA_HAS_A"),
                      ("min_compiler", "gcc 7"), ("platform_ids", ["lin-1"]), ("reason", "r")])]
     tree["validation/spikes.json"] = [
-        OrderedDict([("id", "S%d" % i), ("question", "q"), ("status", "open"), ("result", ""),
-                     ("adr", "")]) for i in range(1, 12) if i != 4]
+        OrderedDict([("id", sid), ("question", "q"), ("status", "open"), ("result", ""),
+                     ("adr", "")]) for sid in SPIKE_IDS]
     tree["validation/spikes.json"][0].update(status="confirmed", result="done")
     tree["validation/spikes.json"][1].update(status="refuted", result="no", adr="adr/0002-x.md")
     tree["validation/hypotheses.json"] = [
