@@ -13,6 +13,9 @@
 //            FlushFileBuffers, then MoveFileExW(MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH),
 //            temporary file deleted on failure, abort or destruction. When a reader holds the
 //            target open MoveFileExW is refused (measured, S-F3): see WinSink::replace_target.
+//            When the target is a symbolic link (FR-028) it is followed where the system can tell
+//            (GetFinalPathNameByHandleW, Windows Vista and later, found at run time): the file the
+//            link leads to is replaced, in its own directory, and the link stays a link.
 #if defined(_WIN32)
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -154,6 +157,40 @@ bool seek64(HANDLE h, std::uint64_t pos) {
     li.QuadPart = static_cast<LONGLONG>(pos);
     return SetFilePointerEx(h, li, nullptr, FILE_BEGIN) != 0;
 #endif
+}
+
+// FR-028: the path of the file a save to `wpath` replaces. When `wpath` is a symbolic link (a reparse
+// point) whose target exists, that is the final path of the target (`\\?\` form); otherwise `wpath`
+// unchanged: not a link, a link whose target is missing or is a directory, or a system without
+// GetFinalPathNameByHandleW (Windows 2000 and XP, which have no symbolic links either). The function is
+// found with GetProcAddress, never imported, so the binary still loads on the Windows 2000 floor.
+std::wstring follow_link(const std::wstring &wpath) {
+    const DWORD attributes = GetFileAttributesW(wpath.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0)
+        return wpath;
+    typedef DWORD(WINAPI * FinalPathFn)(HANDLE, LPWSTR, DWORD, DWORD);
+    const HMODULE kernel = GetModuleHandleA("kernel32.dll");
+    const FARPROC proc = kernel != nullptr ? GetProcAddress(kernel, "GetFinalPathNameByHandleW") : nullptr;
+    if (proc == nullptr)
+        return wpath;
+    // Through a generic function pointer type: GCC's -Wcast-function-type accepts void (*)().
+    FinalPathFn final_path = reinterpret_cast<FinalPathFn>(reinterpret_cast<void (*)()>(proc));
+    // No access wanted, only the name; the open follows the link.
+    HANDLE h = CreateFileW(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+        return wpath;
+    std::wstring out(static_cast<std::size_t>(MAX_PATH) + 1, L'\0');
+    DWORD n = final_path(h, &out[0], static_cast<DWORD>(out.size()), 0 /* VOLUME_NAME_DOS */);
+    if (n >= out.size()) { // too short: n is the size needed, with the terminating NUL
+        out.assign(static_cast<std::size_t>(n), L'\0');
+        n = final_path(h, &out[0], static_cast<DWORD>(out.size()), 0);
+    }
+    CloseHandle(h);
+    if (n == 0 || n >= out.size())
+        return wpath;
+    out.resize(n);
+    return out;
 }
 
 class WinSource : public Source {
@@ -479,12 +516,18 @@ std::unique_ptr<Source> open_file_source(const std::string &utf8_path) {
 }
 
 std::unique_ptr<Sink> create_file_sink(const std::string &utf8_target_path) {
-    const std::wstring wtarget = to_native(utf8_target_path);
+    const std::wstring wpath = to_native(utf8_target_path);
+    // A symbolic link is followed: the real file is replaced, in its own directory, and the link stays.
+    const std::wstring wtarget = follow_link(wpath);
+    const bool linked = wtarget != wpath;
     // CREATE_NEW: never open a temporary file another process (or a stale run) already made.
     // No sharing: nobody else reads or deletes it while it is written.
     for (int attempt = 0; attempt < 100; ++attempt) {
-        const std::string temp = utf8_target_path + ".tmp-" + random_suffix();
-        const std::wstring wtemp = to_native(temp);
+        const std::string suffix = random_suffix();
+        const std::string temp = utf8_target_path + ".tmp-" + suffix;
+        // Beside the real file when a link was followed (its path is already in the long form).
+        const std::wstring wtemp =
+            linked ? wtarget + L".tmp-" + std::wstring(suffix.begin(), suffix.end()) : to_native(temp);
         HANDLE h = CreateFileW(wtemp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
                                FILE_ATTRIBUTE_NORMAL, nullptr);
         if (h == INVALID_HANDLE_VALUE) {

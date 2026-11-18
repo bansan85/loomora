@@ -103,6 +103,26 @@ std::vector<std::string> list_dir(const std::string &dir) {
 
 unsigned long process_id() { return GetCurrentProcessId(); }
 
+// A symbolic link `link` whose text is `text` (relative to the link directory); false when the
+// system or the account cannot create one (Windows 2000 to XP have none; Vista to 10 need a privilege
+// or the developer mode). Called through GetProcAddress, as the library does for what old systems lack.
+bool make_symlink(const std::string &text, const std::string &link) {
+    typedef BOOLEAN(WINAPI * CreateSymbolicLinkWFn)(LPCWSTR, LPCWSTR, DWORD);
+    const HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
+    const CreateSymbolicLinkWFn fn =
+        k32 == nullptr ? nullptr : reinterpret_cast<CreateSymbolicLinkWFn>(
+                                       reinterpret_cast<void *>(GetProcAddress(k32, "CreateSymbolicLinkW")));
+    if (fn == nullptr)
+        return false;
+    // 0x2: SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE (developer mode).
+    return fn(wide(link).c_str(), wide(text).c_str(), 0x2) != 0 || fn(wide(link).c_str(), wide(text).c_str(), 0) != 0;
+}
+
+bool is_symlink(const std::string &path) {
+    const DWORD a = GetFileAttributesW(wide(path).c_str());
+    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+}
+
 // A sparse file of `size` bytes with `marker` at its end; false when the file system cannot.
 bool make_sparse_file(const std::string &path, std::uint64_t size, const char *marker, std::size_t len) {
     HANDLE h = CreateFileW(wide(path).c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
@@ -149,6 +169,14 @@ std::vector<std::string> list_dir(const std::string &dir) {
 }
 
 unsigned long process_id() { return static_cast<unsigned long>(getpid()); }
+
+// A symbolic link `link` whose text is `text` (relative to the link directory, or absolute).
+bool make_symlink(const std::string &text, const std::string &link) { return symlink(text.c_str(), link.c_str()) == 0; }
+
+bool is_symlink(const std::string &path) {
+    struct stat st;
+    return lstat(path.c_str(), &st) == 0 && S_ISLNK(st.st_mode);
+}
 
 bool make_sparse_file(const std::string &path, std::uint64_t size, const char *marker, std::size_t len) {
     const int fd = open(path.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0644);
@@ -618,6 +646,163 @@ TEST_CASE("file source and sink with a non-ASCII path (accents, emoji)", "[forma
     REQUIRE(read_file(target, got));
     REQUIRE(got == saved_bytes(12));
 }
+
+// FR-028: a save through a symbolic link replaces the file the link points to (in that file's own
+// directory) and the link stays a link. `links` holds the link, `real` the file; the link texts are
+// relative to the link directory.
+namespace {
+
+std::string up_to(const std::string &leaf, const std::string &name) {
+    return std::string("..") + kSep + leaf + kSep + name;
+}
+
+} // namespace
+
+TEST_CASE("file sink through a symbolic link replaces the target and keeps the link", "[format][io][file][symlink]") {
+    ScratchDir link_dir("links");
+    ScratchDir real_dir("real");
+    const std::string real = real_dir.file("p.loomora");
+    const std::string link = link_dir.file("p.loomora");
+    const Bytes old_bytes = make_bytes(200, 999);
+    REQUIRE(write_file(real, old_bytes));
+    if (!make_symlink(up_to("real", "p.loomora"), link)) {
+        WARN("this system or account cannot create a symbolic link: skipped");
+        return;
+    }
+
+    save_file(link, 21);
+
+    REQUIRE(is_symlink(link)); // still a link, not a regular file
+    REQUIRE_FALSE(is_symlink(real));
+    Bytes got;
+    REQUIRE(read_file(real, got)); // the file it points to has the new content
+    REQUIRE(got == saved_bytes(21));
+    REQUIRE(read_file(link, got));
+    REQUIRE(got == saved_bytes(21));
+    REQUIRE(only_entry_is(link_dir, "p.loomora")); // no temporary file in either directory
+    REQUIRE(only_entry_is(real_dir, "p.loomora"));
+}
+
+TEST_CASE("file sink through a link to a missing file creates that file", "[format][io][file][symlink]") {
+#ifdef _WIN32
+    // Windows follows a link only through GetFinalPathNameByHandleW, which needs the target to exist:
+    // a link to a missing file is replaced by the new file, as before (c-api-project.md).
+    WARN("a link to a missing file is not followed on Windows: skipped");
+    return;
+#else
+    ScratchDir link_dir("links");
+    ScratchDir real_dir("real");
+    const std::string link = link_dir.file("p.loomora");
+    if (!make_symlink(up_to("real", "new.loomora"), link)) {
+        WARN("this system or account cannot create a symbolic link: skipped");
+        return;
+    }
+
+    save_file(link, 22);
+
+    REQUIRE(is_symlink(link));
+    Bytes got;
+    REQUIRE(read_file(real_dir.file("new.loomora"), got));
+    REQUIRE(got == saved_bytes(22));
+    REQUIRE(only_entry_is(link_dir, "p.loomora"));
+    REQUIRE(only_entry_is(real_dir, "new.loomora"));
+#endif
+}
+
+TEST_CASE("file sink follows a chain of links to the last file", "[format][io][file][symlink]") {
+    ScratchDir link_dir("links");
+    ScratchDir real_dir("real");
+    const std::string real = real_dir.file("p.loomora");
+    REQUIRE(write_file(real, make_bytes(201, 500)));
+    // first -> second (same directory) -> real (other directory)
+    if (!make_symlink(up_to("real", "p.loomora"), link_dir.file("second"))) {
+        WARN("this system or account cannot create a symbolic link: skipped");
+        return;
+    }
+    REQUIRE(make_symlink("second", link_dir.file("first")));
+
+    save_file(link_dir.file("first"), 23);
+
+    REQUIRE(is_symlink(link_dir.file("first")));
+    REQUIRE(is_symlink(link_dir.file("second")));
+    Bytes got;
+    REQUIRE(read_file(real, got));
+    REQUIRE(got == saved_bytes(23));
+    REQUIRE(list_dir(link_dir.path()).size() == 2u);
+    REQUIRE(only_entry_is(real_dir, "p.loomora"));
+}
+
+TEST_CASE("a failure while saving through a link leaves the old file and the link intact",
+          "[format][io][file][symlink][sc008]") {
+    ScratchDir link_dir("links");
+    ScratchDir real_dir("real");
+    const std::string real = real_dir.file("p.loomora");
+    const std::string link = link_dir.file("p.loomora");
+    const Bytes old_bytes = make_bytes(202, 1234);
+    REQUIRE(write_file(real, old_bytes));
+    if (!make_symlink(up_to("real", "p.loomora"), link)) {
+        WARN("this system or account cannot create a symbolic link: skipped");
+        return;
+    }
+
+    for (int k = 0; k < 3; ++k) {
+        INFO((k == 0 ? "write fails" : k == 1 ? "flush fails" : "rename fails"));
+        StepCounter c;
+        if (k == 0)
+            c.fail_write_at = 2;
+        else if (k == 1)
+            c.fail_flush_at = 1;
+        else
+            c.fail_rename_at = 1;
+        int code;
+        {
+            loomora::format::ScopedHooks scope;
+            install(c);
+            code = code_thrown_by([&] { save_file(link, 24); });
+        }
+        REQUIRE(code == LOOMORA_ERR_IO);
+        REQUIRE(is_symlink(link));
+        Bytes got;
+        REQUIRE(read_file(real, got));
+        REQUIRE(got == old_bytes);
+        REQUIRE(only_entry_is(link_dir, "p.loomora"));
+        REQUIRE(only_entry_is(real_dir, "p.loomora"));
+    }
+}
+
+#ifndef _WIN32
+TEST_CASE("file sink through an absolute link, a link to a directory and a loop of links",
+          "[format][io][file][symlink]") {
+    ScratchDir link_dir("links");
+    ScratchDir real_dir("real");
+    char cwd[4096];
+    REQUIRE(getcwd(cwd, sizeof cwd) != nullptr);
+    const std::string base = std::string(cwd) + "/";
+
+    // An absolute link text, and a link in the middle of the path (a link to a directory).
+    REQUIRE(write_file(real_dir.file("p.loomora"), make_bytes(203, 100)));
+    REQUIRE(make_symlink(base + real_dir.file("p.loomora"), link_dir.file("abs")));
+    save_file(link_dir.file("abs"), 25);
+    REQUIRE(is_symlink(link_dir.file("abs")));
+    Bytes got;
+    REQUIRE(read_file(real_dir.file("p.loomora"), got));
+    REQUIRE(got == saved_bytes(25));
+
+    REQUIRE(make_symlink(base + real_dir.path(), link_dir.file("dir")));
+    save_file(link_dir.file("dir") + "/p.loomora", 26);
+    REQUIRE_FALSE(is_symlink(real_dir.file("p.loomora")));
+    REQUIRE(read_file(real_dir.file("p.loomora"), got));
+    REQUIRE(got == saved_bytes(26));
+    REQUIRE(only_entry_is(real_dir, "p.loomora"));
+
+    // A loop of links: LOOMORA_ERR_IO, nothing created.
+    REQUIRE(make_symlink("loop-b", link_dir.file("loop-a")));
+    REQUIRE(make_symlink("loop-a", link_dir.file("loop-b")));
+    REQUIRE(code_thrown_by([&] { create_file_sink(link_dir.file("loop-a")); }) == LOOMORA_ERR_IO);
+    REQUIRE(list_dir(link_dir.path()).size() == 4u); // abs, dir, loop-a, loop-b
+    REQUIRE(only_entry_is(real_dir, "p.loomora"));
+}
+#endif
 
 TEST_CASE("file source addresses offsets above 4 GiB", "[format][io][file][large]") {
     ScratchDir dir;
