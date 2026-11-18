@@ -684,12 +684,6 @@ TEST_CASE("file sink through a symbolic link replaces the target and keeps the l
 }
 
 TEST_CASE("file sink through a link to a missing file creates that file", "[format][io][file][symlink]") {
-#ifdef _WIN32
-    // Windows follows a link only through GetFinalPathNameByHandleW, which needs the target to exist:
-    // a link to a missing file is replaced by the new file, as before (c-api-project.md).
-    WARN("a link to a missing file is not followed on Windows: skipped");
-    return;
-#else
     ScratchDir link_dir("links");
     ScratchDir real_dir("real");
     const std::string link = link_dir.file("p.loomora");
@@ -706,8 +700,72 @@ TEST_CASE("file sink through a link to a missing file creates that file", "[form
     REQUIRE(got == saved_bytes(22));
     REQUIRE(only_entry_is(link_dir, "p.loomora"));
     REQUIRE(only_entry_is(real_dir, "new.loomora"));
-#endif
 }
+
+TEST_CASE("file sink follows a chain of links to a missing file", "[format][io][file][symlink]") {
+    ScratchDir link_dir("links");
+    ScratchDir real_dir("real");
+    // first -> second (same directory) -> real/new.loomora, which does not exist
+    if (!make_symlink(up_to("real", "new.loomora"), link_dir.file("second"))) {
+        WARN("this system or account cannot create a symbolic link: skipped");
+        return;
+    }
+    REQUIRE(make_symlink("second", link_dir.file("first")));
+
+    save_file(link_dir.file("first"), 27);
+
+    REQUIRE(is_symlink(link_dir.file("first")));
+    REQUIRE(is_symlink(link_dir.file("second")));
+    Bytes got;
+    REQUIRE(read_file(real_dir.file("new.loomora"), got));
+    REQUIRE(got == saved_bytes(27));
+    REQUIRE(list_dir(link_dir.path()).size() == 2u);
+    REQUIRE(only_entry_is(real_dir, "new.loomora"));
+}
+
+#ifdef _WIN32
+// An absolute link text (stored as an NT path with the \??\ prefix) gives the same result as a relative one.
+TEST_CASE("file sink through an absolute link to a missing file creates that file",
+          "[format][io][file][symlink]") {
+    ScratchDir link_dir("links");
+    ScratchDir real_dir("real");
+    char cwd[MAX_PATH + 1];
+    REQUIRE(GetCurrentDirectoryA(sizeof cwd, cwd) != 0);
+    const std::string base = std::string(cwd) + "\\";
+    const std::string link = link_dir.file("abs");
+    if (!make_symlink(base + real_dir.file("new.loomora"), link)) {
+        WARN("this system or account cannot create a symbolic link: skipped");
+        return;
+    }
+
+    save_file(link, 28);
+
+    REQUIRE(is_symlink(link));
+    Bytes got;
+    REQUIRE(read_file(real_dir.file("new.loomora"), got));
+    REQUIRE(got == saved_bytes(28));
+    REQUIRE(only_entry_is(link_dir, "abs"));
+    REQUIRE(only_entry_is(real_dir, "new.loomora"));
+}
+
+// A loop of links is not followed forever: the save ends, whatever it does with the link, and no
+// temporary file stays (POSIX reports LOOMORA_ERR_IO; Windows keeps the behaviour it had before links
+// were followed, and replaces the link).
+TEST_CASE("file sink ends on a loop of links", "[format][io][file][symlink]") {
+    ScratchDir link_dir("links");
+    if (!make_symlink("loop-b", link_dir.file("loop-a"))) {
+        WARN("this system or account cannot create a symbolic link: skipped");
+        return;
+    }
+    REQUIRE(make_symlink("loop-a", link_dir.file("loop-b")));
+
+    code_thrown_by([&] { save_file(link_dir.file("loop-a"), 29); });
+
+    const std::vector<std::string> names = list_dir(link_dir.path());
+    for (std::size_t i = 0; i < names.size(); ++i)
+        REQUIRE(names[i].find(".tmp-") == std::string::npos);
+}
+#endif
 
 TEST_CASE("file sink follows a chain of links to the last file", "[format][io][file][symlink]") {
     ScratchDir link_dir("links");
