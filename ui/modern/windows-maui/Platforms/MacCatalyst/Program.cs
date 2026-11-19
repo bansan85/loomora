@@ -1,7 +1,7 @@
 ﻿using ObjCRuntime;
 using UIKit;
 
-namespace LoomoraMauiSpike;
+namespace Loomora.Maui;
 
 public class Program
 {
