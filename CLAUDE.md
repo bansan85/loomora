@@ -38,6 +38,13 @@
 - Linux binaries (Legacy and Modern) are always compiled **on the target machine**, never built on a recent system and installed on an older one. The glibc and libstdc++ versions of the build host therefore do not matter, and there is no container or static C++ runtime to widen the baseline. The target needs a C++11 compiler, CMake and the development files of the libraries the UI uses.
 - Windows binaries (including the Windows 2000 floor) are cross-compiled with MinGW-w64 from WSL, because Visual Studio no longer supports Windows 2000.
 
+## User interfaces
+
+- Every UI, on every platform (Legacy, Modern, MAUI, web), has the **same features and the same interface**: the same screens, controls, texts and behaviour. The functional reference is `docs/requirements-specification.md` (§2.2.1, functional parity).
+- The layout adapts to the device (responsive design: window or screen size, phone or tablet, input method). The features do not change with the device.
+- A function a platform cannot provide is disabled explicitly and listed in §2.3 of the requirements, never left out silently.
+- Each UI lives in `ui/<legacy|modern>/<platform>/`, the MAUI UI included (`ui/modern/windows-maui/`).
+
 ## Linux Modern UI (GTK)
 
 - The Modern UI uses gtkmm (the system packages) on top of GTK. The minimum GTK version is **3.10**: the UI must always build and run with only the 3.10 API.
