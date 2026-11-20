@@ -211,6 +211,7 @@
 				OTHER_LDFLAGS = (
 					"-lloomora",
 					"-lc++",
+					"-lz",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = fr.bansan.loomora.probe.legacy;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -226,6 +227,7 @@
 				OTHER_LDFLAGS = (
 					"-lloomora",
 					"-lc++",
+					"-lz",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = fr.bansan.loomora.probe.legacy;
 				PRODUCT_NAME = "$(TARGET_NAME)";
