@@ -1344,8 +1344,12 @@ def cl_version(cl):
 
 
 def header_functions():
-    text = (common.CORE / "include" / "loomora.h").read_text(encoding="utf-8")
-    return sorted(set(re.findall(r"LOOMORA_API[^;(]*?\b(loomora_\w+)\s*\(", text)))
+    """The functions marked LOOMORA_API in the public headers (the DLL exports exactly these)."""
+    names = set()
+    for header in ("loomora.h", "loomora_project.h"):
+        text = (common.CORE / "include" / header).read_text(encoding="utf-8")
+        names.update(re.findall(r"LOOMORA_API[^;(]*?\b(loomora_\w+)\s*\(", text))
+    return sorted(names)
 
 
 def build_loomora_dll(preset, msvc):
