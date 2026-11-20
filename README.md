@@ -41,7 +41,7 @@ Floors validated so far, under the PoC rule (the Legacy UI is run on the lowest 
 |---|---|
 | `core/` | the backend: C++11 library `libloomora`, its C API (`core/include/loomora.h`, and `core/include/loomora_project.h` for the `.loomora` project file) and its tests (Catch2, self-test, reference vectors in `core/tests/vectors.json`); `core/src/format/` is the project file format module (ZIP container, JSON, validation); `core/fuzz/` holds the fuzz targets (option `LOOMORA_BUILD_FUZZ`) |
 | `cli/loomora/` | the host command `loomora validate` (Windows, Linux and macOS hosts) |
-| `ui/legacy/<platform>/`, `ui/modern/<platform>/` | one native interface per platform and variant (Win32, Xlib, Android views, web page, WinUI 3, gtkmm, Compose, TypeScript; AppKit, UIKit and SwiftUI folders are empty until Apple hardware is available), with no logic |
+| `ui/legacy/<platform>/`, `ui/modern/<platform>/` | one native interface per platform and variant (Win32, Xlib, Android views, web page, WinUI 3, gtkmm, Compose, TypeScript; AppKit, UIKit and SwiftUI for macOS and iOS), with no logic |
 | `bridge/` | glue with no logic: `jni/` (Android) and `wasm/` (Emscripten) |
 | `cmake/` | toolchain files: MinGW-w64, Linux i686, Android NDK r15c, Emscripten |
 | `tools/` | Python host tools: `verify.py`, `build.py`, `run_vectors.py`, `check_std.py`, `measure_sharing.py`, `prefix_check.py`, `report.py`, `validate_records.py`, and `trials/` (the drivers that produced the evidence) |
