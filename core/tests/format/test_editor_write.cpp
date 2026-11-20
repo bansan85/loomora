@@ -1,7 +1,8 @@
 // The creation part of the project editor and the project writer (T033, T034) through the public C
 // API: the `basic`, `empty` and 40-spool projects are built, saved to memory and to a file, and the
 // archive is checked with the ZIP reader, a JSON parse of the manifest, the SHA-256 and size of every
-// entry, the codecs, and the determinism rules (FR-004). No reader of the project is used.
+// entry, the codecs, and the determinism rules (FR-004: the same bytes when saved twice on one platform).
+// No reader of the project is used.
 #include <catch2/catch.hpp>
 
 #include <algorithm>

@@ -1,8 +1,10 @@
 // The project writer (spec 002, T034): turns the staged content of a ProjectEditor into the bytes of
 // a .loomora archive (project-format.md sections 1 to 3).
 //
-// Determinism (FR-004): the same editor content, `modified_at` and options give the same bytes. The
-// entries go in the canonical order of section 2 (mimetype, manifest.json, spools.json, then every
+// Determinism (FR-004): the same editor content, `modified_at` and options give the same bytes on one
+// platform, and the same entries with the same decompressed content on every platform (the compressed
+// bytes of a deflated entry may differ where the SDK zlib is linked). The entries go in the canonical
+// order of section 2 (mimetype, manifest.json, spools.json, then every
 // frame with its layouts, every image, every result, in increasing identifier); `.json` entries are
 // deflated and every other one (`*.bin`, `*.png`, `*.jpg`, `*.webp`) stored, unless the option
 // `kSaveStoreAll` (bit 0 of the C API `options`) stores everything.
