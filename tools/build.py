@@ -1643,13 +1643,15 @@ def check_apple_min_version(path, expected):
                         MIN_VERSION_TOLERANCE_NOTE if len(wanted) > 1 else ""))
 
 
-def build_apple_library(work, arch_list, sdk, deployment_target, system_name=None, accepted_min=None):
+def build_apple_library(work, arch_list, sdk, deployment_target, system_name=None, accepted_min=None,
+                        system_zlib=False):
     """Builds the backend as a static library (core/ through the root CMakeLists.txt, Release, no
     tests) once per architecture, checks -std=c++11 in compile_commands.json, and merges the slices
     with lipo (one slice: copied) into <work>/libloomora.a. `sdk` is the CMake sysroot (macosx,
     iphoneos, iphonesimulator); `system_name` sets
     CMAKE_SYSTEM_NAME (iOS: CMake then targets the device or the simulator SDK); `accepted_min` lists
-    the minimum OS versions the library may record (default: the deployment target). Returns (library,
+    the minimum OS versions the library may record (default: the deployment target); `system_zlib`
+    links the zlib of the SDK and never reads third_party/zlib. Returns (library,
     (compiler id, compiler path))."""
     work.mkdir(parents=True, exist_ok=True)
     slices = []
@@ -1661,7 +1663,8 @@ def build_apple_library(work, arch_list, sdk, deployment_target, system_name=Non
                     "-DLOOMORA_BUILD_TESTS=OFF", "-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY",
                     "-DCMAKE_OSX_SYSROOT=" + sdk, "-DCMAKE_OSX_ARCHITECTURES=" + arch,
                     "-DCMAKE_OSX_DEPLOYMENT_TARGET=" + deployment_target] +
-                   (["-DCMAKE_SYSTEM_NAME=" + system_name] if system_name else []))
+                   (["-DCMAKE_SYSTEM_NAME=" + system_name] if system_name else []) +
+                   (["-DLOOMORA_USE_SYSTEM_ZLIB=ON"] if system_zlib else []))
         common.run(["cmake", "--build", build_dir, "--target", "loomora"])
         built = build_dir / "core" / "libloomora.a"
         if not built.is_file():
@@ -1791,7 +1794,7 @@ def run_macos_modern(args):
     build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (common.ROOT / "build"))
     work = build_root / "macos-modern"
     lib, (compiler, _path) = build_apple_library(work / "lib", MACOS_MODERN_ARCHS, "macosx",
-                                                 MACOS_DEPLOYMENT_TARGET)
+                                                 MACOS_DEPLOYMENT_TARGET, system_zlib=True)
     derived = xcodebuild_run(MACOS_MODERN_DIR, "build", work, "generic/platform=macOS", lib.parent)
     app = derived / "Build" / "Products" / "Release" / "Loomora.app"
     exe = app / "Contents" / "MacOS" / "Loomora"
