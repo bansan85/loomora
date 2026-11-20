@@ -1848,6 +1848,8 @@ def build_ios_sdks(args, label, project_dir, deployment_target, zip_prefix, acce
     built = {}
     for sdk in sdks:
         destination, archs = IOS_SDKS[sdk]
+        if sdk == "iphonesimulator" and getattr(args, "ios_sim_arch", "arm64") == "x86_64":
+            archs = ("x86_64",)
         work = build_root / label / sdk
         accepted = accepted_min[sdk] if accepted_min else None
         # the project looks for the library in $(LOOMORA_LIB_DIR)/$(PLATFORM_NAME) = libs/<sdk>
@@ -2336,6 +2338,10 @@ def main(argv=None):
     parser.add_argument("--ios-sdk", choices=sorted(IOS_SDKS) + ["all"], default="all",
                         help="ios modern and ios legacy only: the SDK to build (default all; the CI job "
                         "that runs the iOS simulator uses iphonesimulator)")
+    parser.add_argument("--ios-sim-arch", choices=("arm64", "x86_64"), default="arm64",
+                        help="ios modern only: the architecture of the iphonesimulator build (default "
+                        "arm64, the CI runner; x86_64 runs on an Intel Mac, e.g. the iOS simulator of a "
+                        "macOS virtual machine)")
     args = parser.parse_args(argv)
 
     key = (args.platform, args.variant)
