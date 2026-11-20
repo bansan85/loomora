@@ -6,6 +6,16 @@
 # hashes change in a visible commit).
 # (a parent project that is not the repository root, such as the Gradle build of the Android Modern UI,
 # sets LOOMORA_ZLIB_DIR before including this file)
+# LOOMORA_USE_SYSTEM_ZLIB (OFF by default): the macOS modern build links the zlib of the SDK instead
+# and never reads third_party/zlib. Only that build sets it, so the compressed bytes of every other
+# build stay those of the pinned source.
+option(LOOMORA_USE_SYSTEM_ZLIB "Link the zlib of the SDK instead of third_party/zlib (macOS modern only)" OFF)
+if(LOOMORA_USE_SYSTEM_ZLIB)
+  find_package(ZLIB REQUIRED)
+  add_library(loomora_zlib INTERFACE)
+  target_link_libraries(loomora_zlib INTERFACE ZLIB::ZLIB)
+  return()
+endif()
 if(NOT LOOMORA_ZLIB_DIR)
   set(LOOMORA_ZLIB_DIR "${PROJECT_SOURCE_DIR}/third_party/zlib")
 endif()
