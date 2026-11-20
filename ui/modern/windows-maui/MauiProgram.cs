@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Logging;
 
-namespace LoomoraMauiSpike;
+namespace Loomora.Maui;
 
 public static class MauiProgram
 {
