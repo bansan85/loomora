@@ -22,7 +22,7 @@ The full list of features, platforms and constraints is the [requirements docume
 
 ## Where the project stands
 
-The graphical application does not exist yet. The project is in a validation phase: a minimal probe (a text field pre-filled "Coucou" and a label showing "Bonjour " followed by the field) checks, on each platform and for each interface variant, that the chosen technical approach holds, including on systems as old as Windows 2000. Eight probe interfaces exist: Windows Legacy (Win32) and Modern (WinUI 3), Linux Legacy (Xlib) and Modern (gtkmm), Android Legacy (Java views, API 9 to 23) and Modern (Kotlin and Compose, API 24 and later), Web Legacy (a JavaScript page) and Modern (TypeScript on WebAssembly). The macOS and iOS ones are specified but not written: they need Apple hardware (pending).
+The graphical application does not exist yet. The project is in a validation phase: a minimal probe (a text field pre-filled "Coucou" and a label showing "Bonjour " followed by the field) checks, on each platform and for each interface variant, that the chosen technical approach holds, including on systems as old as Windows 2000. Eight probe interfaces exist: Windows Legacy (Win32) and Modern (WinUI 3), Linux Legacy (Xlib) and Modern (gtkmm), Android Legacy (Java views, API 9 to 23) and Modern (Kotlin and Compose, API 24 and later), Web Legacy (a JavaScript page) and Modern (TypeScript on WebAssembly). The macOS and iOS ones are written (Legacy AppKit and UIKit, Modern SwiftUI) and were run on the systems of the table below, except where it says otherwise.
 
 Floors validated so far, under the PoC rule (the Legacy UI is run on the lowest system that can be tested, the Modern UI on one current system and one 64-bit CPU). Every verdict is "OK with restrictions": read the restrictions in the [validation report](docs/implementation/validation/report.md) before relying on a floor.
 
@@ -32,7 +32,8 @@ Floors validated so far, under the PoC rule (the Legacy UI is run on the lowest 
 | Linux | CentOS 5.11 userland (glibc 2.5, in Docker), built on the machine that runs it | Ubuntu 24.04, GTK 3.24 (the GTK 3.10 floor is only compiled) |
 | Android | built for API 9, run on Android 4.1.2 (API 16, emulator) | Android 7.0 (API 24, emulator) |
 | Web | Firefox 10 on Windows 2000 (JavaScript path) | Chrome 157 (WebAssembly path) |
-| macOS, iOS | not tested | not tested |
+| macOS | Mac OS X 10.9 Mavericks (minimum, tested) | macOS 11 Big Sur, 11.7 (minimum and newest tested; Universal 2 build, Intel run) |
+| iOS | not run (the UIKit build is written, not run) | iOS 14.4 (minimum; the iOS 14.4 simulator run, device build compiled but not run) |
 
 ## Repository layout
 
@@ -40,7 +41,7 @@ Floors validated so far, under the PoC rule (the Legacy UI is run on the lowest 
 |---|---|
 | `core/` | the backend: C++11 library `libloomora`, its C API (`core/include/loomora.h`, and `core/include/loomora_project.h` for the `.loomora` project file) and its tests (Catch2, self-test, reference vectors in `core/tests/vectors.json`); `core/src/format/` is the project file format module (ZIP container, JSON, validation); `core/fuzz/` holds the fuzz targets (option `LOOMORA_BUILD_FUZZ`) |
 | `cli/loomora/` | the host command `loomora validate` (Windows, Linux and macOS hosts) |
-| `ui/legacy/<platform>/`, `ui/modern/<platform>/` | one native interface per platform and variant (Win32, Xlib, Android views, web page, WinUI 3, gtkmm, Compose, TypeScript; AppKit, UIKit and SwiftUI folders are empty until Apple hardware is available), with no logic |
+| `ui/legacy/<platform>/`, `ui/modern/<platform>/` | one native interface per platform and variant (Win32, Xlib, Android views, web page, WinUI 3, gtkmm, Compose, TypeScript; AppKit, UIKit and SwiftUI for macOS and iOS), with no logic |
 | `bridge/` | glue with no logic: `jni/` (Android) and `wasm/` (Emscripten) |
 | `cmake/` | toolchain files: MinGW-w64, Linux i686, Android NDK r15c, Emscripten |
 | `tools/` | Python host tools: `verify.py`, `build.py`, `run_vectors.py`, `check_std.py`, `measure_sharing.py`, `prefix_check.py`, `report.py`, `validate_records.py`, and `trials/` (the drivers that produced the evidence) |
