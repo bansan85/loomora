@@ -4,8 +4,8 @@ Universal String Art software (the art of stretched string).
 
 | | |
 |---|---|
-| Version | V6.6 — `.loomora` format rewritten from spec 002 (Annex B); V6.5 was the update after the phase 0 probe (changes and sources in Annex B); V6.4 was the consolidation of versions V1 to V5 (Gemini export "String Art Requirements Document") + the decisions of §16.1; native interface per platform, themes, non-flat supports (3D, meshes) |
-| Date | 2026-11-17 (V6.5: 2026-11-15; V6.4: 2026-11-11) |
+| Version | V6.7 — augmented-reality nail placement (§8.4, Annex B); V6.6 — `.loomora` format rewritten from spec 002 (Annex B); V6.5 was the update after the phase 0 probe (changes and sources in Annex B); V6.4 was the consolidation of versions V1 to V5 (Gemini export "String Art Requirements Document") + the decisions of §16.1; native interface per platform, themes, non-flat supports (3D, meshes) |
+| Date | 2026-11-20 (V6.6: 2026-11-17; V6.5: 2026-11-15; V6.4: 2026-11-11) |
 | Status | Draft to be validated; the phase 0 probe settled only the points listed in Annex B, **every other technical choice stays provisional until the phase 0 PoC (§15.1)**; points still open in §16.2 |
 | Convention | **[P0]** essential · **[P1]** major · **[P2]** optional / V2 of the product. Unmarked: P1. |
 
@@ -118,6 +118,7 @@ Principles:
 - Advanced offline speech recognition disabled, with fallback to the manual and automatic (timer) modes. Speech synthesis remains in use if the system provides it.
 - Upfront memory allocation to avoid fragmentation; buffers that can be shrunk dynamically (tiled cache or temporary downsampling during computation).
 - No instruction newer than ARMv7 is required in the 32-bit fallback binary.
+- Augmented-reality nail placement (§8.4) disabled where there is no camera or no permission, and on a Legacy UI until a trial proves it; the PDF template (§8.1) stays available.
 
 **Disabled features recorded by the phase 0 trials** (each is a declared fallback, `validation/fallbacks.json`; the reasons are in the verdicts):
 
@@ -419,6 +420,7 @@ The rendering differs significantly between the two: the user must be able to **
 - Customizable **scale factor**: zoom in % or forced target dimension; enlargement or not.
 - **Tiled printing (tiling)**: automatic splitting across several A4 / A3 sheets with overlap / glue margins and cross-shaped registration marks.
 - **Direct printing** to the system printers: Windows spooler, macOS/CUPS, Android Print, AirPrint.
+- **AR marker sheet** **[P2]**: the four fiducial markers of the augmented-reality placement, 1:1, with their coordinates (§8.4.2).
 
 ### 8.2 Manual instructions
 - Text / CSV list: `12 → 154 → 3 → 89 …` with winding direction and spool.
@@ -448,6 +450,54 @@ Machine JSON schema (fields `from_side` / `to_side` ∈ `CW` / `CCW`):
   }
 ]
 ```
+
+### 8.4 Augmented-reality nail placement **[P2]**
+
+The camera of a phone, tablet or computer shows, over the real support, where each nail goes, so the nails are driven without a printed template. It complements the PDF template (§8.1), which stays the reference and the fallback. Two ways to find the position of the support (§8.4.1, §8.4.2) feed one placement session (§8.4.3).
+
+**Common principles**
+- **Input**: the nail layout of the project (§3.3, §3.4; in 3D §3.6.3) in the coordinate system of the frame, in mm. **Output**: the nails drawn at real scale over the camera image, each as a cylinder with its real diameter and protruding length, along its axis (in 3D, §3.6.3; z = 0 and normal axis for a flat support).
+- Both ways produce the same thing: a **pose**, the position and orientation of the camera in the coordinate system of the frame, with a quality estimate (residual error in mm). Everything after the pose (drawing, session, verification) is shared.
+- **Where the code lives**: detection and pose estimation work on grayscale camera frames and camera intrinsics and are written once in the C++11 backend (module `loomora-ar`, §14). Each UI only captures the frames and draws the overlay with its native tools. A system AR framework (ARKit, ARCore) **may** supply the camera intrinsics and the motion tracking between two detections where it exists; the application never depends on it (universal method first, §2.2).
+- **Camera calibration** **[Proposal]**: the intrinsics come from the system when it gives them, otherwise from the camera metadata (focal length, sensor size) and are refined from the markers or the contour in view.
+- **Flat support first**: modes A and B are required for a flat frame (§3.1). Non-flat supports (§3.6): mode B only, with markers at known 3D coordinates (§8.4.2); mode A is not provided (§17).
+- **Privacy** (§13): the frames are analysed on the device, never stored and never sent.
+
+#### 8.4.1 Mode A — film the shape
+
+1. The user films the support with the whole frame in view, moving slowly.
+2. **Detection**: edge detection (§3.4) and extraction of the closed contours; the interior contours of the layout (exclusion shapes, §3.1) are used when visible.
+3. **Matching**: each candidate contour is compared with the outline of the frame in the project, **at its real size** (the dimensions in mm are known); the best match, if any, gives the pose.
+4. **Verification** before any nail is shown:
+   - the outline of the frame is drawn over the real contour and the user **confirms** it;
+   - the dimensions measured on the image are compared with the expected dimensions; beyond a tolerance, the application warns that the object may not be this frame (**[Proposal]** default 3 %, to be set by trial);
+   - the residual error is displayed; above the tolerance of §8.4.3 the nails are not shown.
+5. **Symmetric shapes**: a circle, a square or a regular polygon looks the same after a rotation, so the contour alone does not give the orientation. The user then **taps the reference** (nail 1 or the "top" of the layout) and the application checks it against the layout (§6.3: universal reference frame).
+6. **Conditions**: a closed contour with enough contrast against its background (the application reports a lack of contrast) and an even lighting; a frame partly hidden by the hands is tracked from the previous pose.
+
+#### 8.4.2 Mode B — four markers
+
+The four markers are the "reference marks" of the layout, and the application defines them:
+- **Type**: four **square fiducial markers with a binary code** (ArUco-type dictionary), with the **identifiers 0 to 3**, so that each one is recognised and the orientation is never ambiguous. The dictionary and the detection library are chosen when the feature is built (§16.2 no. 15).
+- **Marker sheet**: the application exports them as a 1:1 PDF (§8.1) to print and cut out, with their side (default 40 mm, configurable), their identifiers and their coordinates (x, y, z) in the frame coordinate system.
+- **Layout**: by default the four markers sit on the corners of a rectangle centred on the frame (centring crosshair of §8.1), its size being the bounding box of the layout plus a margin (default 30 mm), on the surface that carries the frame (board, wall, table). The user may choose another rectangle or other positions and enters the coordinates; the application always displays the expected distances between the markers (sides and diagonals) for checking the placement with a tape measure. **The positions are the weak point**: an error in the placement of a marker moves every nail by the same amount, so a placement tolerance of 1 mm is asked **[Proposal]**.
+- **Pose**: the 4 corners of each marker give 16 image points of known position, enough for a flat or a 3D pose with a redundancy: the residual error checks the placement of the markers and the printing scale. A pose can be computed from fewer than four visible markers, with a lower quality.
+- **Non-flat supports** (§3.6): the markers are given 3D coordinates; they need not be coplanar. Hidden nails are drawn behind the mesh of a `solid` or `shell` support (occlusion by the mesh, §3.6.1) **[P2]**.
+
+#### 8.4.3 Placement session
+
+- **Display**: the nails still to drive are drawn in 3D over the image, the current nail highlighted with its number (§3.3, §6.3 numbering) and its depth marker (base on the surface, tip), the nails already driven dimmed. Option: only the next N nails, or only a region, to keep the image readable.
+- **Order**: by increasing number, or by a sweep of the support (nearest neighbour) to limit hand movements; the user can jump to any nail.
+- **Real time**: the overlay follows the camera at the display rate of the device; the analysis runs off the UI thread (§13). Where the tracking is lost, the overlay disappears and the application re-detects the frame (mode A) or the markers (mode B) without losing the progress.
+- **Confirmation and undo**: the user confirms each nail by touch, key, volume button or voice, in the same way as the Player (§10.1; voice through the system APIs only). A step back is always possible.
+- **Persistence**: the progress is application data, not stored in the `.loomora` file, keyed by the project and the nail layout, written at each confirmation as in §10.2.
+- **Accuracy**: the estimated pose error in mm is always displayed, with a warning when the camera is too oblique or too far. The overlay is hidden when the error exceeds the tolerance (**[Proposal]** default 2 mm). The numerical targets (error, frame rate, distance) are set by benchmark on real devices; none is promised before.
+- **Check on the real support**: every nail position on the overlay is displayed with its coordinates (x, y in mm) and its distance to the two nearest nails already driven, so that the user can measure with a ruler when in doubt.
+
+**Platforms and degradation**
+- The UIs offering it have **the same screens and the same behaviour** (§2.2.1); only the layout adapts to the device. Camera capture: CameraX or Camera2 (Android, API 24+, ARCore when present), AVFoundation and ARKit (iOS, iPadOS), the system camera APIs of the desktop platforms (webcam, tablet), `getUserMedia` with the detection in WebAssembly (PWA, WebXR optional).
+- A function a platform cannot provide is **disabled explicitly**, with its reason, and listed in §2.3: no camera, no permission, Legacy UI on which no trial proved it. The PDF template (§8.1) always remains.
+- Limited devices (§2.3): lower analysis resolution and rate, mode B (cheaper) proposed first; no GPU is required.
 
 ---
 
@@ -633,6 +683,7 @@ The application must be translatable into **any language**.
  - Image + cropping →    - CPU/GPU engine  →   - PDF/CNC export  →   - Player
  - Shape / exclusions    - Algorithm           - Printing             - Persistence
  - Nails (auto/import)   - Live preview        - BLE/QR transfer      - Unweaving
+                                               - AR nail placing
 ```
 
 Main editing screen ("split screen"):
@@ -683,6 +734,7 @@ loomora/
 │   ├── loomora-engine-gpu/   # Compute shaders (wgpu, WGSL, naga)
 │   ├── loomora-machine/      # G-code, SVG, DXF, machine JSON/CSV, nail export
 │   ├── loomora-pdf/          # 1:1 PDF templates, tiling, data sheet, printing
+│   ├── loomora-ar/           # Camera frames: contour and marker detection, pose estimation, nail projection (§8.4); capture and drawing stay in the UIs
 │   ├── loomora-net/          # HTTP/WebSocket server (axum, tokio), QR, BLE (btleplug)
 │   ├── loomora-storage/      # Transactional persistence (SQLite via rusqlite)
 │   ├── loomora-app/          # States, use cases, view-models, UI-independent; system service interfaces
@@ -817,6 +869,7 @@ Items 9, 13 and 14 were settled on 2026-11-15 and moved to §16.1 (Annex B); num
 | 10 | Winding direction displayed by default | Relative, dial or CW / CCW |
 | 11 | License and business model | Open source, free, paid; affects the stores, the dependencies and third-party code |
 | 12 | Pilot platforms of the MVP | Suggestion: Android + WinUI 3 |
+| 15 | AR placement (§8.4): markers, matching method, accuracy | Marker dictionary, size and layout, contour-matching method, tolerances and the platforms that offer it: to settle by a spike on a flat frame before the feature is built; the proposals of §8.4 are provisional |
 
 ---
 
@@ -831,6 +884,8 @@ Items 9, 13 and 14 were settled on 2026-11-15 and moved to §16.1 (Annex B); num
 | Reconstruction from a point cloud | Without a provided mesh | P3 |
 | Vector modes (§5.1) on developable surfaces | After unfolding the surface | P3 |
 | Direct CAD import (STEP, IGES) | Today: prior conversion to a mesh | P3 |
+| AR placement by shape detection on non-flat supports | Mode A of §8.4.1 on a 3D support (needs the mesh and a depth sensor or a 3D tracking); today only the markers (§8.4.2) | P3 |
+| Automatic check of driven nails in AR | Detect the nail heads on the camera image and flag the ones off their position | P3 |
 
 ---
 
@@ -866,6 +921,7 @@ Items 9, 13 and 14 were settled on 2026-11-15 and moved to §16.1 (Annex B); num
 | Non-flat supports: concave and convex shapes, 3D nails (interior / exterior), interior / exterior string, mesh input | §3.6, §9.1, §17 |
 | Windows MFC version compatible with XP + WinUI 3 version | §2.1.2, §2.2.1, §16 |
 | Verify the technical choices and build a PoC against the requirements of old systems | §15.1, §16 |
+| Augmented reality to position the nails: film the shape, detect its edges, match it to the frame and draw the nails in 3D in real time; or place 4 markers | §8.4, §8.1, §12, §14, §16.2, §17 |
 
 Note (2026-11-15): the requests "Rust and not C++" and "Windows MFC version compatible with XP" were superseded by the owner decisions of the spec Clarifications of 2026-11-12 (C++11 backend, plain Win32 instead of MFC); the rows keep tracing the original requests.
 
@@ -894,4 +950,5 @@ Note (2026-11-15): the requests "Rust and not C++" and "Windows MFC version comp
 | 2026-11-15 | V6.5 | Status of G0 and the reading of the hypotheses matrix updated: V7 and V17 partly covered; V2 to V5, V11 to V14, V16, V18 and V20 not covered because not implemented yet; V1 not applicable; V8 pending Apple hardware (§15.1.4, §15.1.5) | Owner clarification 2026-11-15; `validation/hypotheses.json`; verdicts `android-4.1.2-x86-legacy`, `android-7.0-x86_64-modern`, `web-chrome-157-windows-11-x64-modern`, `web-firefox-10-windows-2000-x86-legacy` |
 | 2026-11-17 | V6.5 | macOS Legacy floor moved from 10.6 to **10.7 Lion**: C++11 needs libc++, which the clang of Xcode 4.6.3 refuses below 10.7; Xcode 5.1.1 compiles the backend for 10.7 (macOS 10.6 stays untried, §2.1, §16.1 no. 2) | Owner decision 2026-11-17; `docs/implementation/validation/procedures/macos.md` M.11 | Compiled, not run |
 | 2026-11-17 | V6.5 | iOS 5.0 Legacy target compiled with Xcode 5.1.1 (iOS 7.1 SDK, deployment 5.0, armv7 and armv7s); still not run on an iOS 5 device (§2.1, §16.1 no. 2) | Owner request 2026-11-17; procedure M.11 | Compiled, not run |
+| 2026-11-20 | V6.7 | Augmented-reality nail placement added **[P2]**: mode A (film the shape, detect the contour, match it to the frame, confirm) and mode B (four fiducial markers, identifiers 0 to 3, printable sheet); common pose, placement session, degradation; marker definition proposed (open item no. 15); §2.3, §8.1, §8.4, §12, §14, §16.2, §17 | Owner request 2026-11-20 |
 | 2026-11-17 | V6.6 | `.loomora` format: a project holds several frames, nail layouts, images, spools and results (one folder per item) instead of one support, one nail list and one sequence; `progress.json` and its merge rules removed, progress becomes application data keyed by project and result identifiers; hard limits (256 MB, 100,000 nails, 5,000,000 steps and triangles) replaced by warning thresholds and a decompression-ratio guard; `light` profile rules and result subsets; `GET export.loomora` selects results, no progress route; BLE metadata and transfer per result; §9.1, §9.2, §9.3, §10.2, §16.1 no. 5 | Spec 002 Clarifications 2026-11-17; `docs/implementation/specs/002-loomora-file-format/contracts/project-format.md` |
