@@ -54,7 +54,6 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity)
                 .accessibilityIdentifier("greeting")
             TextField("", text: $model.input)
-                .textFieldStyle(.roundedBorder)
                 .disableAutocorrection(true)
                 .accessibilityIdentifier("input")
                 .onChange(of: model.input) { newValue in
