@@ -1836,7 +1836,7 @@ def check_bundle_min_version(plist, expected):
 
 
 def build_ios_sdks(args, label, project_dir, deployment_target, zip_prefix, accepted_min=None,
-                   needs=(), extra=(), bundle_min=None):
+                   needs=(), extra=(), bundle_min=None, system_zlib=False):
     """For each SDK asked for (--ios-sdk): libloomora.a for the SDK (CMake + Ninja, arm64), then an
     unsigned `xcodebuild archive` of the project with ARCHS passed so that the project and the
     library agree (`extra`: more xcodebuild settings), checks, and out/<label>/<sdk>/Loomora.app plus
@@ -1852,7 +1852,8 @@ def build_ios_sdks(args, label, project_dir, deployment_target, zip_prefix, acce
         accepted = accepted_min[sdk] if accepted_min else None
         # the project looks for the library in $(LOOMORA_LIB_DIR)/$(PLATFORM_NAME) = libs/<sdk>
         _lib, (compiler, _path) = build_apple_library(libs_root / sdk, archs, sdk, deployment_target,
-                                                      system_name="iOS", accepted_min=accepted)
+                                                      system_name="iOS", accepted_min=accepted,
+                                                      system_zlib=system_zlib)
         xcarchive = work / "Loomora.xcarchive"
         if xcarchive.exists():
             shutil.rmtree(str(xcarchive))
@@ -1881,7 +1882,8 @@ def other_sdk_builds(built):
 def run_ios_modern(args):
     require_apple_host("ios modern")
     check_apple_deployment_target(IOS_MODERN_DIR, "IPHONEOS_DEPLOYMENT_TARGET", IOS_DEPLOYMENT_TARGET)
-    built = build_ios_sdks(args, "ios-modern", IOS_MODERN_DIR, IOS_DEPLOYMENT_TARGET, "loomora")
+    built = build_ios_sdks(args, "ios-modern", IOS_MODERN_DIR, IOS_DEPLOYMENT_TARGET, "loomora",
+                           system_zlib=True)
     if "iphoneos" not in built:
         print("no deliverable record: the deliverable is the device build (iphoneos)")
         return
