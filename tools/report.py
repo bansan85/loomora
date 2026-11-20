@@ -232,6 +232,13 @@ def _read_code_sharing(directory):
     return {"core": core, "ui": uis}
 
 
+def _id_order(value, default):
+    """Sort key of a record id: the prefix, then the number after it (S2 before S10, S1 before
+    S-F1; the number is 0 when there is none)."""
+    m = re.match(r"^(.*?)(\d*)$", str(value or default))
+    return (m.group(1), int(m.group(2) or 0))
+
+
 class Records(object):
     """The validation records, in memory."""
 
@@ -247,8 +254,8 @@ class Records(object):
         self.deliverables = OrderedDict(((d.get("platform_id"), d.get("ui_variant")), d)
                                         for d in deliverables)
         self.fallbacks = fallbacks
-        self.spikes = sorted(spikes, key=lambda s: int(str(s.get("id", "S0"))[1:] or 0))
-        self.hypotheses = sorted(hypotheses, key=lambda h: int(str(h.get("id", "V0"))[1:] or 0))
+        self.spikes = sorted(spikes, key=lambda s: _id_order(s.get("id"), "S0"))
+        self.hypotheses = sorted(hypotheses, key=lambda h: _id_order(h.get("id"), "V0"))
         self.sources = dict((s.get("id"), s) for s in sources)
         self.docs_root = Path(docs_root) if docs_root else None
         self.code_files = code_files or {"core": OrderedDict(), "ui": OrderedDict()}
