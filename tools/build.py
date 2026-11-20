@@ -1848,22 +1848,30 @@ def build_ios_sdks(args, label, project_dir, deployment_target, zip_prefix, acce
     built = {}
     for sdk in sdks:
         destination, archs = IOS_SDKS[sdk]
+        if sdk == "iphonesimulator" and getattr(args, "ios_sim_arch", "arm64") == "x86_64":
+            archs = ("x86_64",)
         work = build_root / label / sdk
         accepted = accepted_min[sdk] if accepted_min else None
+        # --ios-sim-min: a test build of the simulator at another minimum OS (the product floor is unchanged)
+        target = deployment_target
+        sim_extra = []
+        if sdk == "iphonesimulator" and getattr(args, "ios_sim_min", None):
+            target = args.ios_sim_min
+            sim_extra = ["IPHONEOS_DEPLOYMENT_TARGET=" + target]
         # the project looks for the library in $(LOOMORA_LIB_DIR)/$(PLATFORM_NAME) = libs/<sdk>
-        _lib, (compiler, _path) = build_apple_library(libs_root / sdk, archs, sdk, deployment_target,
-                                                      system_name="iOS", accepted_min=accepted,
+        _lib, (compiler, _path) = build_apple_library(libs_root / sdk, archs, sdk, target,
+                                                      system_name="iOS", accepted_min=accepted or (target if sim_extra else None),
                                                       system_zlib=system_zlib)
         xcarchive = work / "Loomora.xcarchive"
         if xcarchive.exists():
             shutil.rmtree(str(xcarchive))
         xcodebuild_run(project_dir, "archive", work, destination, libs_root,
-                       ["-sdk", sdk, "-archivePath", xcarchive, "ARCHS=" + " ".join(archs)] + list(extra))
+                       ["-sdk", sdk, "-archivePath", xcarchive, "ARCHS=" + " ".join(archs)] + sim_extra + list(extra))
         app = xcarchive / "Products" / "Applications" / "Loomora.app"
         exe = app / "Loomora"
         if not exe.is_file():
             sys.exit("xcodebuild archive finished but %s is missing" % exe)
-        libs = check_apple_app(exe, archs, accepted or deployment_target, needs)
+        libs = check_apple_app(exe, archs, accepted or target, needs)
         if bundle_min:
             check_bundle_min_version(app / "Info.plist", bundle_min)
         out_dir = common.ROOT / "out" / label / sdk
@@ -2336,6 +2344,13 @@ def main(argv=None):
     parser.add_argument("--ios-sdk", choices=sorted(IOS_SDKS) + ["all"], default="all",
                         help="ios modern and ios legacy only: the SDK to build (default all; the CI job "
                         "that runs the iOS simulator uses iphonesimulator)")
+    parser.add_argument("--ios-sim-min", default=None,
+                        help="ios modern only: the minimum OS of the iphonesimulator build (test build, e.g. "
+                        "14.4 for the iOS 14.4 simulator of Xcode 12.4); the product floor is unchanged")
+    parser.add_argument("--ios-sim-arch", choices=("arm64", "x86_64"), default="arm64",
+                        help="ios modern only: the architecture of the iphonesimulator build (default "
+                        "arm64, the CI runner; x86_64 runs on an Intel Mac, e.g. the iOS simulator of a "
+                        "macOS virtual machine)")
     args = parser.parse_args(argv)
 
     key = (args.platform, args.variant)
