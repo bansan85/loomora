@@ -131,7 +131,7 @@ Implemented targets:
                  macos-26 runner).
 
   ios modern     The same for ui/modern/ios-swiftui (T052), on a macOS host with Xcode only:
-                 libloomora.a for aarch64-apple-ios (iphoneos SDK, arm64, iOS 15.0) and, for the
+                 libloomora.a for aarch64-apple-ios (iphoneos SDK, arm64, iOS 14.4) and, for the
                  simulator, arm64-apple-ios-simulator (iphonesimulator SDK; the project also lists an
                  x86_64 simulator slice, left out here: the macos-26 runner is Apple silicon), then
                  `xcodebuild archive` with code signing off, once per SDK (--ios-sdk, default
@@ -1560,7 +1560,7 @@ IOS_MODERN_DIR = common.ROOT / "ui" / "modern" / "ios-swiftui"
 # Deployment targets: the floors of the Modern UIs. They must equal the ones of the Xcode projects
 # (check_apple_deployment_target reads them there).
 MACOS_DEPLOYMENT_TARGET = "11.0"
-IOS_DEPLOYMENT_TARGET = "15.0"
+IOS_DEPLOYMENT_TARGET = "14.4"
 MACOS_MODERN_ARCHS = ("x86_64", "arm64")  # Universal 2
 # SDK name -> (xcodebuild destination, architectures of the library and of the app). The project
 # also lists an x86_64 simulator slice, left out: the macos-26 runner is Apple silicon and runs the
