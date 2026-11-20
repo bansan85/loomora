@@ -11,7 +11,7 @@ Usage:
   python tools/check_loomora.py [--json] [--quiet] [--canonical] [--set-limit NAME=VALUE]
                                 FILE_OR_DIR [FILE_OR_DIR ...]
   python tools/check_loomora.py --expect EXPECTED.json DIR  also compare multi.loomora with tools/gen_reference.py's JSON
-  python tools/check_loomora.py --compare DIR_A DIR_B     byte-identical .loomora files, names matched
+  python tools/check_loomora.py --compare DIR_A DIR_B     same structure and decompressed content (FR-004), names matched
   python tools/check_loomora.py --compare-mesh FULL LIGHT  mesh.bin of a full file and of its light copy
   python tools/check_loomora.py --selftest                 built-in references and corpus, fast
 
@@ -1628,8 +1628,26 @@ def check_expected(path, expected_path, out=print):
 
 
 # ---- comparisons -----------------------------------------------------------------------------
+def archive_structure(data):
+    """The structure and the decompressed content of a .loomora archive, entry by entry: what FR-004
+    requires to be the same on every platform. The compressed bytes, the compressed sizes and the
+    offsets are left out: they depend on the zlib build."""
+    import io
+    import zipfile
+    rows = []
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        for info in zf.infolist():
+            payload = zf.read(info.filename)
+            rows.append((info.filename, info.create_system, info.create_version, info.extract_version,
+                         info.flag_bits, info.compress_type, info.date_time, info.external_attr,
+                         info.CRC, info.file_size, hashlib.sha256(payload).hexdigest()))
+    return rows
+
+
 def compare_dirs(a, b, out=print):
-    """Byte-identical .loomora files of two directories, names matched. Returns the number of differences."""
+    """The .loomora files of two directories, names matched: same structure and same decompressed
+    content (FR-004; the compressed bytes may differ between platforms). Returns the number of differences."""
+    import zipfile
     def listing(d):
         return dict((n, os.path.join(d, n)) for n in sorted(os.listdir(d)) if n.endswith(".loomora"))
     la, lb = listing(a), listing(b)
@@ -1643,12 +1661,22 @@ def compare_dirs(a, b, out=print):
             da = f.read()
         with open(lb[n], "rb") as f:
             db = f.read()
-        if da == db:
-            out("same %s (%d bytes, sha256 %s)" % (n, len(da), hashlib.sha256(da).hexdigest()[:16]))
-        else:
-            first = next((i for i, (x, y) in enumerate(zip(da, db)) if x != y), min(len(da), len(db)))
-            out("DIFF %s: %d vs %d bytes, first difference at offset %d" % (n, len(da), len(db), first))
+        try:
+            rows_a, rows_b = archive_structure(da), archive_structure(db)
+        except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError) as exc:
+            out("DIFF %s: not a readable archive (%s)" % (n, exc))
             diffs += 1
+            continue
+        if rows_a != rows_b:
+            first = next((i for i, (x, y) in enumerate(zip(rows_a, rows_b)) if x != y), min(len(rows_a), len(rows_b)))
+            out("DIFF %s: structure or decompressed content differs at entry %d (%d vs %d entries)"
+                % (n, first, len(rows_a), len(rows_b)))
+            diffs += 1
+        elif da == db:
+            out("same %s (%d entries, byte-identical, sha256 %s)" % (n, len(rows_a), hashlib.sha256(da).hexdigest()[:16]))
+        else:
+            out("same %s (%d entries, same structure and decompressed content; compressed bytes differ: %d vs %d bytes)"
+                % (n, len(rows_a), len(da), len(db)))
     if not la and not lb:
         out("no .loomora file in either directory")
         diffs += 1
@@ -1736,7 +1764,8 @@ def main(argv=None):
     ap.add_argument("--canonical", action="store_true", help="also check the deterministic writer rules (section 1.1)")
     ap.add_argument("--set-limit", action="append", metavar="NAME=VALUE", help="lower a warning threshold (test only)")
     ap.add_argument("--schemas", default=SCHEMA_DIR, help="directory of the JSON schemas")
-    ap.add_argument("--compare", nargs=2, metavar=("DIR_A", "DIR_B"), help="byte-identical .loomora files of two directories")
+    ap.add_argument("--compare", nargs=2, metavar=("DIR_A", "DIR_B"),
+                    help="same structure and decompressed content of the .loomora files of two directories")
     ap.add_argument("--compare-mesh", nargs=2, metavar=("FULL", "LIGHT"), help="mesh.bin of a full file and of its light copy")
     ap.add_argument("--expect", metavar="EXPECTED_JSON", help="also compare the file(s) with the expected-content JSON "
                     "of tools/gen_reference.py (the files named multi.loomora, multi-light.loomora and one.loomora)")
@@ -1923,9 +1952,9 @@ def selftest():
             with open(os.path.join(d, "x.loomora"), "wb") as f:
                 f.write(refs[0][1])
         check(compare_dirs(a, b, out=lambda s: None) == 0, "compare identical directories")
-        with open(os.path.join(b, "x.loomora"), "ab") as f:
-            f.write(b"\0")
-        check(compare_dirs(a, b, out=lambda s: None) == 1, "compare detects a difference")
+        with open(os.path.join(b, "x.loomora"), "wb") as f:
+            f.write(refs[1][1])
+        check(compare_dirs(a, b, out=lambda s: None) == 1, "compare detects a difference of content")
         full, light = os.path.join(t, "full.loomora"), os.path.join(t, "light.loomora")
         with open(full, "wb") as f:
             f.write(pf.mesh3d_project("full", uvs=True).build())
