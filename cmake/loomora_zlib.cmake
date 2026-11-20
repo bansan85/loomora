@@ -1,14 +1,15 @@
 # zlib 1.3.1 (git submodule third_party/zlib, tag v1.3.1): deflate, inflate, crc32 and adler32 only.
 # The submodule is the upstream tree untouched; the project builds only the sources it needs, as the
 # C static library loomora_zlib with its own flags: the warning flags and the C++ standard of the
-# project never apply to it (it is a C target). One pinned source, so the compressed bytes depend on
-# the project and not on the platform's zlib (FR-004). Upgrading it changes the bytes (reference
-# hashes change in a visible commit).
+# project never apply to it (it is a C target). One pinned source, so every build that uses it writes
+# the same compressed bytes, whatever the platform's zlib (FR-004 needs only the same decompressed
+# content on every platform). Upgrading it changes the compressed bytes (reference hashes change in
+# a visible commit).
 # (a parent project that is not the repository root, such as the Gradle build of the Android Modern UI,
 # sets LOOMORA_ZLIB_DIR before including this file)
-# LOOMORA_USE_SYSTEM_ZLIB (OFF by default): the macOS modern build links the zlib of the SDK instead
-# and never reads third_party/zlib. Only that build sets it, so the compressed bytes of every other
-# build stay those of the pinned source.
+# LOOMORA_USE_SYSTEM_ZLIB (OFF by default): the macOS and iOS modern builds link the zlib of the SDK
+# instead and never read third_party/zlib. Only those builds set it, so every other build keeps the
+# compressed bytes of the pinned source.
 option(LOOMORA_USE_SYSTEM_ZLIB "Link the zlib of the SDK instead of third_party/zlib (macOS modern only)" OFF)
 if(LOOMORA_USE_SYSTEM_ZLIB)
   find_package(ZLIB REQUIRED)
