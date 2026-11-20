@@ -1,7 +1,7 @@
 ﻿using Android.App;
 using Android.Runtime;
 
-namespace LoomoraMauiSpike;
+namespace Loomora.Maui;
 
 [Application]
 public class MainApplication : MauiApplication

@@ -23,8 +23,8 @@ add_custom_target(loomora_vectors DEPENDS "${LOOMORA_VECTORS_INC}")
 # Per-target floating-point switch (docs/implementation/adr/0004): a toolchain whose doubles are not
 # the SSE2/IEEE ones (32-bit x86 with the x87 unit) sets LOOMORA_TEST_FP_FLAGS. The reference fixtures
 # (basic_project.hpp, multi_project.hpp: cos/sin, round3, 0.1 + 0.2 of the tests) are computed with
-# doubles and must give the bytes of the other targets (FR-004); only the test programs take the flags,
-# libloomora itself is not changed. Empty on every other toolchain.
+# doubles and must give the same decompressed content as the other targets (FR-004); only the test
+# programs take the flags, libloomora itself is not changed. Empty on every other toolchain.
 function(loomora_test_fp target)
   if(LOOMORA_TEST_FP_FLAGS)
     target_compile_options(${target} PRIVATE ${LOOMORA_TEST_FP_FLAGS})

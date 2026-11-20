@@ -145,7 +145,8 @@
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_TESTABILITY = YES;
 				GCC_OPTIMIZATION_LEVEL = 0;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				ENABLE_BITCODE = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 14.4;
 				LOOMORA_LIB_DIR = "$(PROJECT_DIR)/build";
 				ONLY_ACTIVE_ARCH = NO;
 				SDKROOT = iphoneos;
@@ -168,7 +169,8 @@
 				CODE_SIGN_IDENTITY = "";
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				ENABLE_BITCODE = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 14.4;
 				LOOMORA_LIB_DIR = "$(PROJECT_DIR)/build";
 				ONLY_ACTIVE_ARCH = NO;
 				SDKROOT = iphoneos;
@@ -198,6 +200,7 @@
 				OTHER_LDFLAGS = (
 					"-lloomora",
 					"-lc++",
+					"-lz",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = fr.bansan.loomora.probe.modern;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -225,6 +228,7 @@
 				OTHER_LDFLAGS = (
 					"-lloomora",
 					"-lc++",
+					"-lz",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = fr.bansan.loomora.probe.modern;
 				PRODUCT_NAME = "$(TARGET_NAME)";

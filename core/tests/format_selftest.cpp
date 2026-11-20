@@ -5,14 +5,15 @@
 // older than Vista), and no <iostream>, <thread>, <mutex> or <locale> in this file.
 //
 // User Story 1 (T039): the `basic` reference project (core/tests/basic_project.hpp, built through the
-// public C API) is written in memory and its SHA-256 is compared with a golden constant, so a platform
-// whose writer differs by one byte fails here (FR-004, the "same bytes on every platform" rule); the
+// public C API) is written in memory and the digest of its decompressed content is compared with a golden
+// constant, so a platform whose writer produces other content fails here (FR-004, the "same decompressed
+// content on every platform" rule; the compressed bytes may differ); the
 // file is read back and every field compared; every truncation of the small `empty` file, and a
 // sample of the truncations of `basic`, is rejected without a crash.
 //
 // T084: the light references. `multi-light` (the light export of `multi`, every item) and `one` (the
 // light export of ONE result of `multi`, the Cube result) are exported through the public C API
-// (loomora_project_export_stream) and their SHA-256 compared with golden constants, the same on every
+// (loomora_project_export_stream) and their content digest compared with golden constants, the same on every
 // platform; read back, their content is checked (items, identifiers, nails, steps, no source or processed
 // image, no settings, no UV, mesh positions, indices and normals equal to the full file).
 #include <cmath>
@@ -23,20 +24,23 @@
 
 #include "../include/loomora.h"
 #include "basic_project.hpp"
+#include "content_digest.hpp"
 #include "multi_project.hpp"
 #include "format/sha256.hpp"
 
 namespace {
 
-// SHA-256 of the archive written for each reference project (modification time kModifiedAt). The
-// same constants must hold on Windows (clang, MinGW-w64) and Linux (g++): measured on Windows
-// clang and Linux g++ (Ubuntu 26.04), 2026-11-17. T060 replaces them when the format changes.
-const char kGoldenBasic[] = "fcdf97f0257076ba1c3ecae1867e57ebdc397440286a278f2cbe34eff8ce5f96";
-const char kGoldenEmpty[] = "8ca4dc6a2139539feb87f92b11cc0d5685fdff051fa044b692a7be5d984d7913";
-const char kGoldenEscape[] = "b17920aabf9cc165a5c3b9290ba15f22e99903592426a8e55c96dc67ae570e2a";
-const char kGoldenMulti[] = "8bcd3ae91876dcf6048c3a5dc689754a8eab90367faed373942b819a7c3f8607";
-const char kGoldenMultiLight[] = "b32c8a390657d4f56ec9bd448e6c291e9781dfbb3b34b8164d049af67a7c4a8d";
-const char kGoldenOne[] = "fc3fb5ebd929689bd7ee32da020b279ca81b3412c6c947eda8c9e7e3ddb846c5";
+// Content digest (content_digest.hpp: the SHA-256 of the uncompressed entries, in archive order, with
+// their names and sizes) of the archive written for each reference project (modification time
+// kModifiedAt). This is the cross-platform golden of FR-004: the same constants must hold on every
+// platform. The compressed bytes are not compared across platforms, since they depend on the zlib build.
+// Recompute them when the format or a reference project changes.
+const char kGoldenBasic[] = "364af080d2676db337d8240ba3f0cd18a8a32e1b60e1625156edc7b8644edeb9";
+const char kGoldenEmpty[] = "908db0eeea7a2aeb7d71b1385263cb7747f949e1006f07eebcb75920e0554005";
+const char kGoldenEscape[] = "09ec568b867d176041b32990955917df1b61ad4ac94e690eb9f83310edeeed29";
+const char kGoldenMulti[] = "5dcdab2702a82e8c5787f6cc7b12617bd68bfef8c386823f592656e9f4d05899";
+const char kGoldenMultiLight[] = "8d7a25ea2a11076a925a71d1ce6eb97ed5d6ecaad7b4e9340b66352d2dd9c948";
+const char kGoldenOne[] = "8f2a817634edfa1de240307082926916688a64edbd37d8bb162d3ab92c0f1794";
 
 typedef std::vector<std::uint8_t> Bytes;
 
@@ -67,8 +71,9 @@ bool save(loomora_editor *e, Bytes &out) {
     return rc == 0 && clean;
 }
 
+// The cross-platform golden of an archive: the digest of its decompressed content (content_digest.hpp).
 std::string digest(const Bytes &b) {
-    return loomora::format::sha256_hex(b.empty() ? 0 : &b[0], b.size());
+    return content_digest::of_archive(b.empty() ? 0 : &b[0], b.size());
 }
 
 // Opens `b`; true when the project opened with no issue at all.
@@ -162,9 +167,9 @@ void test_basic() {
     check(save(e, again) && again == bytes, "basic: saving twice gives the same bytes");
     loomora_editor_close(e);
     const std::string hex = digest(bytes);
-    check(hex == kGoldenBasic, "basic: SHA-256 of the archive equals the golden value");
+    check(hex == kGoldenBasic, "basic: content digest equals the golden value");
     if (hex != kGoldenBasic) {
-        std::fputs("  basic sha256 = ", stdout);
+        std::fputs("  basic content digest = ", stdout);
         std::fputs(hex.c_str(), stdout);
         std::fputs("\n", stdout);
     }
@@ -218,7 +223,13 @@ void test_empty() {
     Bytes bytes;
     check(save(e, bytes), "empty: save, clean report");
     loomora_editor_close(e);
-    check(digest(bytes) == kGoldenEmpty, "empty: SHA-256 equals the golden value");
+    const std::string hex_empty = digest(bytes);
+    check(hex_empty == kGoldenEmpty, "empty: content digest equals the golden value");
+    if (hex_empty != kGoldenEmpty) {
+        std::fputs("  empty content digest = ", stdout);
+        std::fputs(hex_empty.c_str(), stdout);
+        std::fputs("\n", stdout);
+    }
     loomora_project *p = 0;
     check(open_clean(bytes, &p), "empty: reads back, no issue");
     if (p != 0) {
@@ -240,7 +251,13 @@ void test_escape() {
     Bytes bytes;
     check(save(e, bytes), "escape: save, clean report");
     loomora_editor_close(e);
-    check(digest(bytes) == kGoldenEscape, "escape: SHA-256 equals the golden value");
+    const std::string hex_escape = digest(bytes);
+    check(hex_escape == kGoldenEscape, "escape: content digest equals the golden value");
+    if (hex_escape != kGoldenEscape) {
+        std::fputs("  escape content digest = ", stdout);
+        std::fputs(hex_escape.c_str(), stdout);
+        std::fputs("\n", stdout);
+    }
     loomora_project *p = 0;
     check(open_clean(bytes, &p), "escape: reads back, no issue");
     if (p != 0) {
@@ -263,9 +280,9 @@ void test_multi() {
     check(save(e, again) && again == bytes, "multi: saving twice gives the same bytes");
     loomora_editor_close(e);
     const std::string hex = digest(bytes);
-    check(hex == kGoldenMulti, "multi: SHA-256 of the archive equals the golden value");
+    check(hex == kGoldenMulti, "multi: content digest equals the golden value");
     if (hex != kGoldenMulti) {
-        std::fputs("  multi sha256 = ", stdout);
+        std::fputs("  multi content digest = ", stdout);
         std::fputs(hex.c_str(), stdout);
         std::fputs("\n", stdout);
     }
@@ -428,9 +445,9 @@ void test_light() {
     Bytes all, all2;
     check(export_light(p, 0, 0, all) && export_light(p, 0, 0, all2) && all == all2, "multi-light: exporting twice gives the same bytes");
     const std::string hex_all = digest(all);
-    check(hex_all == kGoldenMultiLight, "multi-light: SHA-256 of the archive equals the golden value");
+    check(hex_all == kGoldenMultiLight, "multi-light: content digest equals the golden value");
     if (hex_all != kGoldenMultiLight) {
-        std::fputs("  multi-light sha256 = ", stdout);
+        std::fputs("  multi-light content digest = ", stdout);
         std::fputs(hex_all.c_str(), stdout);
         std::fputs("\n", stdout);
     }
@@ -464,9 +481,9 @@ void test_light() {
     check(export_light(p, &ids.result_3d, 1, one) && export_light(p, &ids.result_3d, 1, one2) && one == one2,
           "one: exporting twice gives the same bytes");
     const std::string hex_one = digest(one);
-    check(hex_one == kGoldenOne, "one: SHA-256 of the archive equals the golden value");
+    check(hex_one == kGoldenOne, "one: content digest equals the golden value");
     if (hex_one != kGoldenOne) {
-        std::fputs("  one sha256 = ", stdout);
+        std::fputs("  one content digest = ", stdout);
         std::fputs(hex_one.c_str(), stdout);
         std::fputs("\n", stdout);
     }

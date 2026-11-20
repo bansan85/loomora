@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="Loomora.Maui.MainPage"
+             Title="Loomora">
+    <!-- Same screen as the other Modern UIs: an end-of-life warning (when the system is one), one
+         text field pre-filled with "Coucou" (1,000 characters at most), and the greeting of the
+         backend below it, centred, wrapped and scrollable. The rows stretch with the window. -->
+    <Grid Padding="24" RowSpacing="16" RowDefinitions="Auto,Auto,*">
+
+        <!-- End-of-life warning of the backend; it blocks nothing and can be dismissed. -->
+        <Border x:Name="EolWarning" Grid.Row="0" IsVisible="False" Padding="12,8"
+                StrokeThickness="1" Stroke="#C77700" BackgroundColor="{AppThemeBinding Light=#FFF4E5, Dark=#3A2A10}"
+                StrokeShape="RoundRectangle 6">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <Label x:Name="EolText" Grid.Column="0" LineBreakMode="WordWrap"
+                       VerticalOptions="Start" />
+                <Button Grid.Column="1" Text="✕" Clicked="OnDismissWarning" BackgroundColor="Transparent"
+                        TextColor="{AppThemeBinding Light=#222222, Dark=#EEEEEE}" Padding="8,0"
+                        SemanticProperties.Description="Dismiss" />
+            </Grid>
+        </Border>
+
+        <!-- Single-line field: Enter inserts nothing (an Entry is single-line). -->
+        <Entry x:Name="InputBox" Grid.Row="1" Text="Coucou" MaxLength="1000"
+               Placeholder="Your text" SemanticProperties.Description="Name"
+               TextChanged="OnInputChanged" />
+
+        <ScrollView Grid.Row="2">
+            <Label x:Name="GreetingText" FontSize="28" LineBreakMode="CharacterWrap"
+                   HorizontalTextAlignment="Center" VerticalTextAlignment="Center"
+                   HorizontalOptions="Center" VerticalOptions="Center" />
+        </ScrollView>
+    </Grid>
+</ContentPage>

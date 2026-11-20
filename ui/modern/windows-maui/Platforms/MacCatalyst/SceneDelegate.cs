@@ -1,6 +1,6 @@
 using Foundation;
 
-namespace LoomoraMauiSpike;
+namespace Loomora.Maui;
 
 [Register("SceneDelegate")]
 public class SceneDelegate : MauiUISceneDelegate

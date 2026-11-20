@@ -74,7 +74,8 @@ import common
 ROOT = common.ROOT
 IS_WINDOWS = sys.platform == "win32"
 UIS = ("legacy", "modern")
-KINDS = ("build", "ctest", "vectors", "std", "ui-logic", "records", "diff", "screenshots", "sanitizer", "variants", "wsl", "cli", "corpus", "validator", "ui-project")
+KINDS = ("build", "ctest", "vectors", "std", "ui-logic", "records", "diff", "screenshots", "sanitizer", "variants", "wsl", "cli", "corpus", "validator", "ui-project",
+         "format", "format-files", "readonly")
 UI_EXE = {"legacy": "loomora-xlib", "modern": "loomora-gtk3"}  # product names of the Linux UIs
 # Texts of the graphical scenarios: mixed Unicode, and a long text that is cut at 1,000 characters.
 SCENARIOS = (

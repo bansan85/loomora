@@ -131,7 +131,7 @@ Implemented targets:
                  macos-26 runner).
 
   ios modern     The same for ui/modern/ios-swiftui (T052), on a macOS host with Xcode only:
-                 libloomora.a for aarch64-apple-ios (iphoneos SDK, arm64, iOS 15.0) and, for the
+                 libloomora.a for aarch64-apple-ios (iphoneos SDK, arm64, iOS 14.4) and, for the
                  simulator, arm64-apple-ios-simulator (iphonesimulator SDK; the project also lists an
                  x86_64 simulator slice, left out here: the macos-26 runner is Apple silicon), then
                  `xcodebuild archive` with code signing off, once per SDK (--ios-sdk, default
@@ -1344,8 +1344,12 @@ def cl_version(cl):
 
 
 def header_functions():
-    text = (common.CORE / "include" / "loomora.h").read_text(encoding="utf-8")
-    return sorted(set(re.findall(r"LOOMORA_API[^;(]*?\b(loomora_\w+)\s*\(", text)))
+    """The functions marked LOOMORA_API in the public headers (the DLL exports exactly these)."""
+    names = set()
+    for header in ("loomora.h", "loomora_project.h"):
+        text = (common.CORE / "include" / header).read_text(encoding="utf-8")
+        names.update(re.findall(r"LOOMORA_API[^;(]*?\b(loomora_\w+)\s*\(", text))
+    return sorted(names)
 
 
 def build_loomora_dll(preset, msvc):
@@ -1560,7 +1564,7 @@ IOS_MODERN_DIR = common.ROOT / "ui" / "modern" / "ios-swiftui"
 # Deployment targets: the floors of the Modern UIs. They must equal the ones of the Xcode projects
 # (check_apple_deployment_target reads them there).
 MACOS_DEPLOYMENT_TARGET = "11.0"
-IOS_DEPLOYMENT_TARGET = "15.0"
+IOS_DEPLOYMENT_TARGET = "14.4"
 MACOS_MODERN_ARCHS = ("x86_64", "arm64")  # Universal 2
 # SDK name -> (xcodebuild destination, architectures of the library and of the app). The project
 # also lists an x86_64 simulator slice, left out: the macos-26 runner is Apple silicon and runs the
@@ -1643,13 +1647,15 @@ def check_apple_min_version(path, expected):
                         MIN_VERSION_TOLERANCE_NOTE if len(wanted) > 1 else ""))
 
 
-def build_apple_library(work, arch_list, sdk, deployment_target, system_name=None, accepted_min=None):
+def build_apple_library(work, arch_list, sdk, deployment_target, system_name=None, accepted_min=None,
+                        system_zlib=False):
     """Builds the backend as a static library (core/ through the root CMakeLists.txt, Release, no
     tests) once per architecture, checks -std=c++11 in compile_commands.json, and merges the slices
     with lipo (one slice: copied) into <work>/libloomora.a. `sdk` is the CMake sysroot (macosx,
     iphoneos, iphonesimulator); `system_name` sets
     CMAKE_SYSTEM_NAME (iOS: CMake then targets the device or the simulator SDK); `accepted_min` lists
-    the minimum OS versions the library may record (default: the deployment target). Returns (library,
+    the minimum OS versions the library may record (default: the deployment target); `system_zlib`
+    links the zlib of the SDK and never reads third_party/zlib. Returns (library,
     (compiler id, compiler path))."""
     work.mkdir(parents=True, exist_ok=True)
     slices = []
@@ -1661,7 +1667,8 @@ def build_apple_library(work, arch_list, sdk, deployment_target, system_name=Non
                     "-DLOOMORA_BUILD_TESTS=OFF", "-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY",
                     "-DCMAKE_OSX_SYSROOT=" + sdk, "-DCMAKE_OSX_ARCHITECTURES=" + arch,
                     "-DCMAKE_OSX_DEPLOYMENT_TARGET=" + deployment_target] +
-                   (["-DCMAKE_SYSTEM_NAME=" + system_name] if system_name else []))
+                   (["-DCMAKE_SYSTEM_NAME=" + system_name] if system_name else []) +
+                   (["-DLOOMORA_USE_SYSTEM_ZLIB=ON"] if system_zlib else []))
         common.run(["cmake", "--build", build_dir, "--target", "loomora"])
         built = build_dir / "core" / "libloomora.a"
         if not built.is_file():
@@ -1791,7 +1798,7 @@ def run_macos_modern(args):
     build_root = Path(os.environ.get("LOOMORA_BUILD_DIR") or (common.ROOT / "build"))
     work = build_root / "macos-modern"
     lib, (compiler, _path) = build_apple_library(work / "lib", MACOS_MODERN_ARCHS, "macosx",
-                                                 MACOS_DEPLOYMENT_TARGET)
+                                                 MACOS_DEPLOYMENT_TARGET, system_zlib=True)
     derived = xcodebuild_run(MACOS_MODERN_DIR, "build", work, "generic/platform=macOS", lib.parent)
     app = derived / "Build" / "Products" / "Release" / "Loomora.app"
     exe = app / "Contents" / "MacOS" / "Loomora"
@@ -1833,7 +1840,7 @@ def check_bundle_min_version(plist, expected):
 
 
 def build_ios_sdks(args, label, project_dir, deployment_target, zip_prefix, accepted_min=None,
-                   needs=(), extra=(), bundle_min=None):
+                   needs=(), extra=(), bundle_min=None, system_zlib=False):
     """For each SDK asked for (--ios-sdk): libloomora.a for the SDK (CMake + Ninja, arm64), then an
     unsigned `xcodebuild archive` of the project with ARCHS passed so that the project and the
     library agree (`extra`: more xcodebuild settings), checks, and out/<label>/<sdk>/Loomora.app plus
@@ -1845,21 +1852,30 @@ def build_ios_sdks(args, label, project_dir, deployment_target, zip_prefix, acce
     built = {}
     for sdk in sdks:
         destination, archs = IOS_SDKS[sdk]
+        if sdk == "iphonesimulator" and getattr(args, "ios_sim_arch", "arm64") == "x86_64":
+            archs = ("x86_64",)
         work = build_root / label / sdk
         accepted = accepted_min[sdk] if accepted_min else None
+        # --ios-sim-min: a test build of the simulator at another minimum OS (the product floor is unchanged)
+        target = deployment_target
+        sim_extra = []
+        if sdk == "iphonesimulator" and getattr(args, "ios_sim_min", None):
+            target = args.ios_sim_min
+            sim_extra = ["IPHONEOS_DEPLOYMENT_TARGET=" + target]
         # the project looks for the library in $(LOOMORA_LIB_DIR)/$(PLATFORM_NAME) = libs/<sdk>
-        _lib, (compiler, _path) = build_apple_library(libs_root / sdk, archs, sdk, deployment_target,
-                                                      system_name="iOS", accepted_min=accepted)
+        _lib, (compiler, _path) = build_apple_library(libs_root / sdk, archs, sdk, target,
+                                                      system_name="iOS", accepted_min=accepted or (target if sim_extra else None),
+                                                      system_zlib=system_zlib)
         xcarchive = work / "Loomora.xcarchive"
         if xcarchive.exists():
             shutil.rmtree(str(xcarchive))
         xcodebuild_run(project_dir, "archive", work, destination, libs_root,
-                       ["-sdk", sdk, "-archivePath", xcarchive, "ARCHS=" + " ".join(archs)] + list(extra))
+                       ["-sdk", sdk, "-archivePath", xcarchive, "ARCHS=" + " ".join(archs)] + sim_extra + list(extra))
         app = xcarchive / "Products" / "Applications" / "Loomora.app"
         exe = app / "Loomora"
         if not exe.is_file():
             sys.exit("xcodebuild archive finished but %s is missing" % exe)
-        libs = check_apple_app(exe, archs, accepted or deployment_target, needs)
+        libs = check_apple_app(exe, archs, accepted or target, needs)
         if bundle_min:
             check_bundle_min_version(app / "Info.plist", bundle_min)
         out_dir = common.ROOT / "out" / label / sdk
@@ -1878,7 +1894,8 @@ def other_sdk_builds(built):
 def run_ios_modern(args):
     require_apple_host("ios modern")
     check_apple_deployment_target(IOS_MODERN_DIR, "IPHONEOS_DEPLOYMENT_TARGET", IOS_DEPLOYMENT_TARGET)
-    built = build_ios_sdks(args, "ios-modern", IOS_MODERN_DIR, IOS_DEPLOYMENT_TARGET, "loomora")
+    built = build_ios_sdks(args, "ios-modern", IOS_MODERN_DIR, IOS_DEPLOYMENT_TARGET, "loomora",
+                           system_zlib=True)
     if "iphoneos" not in built:
         print("no deliverable record: the deliverable is the device build (iphoneos)")
         return
@@ -2331,6 +2348,13 @@ def main(argv=None):
     parser.add_argument("--ios-sdk", choices=sorted(IOS_SDKS) + ["all"], default="all",
                         help="ios modern and ios legacy only: the SDK to build (default all; the CI job "
                         "that runs the iOS simulator uses iphonesimulator)")
+    parser.add_argument("--ios-sim-min", default=None,
+                        help="ios modern only: the minimum OS of the iphonesimulator build (test build, e.g. "
+                        "14.4 for the iOS 14.4 simulator of Xcode 12.4); the product floor is unchanged")
+    parser.add_argument("--ios-sim-arch", choices=("arm64", "x86_64"), default="arm64",
+                        help="ios modern only: the architecture of the iphonesimulator build (default "
+                        "arm64, the CI runner; x86_64 runs on an Intel Mac, e.g. the iOS simulator of a "
+                        "macOS virtual machine)")
     args = parser.parse_args(argv)
 
     key = (args.platform, args.variant)

@@ -1,7 +1,8 @@
 // T027, User Story 1: what the writer writes the reader reads back, field by field, through the PUBLIC
 // C API only (loomora.h): the `basic` reference project (one 2D frame, one layout of 200 nails, one
 // image with a PNG, 3 spools, one result of 5,000 steps), the `empty` project, a result selecting 40
-// spools (escape path of sequence.bin), determinism (FR-004) and the caller's modification time.
+// spools (escape path of sequence.bin), determinism (FR-004: the same bytes when saved twice on one
+// platform) and the caller's modification time.
 // The expectations are stated here, independently of the writer: item JSON as literals, nails and
 // steps recomputed from the same formulas as core/tests/basic_project.hpp, pictures as the PNGs the
 // test supplied.

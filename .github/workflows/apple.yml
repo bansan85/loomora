@@ -20,7 +20,7 @@
 #   ios-modern-simulator BUILD `ios modern --ios-sdk iphonesimulator`, boot an iOS 26 simulator, install
 #                        and launch with `xcrun simctl` (`-probe`, `-probe_input`, the NSLog line is read
 #                        from the console, then from `log show`), RUN the vectors the same way;
-#   ios-modern-device    BUILD `ios modern --ios-sdk iphoneos`: the compile check of the floor iOS 15
+#   ios-modern-device    BUILD `ios modern --ios-sdk iphoneos`: the compile check of the floor iOS 14.4
 #                        (arm64, unsigned: it cannot be installed on a device, never run);
 #   macos-legacy         BUILD `macos legacy` (x86_64, -mmacosx-version-min=10.7): "compiled, NOT RUN on
 #                        10.7" (`not_tested`); an INFO step starts it under Rosetta 2 on macOS 26, which
@@ -147,7 +147,7 @@ jobs:
           major="$(sw_vers -productVersion | cut -d. -f1)"
           platform="macos-$major-$(uname -m)"
           echo "platform id: $platform"
-          python tools/run_vectors.py "$platform" modern --jobs 1 --evidence-dir "$RUNNER_TEMP/apple-logs/evidence" \
+          python tools/run_vectors.py "$platform" modern --jobs 1 --timeout 120 --evidence-dir "$RUNNER_TEMP/apple-logs/evidence" \
             2>&1 | tee "$RUNNER_TEMP/apple-logs/run-vectors-macos-modern.log"
       - name: Upload the logs, the probe lines and the toolchain versions
         if: always()
@@ -213,7 +213,7 @@ jobs:
           PLATFORM_ID: ${{ steps.sim.outputs.platform_id }}
         run: |
           echo "platform id: $PLATFORM_ID, simulator $UDID"
-          python tools/run_vectors.py "$PLATFORM_ID" modern --udid "$UDID" --jobs 1 \
+          python tools/run_vectors.py "$PLATFORM_ID" modern --udid "$UDID" --jobs 1 --timeout 120 \
             --evidence-dir "$RUNNER_TEMP/apple-logs/evidence" 2>&1 | tee "$RUNNER_TEMP/apple-logs/run-vectors-ios-modern.log"
       - name: Upload the logs, the probe lines and the toolchain versions
         if: always()
@@ -232,10 +232,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # Modern iOS for a device: the compile check of the floor iOS 15 (deployment target 15.0, arm64). The
+  # Modern iOS for a device: the compile check of the floor iOS 14.4 (deployment target 14.4, arm64). The
   # archive is unsigned, so it cannot be installed on a device; it is never run.
   ios-modern-device:
-    name: Modern iOS, device SDK, floor iOS 15 (macos-26)
+    name: Modern iOS, device SDK, floor iOS 14.4 (macos-26)
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: macos-26
@@ -252,7 +252,7 @@ jobs:
         run: git submodule update --init --depth 1 third_party/zlib third_party/rapidjson
       - name: "INFO toolchain versions and Python environment"
         run: bash tools/ci/apple-setup.sh "$RUNNER_TEMP/apple-logs"
-      - name: "BUILD Modern iOS for devices, deployment target 15.0 (tools/build.py ios modern --ios-sdk iphoneos)"
+      - name: "BUILD Modern iOS for devices, deployment target 14.4 (tools/build.py ios modern --ios-sdk iphoneos)"
         run: python tools/build.py ios modern --ios-sdk iphoneos 2>&1 | tee "$RUNNER_TEMP/apple-logs/build-ios-modern-device.log"
       - name: "INFO what was built (slices, minimum version, libraries)"
         continue-on-error: true
